@@ -1,0 +1,10 @@
+# Supabase project config — TRACKED in git.
+# project_id is the public project ref (it appears in every Supabase URL);
+# CI reads it to `supabase link` for drift checks and deploys. Link-time
+# credentials live in supabase/.temp/, which is gitignored.
+project_id = "fjzvlshxcgbuhrhxdsiu"
+
+# Edge functions must pin verify_jwt here so CI's bulk
+# `supabase functions deploy` can never flip a function's JWT gate:
+# [functions.<name>]
+# verify_jwt = false

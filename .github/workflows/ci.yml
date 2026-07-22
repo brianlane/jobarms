@@ -1,0 +1,302 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  NEXT_TELEMETRY_DISABLED: "1"
+  CI: "true"
+
+jobs:
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://mock.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_mock
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://mock.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_mock
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Next.js route types
+        run: npx next typegen
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage
+          if-no-files-found: ignore
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (prod deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  # Typecheck + dry-run deploy for every Cloudflare worker tree. A dry run
+  # bundles the worker exactly as `wrangler deploy` would, so config or
+  # bundling breakage fails the PR — without needing a Cloudflare API token
+  # (real deploys happen in workers-deploy on main, once the token exists).
+  workers-check:
+    name: Workers Check (${{ matrix.worker }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        worker: [apply-arm, ingest]
+    defaults:
+      run:
+        working-directory: workers/${{ matrix.worker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: workers/${{ matrix.worker }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck + dry-run deploy
+        run: npm run check
+
+  # Catches Supabase migration-ledger drift at REVIEW time instead of at
+  # deploy time on main. No `needs` — it starts the moment the PR run does,
+  # so drift shows up as a red check while the other jobs are still building.
+  # On Dependabot PRs the steps no-op and the job reports success (dependabot
+  # runs get Dependabot secrets, not repo secrets, so the check could never
+  # link anyway).
+  supabase-drift:
+    name: Supabase Drift Check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: actions/checkout@v7
+
+      # Pinned: bump deliberately, not implicitly (CLI output shape changes
+      # have broken sibling pipelines before).
+      - name: Setup Supabase CLI
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.78.1
+
+      - name: Drift check (dry-run push against prod ledger)
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: bash .github/scripts/supabase-deploy.sh check
+
+  # Vercel deploys live in CI (vercel.json sets git.deploymentEnabled: false)
+  # so a deployment only happens once the checks above are green. Previews
+  # deploy per PR; pushes to main deploy production. On push to main this job
+  # ALSO deploys Supabase first — `db push` + bulk edge-function deploy — as
+  # ordered steps BEFORE the Vercel production deploy, so a failed migration
+  # blocks the app deploy instead of shipping code whose schema never landed.
+  vercel-deploy:
+    name: Vercel Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [quality, typecheck, test, security, workers-check]
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: actions/checkout@v7
+
+      - name: Setup Supabase CLI
+        if: github.event_name == 'push'
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.78.1
+
+      # Order matters: schema first, then functions, then the app build that
+      # expects both. `db push` re-runs the same drift guard the PR check did.
+      - name: Apply migrations + deploy edge functions
+        if: github.event_name == 'push'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: bash .github/scripts/supabase-deploy.sh deploy
+
+      - name: Deploy to Vercel
+        id: deploy
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN secret is not available to this run — cannot deploy."
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TARGET_FLAG="--prod"
+            echo "target=production" >> "$GITHUB_OUTPUT"
+          else
+            TARGET_FLAG=""
+            echo "target=preview" >> "$GITHUB_OUTPUT"
+          fi
+          URL=$(npx --yes vercel@latest deploy $TARGET_FLAG --yes --token "$VERCEL_TOKEN" | tail -1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $URL"
+          echo "### Vercel deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"
+
+      # Keep the preview URL discoverable with one sticky PR comment.
+      - name: Comment preview URL on the PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER="<!-- ci-vercel-preview -->"
+          BODY="$MARKER
+          **Vercel preview** (deployed by CI after all checks passed): ${{ steps.deploy.outputs.url }} — commit ${{ github.event.pull_request.head.sha }}"
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate -q ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" > /dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY" > /dev/null
+          fi
+
+  # Deploy every worker on pushes to main, after the app deploy. Skips
+  # gracefully while CLOUDFLARE_API_TOKEN is unset (Workers Paid + token are
+  # deliberately deferred to Phase 3 — see todo.md).
+  workers-deploy:
+    name: Workers Deploy (${{ matrix.worker }})
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [vercel-deploy]
+    strategy:
+      matrix:
+        worker: [apply-arm, ingest]
+    defaults:
+      run:
+        working-directory: workers/${{ matrix.worker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: workers/${{ matrix.worker }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "CLOUDFLARE_API_TOKEN not set — skipping worker deploy (expected until Phase 3)."
+            exit 0
+          fi
+          npm run deploy

@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  /* JobArms palette: deep ink base, electric arm-teal accent */
+  --color-ink-950: #0a0f1e;
+  --color-ink-900: #101830;
+  --color-ink-800: #1a2542;
+  --color-ink-100: #dbe3f4;
+  --color-arm-500: #14b8a6;
+  --color-arm-400: #2dd4bf;
+  --color-arm-600: #0d9488;
+  --font-sans: var(--font-geist-sans, ui-sans-serif, system-ui, sans-serif);
+}
+
+body {
+  @apply bg-white text-slate-900 antialiased;
+}

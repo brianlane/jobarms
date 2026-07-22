@@ -1,0 +1,19 @@
+{
+  "name": "jobarms-ingest",
+  "version": "0.1.0",
+  "description": "JobArms ingestion worker — cron polling of public ATS endpoints + aggregator APIs into Supabase",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.1",
+    "wrangler": "^4.113.0"
+  }
+}

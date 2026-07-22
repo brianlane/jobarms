@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jobarms-ingest",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Phase 6: cron triggers for ATS polling, e.g.
+  // "triggers": { "crons": ["*/30 * * * *"] },
+  //
+  // Secrets (wrangler secret put): SUPABASE_URL, SUPABASE_SECRET_KEY.
+  "observability": {
+    "enabled": true
+  }
+}

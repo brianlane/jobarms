@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jobarms-apply-arm",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Browser Rendering + Workflows bindings land in Phase 3 (requires the
+  // Workers Paid plan — deliberately deferred; see todo.md Phase 3):
+  //
+  // "browser": { "binding": "BROWSER" },
+  // "workflows": [
+  //   { "name": "apply-run", "binding": "APPLY_RUN", "class_name": "ApplyRunWorkflow" }
+  // ],
+  //
+  // Secrets (wrangler secret put): GEMINI_API_KEY, SUPABASE_URL,
+  // SUPABASE_SECRET_KEY, ARM_WORKER_SHARED_SECRET.
+  "observability": {
+    "enabled": true
+  }
+}
