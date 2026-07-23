@@ -57,6 +57,11 @@ jobs:
           REQUIRED_LABEL: dependabot-automerge
           # Checks to ignore in the strict evaluation:
           #   label-dependabot -> this repo's own automerge labeler job
+          # Additionally any check whose name starts with "Workers Deploy"
+          # is excluded in the jq filter below: the push-only matrix job
+          # surfaces on PR commits as ONE skipped check with the raw
+          # unexpanded name (matrix never materializes for a skipped job),
+          # which would otherwise block every merge.
           EXCLUDE_CHECKS: '["label-dependabot"]'
         run: |
           set -euo pipefail
@@ -98,7 +103,8 @@ jobs:
             CHECKS=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs" \
               --jq '.check_runs[] | {name, status, conclusion}')
             FILTERED=$(echo "$CHECKS" | jq -c --argjson ex "$EXCLUDE_CHECKS" \
-              'select((.name) as $n | ($ex | index($n)) | not)')
+              'select((((.name) as $n | ($ex | index($n)) | not))
+                and ((.name | startswith("Workers Deploy")) | not))')
 
             if [ -z "$FILTERED" ]; then
               echo "No relevant check runs found; refusing to merge."

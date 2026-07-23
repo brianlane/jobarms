@@ -30,8 +30,11 @@ set -euo pipefail
 # gate: "Vercel Deploy" runs the gate before deploying, and the workers
 # deploys run only on main. The dependabot automation jobs (labeler +
 # auto-merge evaluator) skip BY DESIGN on non-dependabot PRs; their check
-# runs are plumbing, not merge signals.
-EXCLUDED_CHECKS='["Vercel Deploy", "Workers Deploy (apply-arm)", "Workers Deploy (ingest)", "label-dependabot", "auto-merge"]'
+# runs are plumbing, not merge signals. Workers Deploy is matched by PREFIX
+# below: on PR commits the push-only matrix job surfaces as one skipped
+# check with the raw unexpanded name "Workers Deploy (${{ matrix.worker }})".
+EXCLUDED_CHECKS='["Vercel Deploy", "label-dependabot", "auto-merge"]'
+EXCLUDED_PREFIX="Workers Deploy"
 
 GATE_TIMEOUT_MINS="${GATE_TIMEOUT_MINS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
@@ -48,16 +51,18 @@ while true; do
   # so a re-run never trips over its own failed history.
   check_runs=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" --paginate -q '
     .check_runs[] | {name, status, conclusion}' | jq -s '.')
-  not_green=$(jq -r --argjson excluded "$EXCLUDED_CHECKS" '
-    map(select(.name as $n | $excluded | index($n) | not))
+  not_green=$(jq -r --argjson excluded "$EXCLUDED_CHECKS" --arg prefix "$EXCLUDED_PREFIX" '
+    map(select((.name as $n | $excluded | index($n) | not)
+      and ((.name | startswith($prefix)) | not)))
     | map(select(.status != "completed" or .conclusion != "success"))
     | .[] | "\(.name): \(.status)/\(.conclusion // "-")"' <<<"$check_runs")
   # Terminal non-success conclusions fail the gate immediately, including
   # "skipped", which never flips on its own. The one deliberately
   # poll-able non-success state is NEUTRAL (review apps flip to SUCCESS in
   # place once their findings are resolved).
-  hard_failed=$(jq -r --argjson excluded "$EXCLUDED_CHECKS" '
-    map(select(.name as $n | $excluded | index($n) | not))
+  hard_failed=$(jq -r --argjson excluded "$EXCLUDED_CHECKS" --arg prefix "$EXCLUDED_PREFIX" '
+    map(select((.name as $n | $excluded | index($n) | not)
+      and ((.name | startswith($prefix)) | not)))
     | map(select(.conclusion as $c
         | ["failure", "cancelled", "timed_out", "action_required", "skipped"] | index($c)))
     | .[] | .name' <<<"$check_runs")
