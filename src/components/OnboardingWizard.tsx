@@ -157,7 +157,7 @@ export function OnboardingWizard() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Upload your resume</h1>
           <p className="mt-2 text-slate-500">
-            PDF or DOCX. Gemini reads it once and builds the profile your arms apply with.
+            PDF or DOCX. We read it once and build the profile your arms apply with.
           </p>
           <label className="mt-6 flex h-40 cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-slate-300 px-8 text-slate-500 hover:border-arm-500">
             {busy ? (
@@ -166,7 +166,7 @@ export function OnboardingWizard() {
                   {progress < 25
                     ? "Uploading your resume..."
                     : progress < 90
-                      ? "Gemini is reading your resume..."
+                      ? "Reading your resume..."
                       : "Building your profile..."}
                 </span>
                 <span

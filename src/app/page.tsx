@@ -7,7 +7,7 @@ const steps = [
   {
     n: "01",
     title: "Build one profile",
-    body: "Upload your resume once. Gemini parses it into a structured profile: work history, skills, preferences, and dealbreakers that power every application."
+    body: "Upload your resume once. JobArms turns it into a structured profile: work history, skills, preferences, and dealbreakers that power every application."
   },
   {
     n: "02",
