@@ -45,7 +45,7 @@ export function StatusControls({
             disabled={busy || s === current}
             className={`rounded-full px-4 py-2 text-sm font-medium ${
               s === current
-                ? "bg-[--color-arm-600] text-white"
+                ? "bg-arm-600 text-white"
                 : "border border-slate-300 text-slate-600 hover:border-slate-400"
             } disabled:opacity-60`}
           >
@@ -59,7 +59,7 @@ export function StatusControls({
         placeholder="Notes (interview dates, contacts, comp discussed…)"
         value={noteText}
         onChange={(e) => setNoteText(e.target.value)}
-        className="mt-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[--color-arm-500] focus:outline-none"
+        className="mt-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none"
       />
       <div className="mt-2 flex items-center gap-3">
         <button
@@ -69,7 +69,7 @@ export function StatusControls({
         >
           Save notes
         </button>
-        {saved && <span className="text-sm text-[--color-arm-600]">Saved ✓</span>}
+        {saved && <span className="text-sm text-arm-600">Saved ✓</span>}
       </div>
     </section>
   );

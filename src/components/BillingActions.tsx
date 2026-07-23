@@ -30,7 +30,7 @@ export function BillingActions({ plan }: { plan: Plan }) {
         <button
           onClick={() => go("/api/billing/checkout")}
           disabled={busy}
-          className="rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+          className="rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
         >
           Upgrade to Premium
         </button>

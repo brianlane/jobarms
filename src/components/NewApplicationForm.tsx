@@ -53,7 +53,7 @@ export function NewApplicationForm() {
           placeholder="https://boards.greenhouse.io/company/jobs/123456"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-[--color-arm-500] focus:outline-none"
+          className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-arm-500 focus:outline-none"
         />
         <p className="mt-1 text-xs text-slate-400">
           The arm currently drives Greenhouse and Lever postings. Anything else is saved to your tracker.
@@ -65,7 +65,7 @@ export function NewApplicationForm() {
           type="button"
           onClick={() => setMode("arm")}
           className={`flex-1 rounded-xl border p-4 text-left ${
-            mode === "arm" ? "border-[--color-arm-500] bg-teal-50" : "border-slate-200 bg-white"
+            mode === "arm" ? "border-arm-500 bg-teal-50" : "border-slate-200 bg-white"
           }`}
         >
           <p className="font-semibold text-slate-900">Send an arm 🦾</p>
@@ -75,18 +75,18 @@ export function NewApplicationForm() {
           type="button"
           onClick={() => setMode("track_only")}
           className={`flex-1 rounded-xl border p-4 text-left ${
-            mode === "track_only" ? "border-[--color-arm-500] bg-teal-50" : "border-slate-200 bg-white"
+            mode === "track_only" ? "border-arm-500 bg-teal-50" : "border-slate-200 bg-white"
           }`}
         >
           <p className="font-semibold text-slate-900">Track only</p>
-          <p className="mt-1 text-xs text-slate-500">I&apos;ll apply myself — just track it</p>
+          <p className="mt-1 text-xs text-slate-500">I&apos;ll apply myself, just track it</p>
         </button>
       </div>
 
       <button
         type="submit"
         disabled={busy}
-        className="rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+        className="rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
       >
         {busy ? "Working…" : mode === "arm" ? "Start the arm" : "Save to tracker"}
       </button>

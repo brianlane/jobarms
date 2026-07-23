@@ -43,7 +43,7 @@ export function AutonomyToggle({ initial }: { initial: "review_gate" | "full_aut
           disabled={busy}
           className={`block w-full rounded-xl border p-5 text-left ${
             value === opt.value
-              ? "border-[--color-arm-500] bg-teal-50"
+              ? "border-arm-500 bg-teal-50"
               : "border-slate-200 bg-white hover:border-slate-300"
           }`}
         >
@@ -51,7 +51,7 @@ export function AutonomyToggle({ initial }: { initial: "review_gate" | "full_aut
           <p className="mt-1 text-sm text-slate-600">{opt.body}</p>
         </button>
       ))}
-      {saved && <p className="text-sm text-[--color-arm-600]">Saved ✓</p>}
+      {saved && <p className="text-sm text-arm-600">Saved ✓</p>}
     </div>
   );
 }

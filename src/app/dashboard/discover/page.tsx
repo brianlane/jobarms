@@ -58,9 +58,8 @@ export default async function DiscoverPage() {
         <div className="mt-8 rounded-xl border border-dashed border-slate-300 p-12 text-center text-slate-500">
           <p>No matches yet.</p>
           <p className="mt-2 text-sm">
-            The ingestion worker fills this feed once it&apos;s deployed (Phase 6 checklist) — and
-            richer profiles match better, so{" "}
-            <Link href="/dashboard/profile" className="text-[--color-arm-600] hover:underline">
+            Fresh postings arrive every half hour. Richer profiles match better, so{" "}
+            <Link href="/dashboard/profile" className="text-arm-600 hover:underline">
               add your skills
             </Link>
             .
@@ -80,7 +79,7 @@ export default async function DiscoverPage() {
                   {job.location ? ` · ${job.location}` : ""}
                 </p>
                 {match.matchedSkills.length > 0 && (
-                  <p className="mt-1 truncate text-xs text-[--color-arm-600]">
+                  <p className="mt-1 truncate text-xs text-arm-600">
                     Matches: {match.matchedSkills.slice(0, 6).join(", ")}
                   </p>
                 )}
@@ -91,7 +90,7 @@ export default async function DiscoverPage() {
                 </span>
                 <Link
                   href={`/dashboard/applications/new?url=${encodeURIComponent(job.url)}`}
-                  className="rounded-lg bg-[--color-arm-600] px-4 py-2 text-sm font-semibold text-white hover:bg-[--color-arm-500]"
+                  className="rounded-lg bg-arm-600 px-4 py-2 text-sm font-semibold text-white hover:bg-arm-500"
                 >
                   {SUPPORTED_ATS.has(job.ats) ? "Send an arm" : "Track"}
                 </Link>

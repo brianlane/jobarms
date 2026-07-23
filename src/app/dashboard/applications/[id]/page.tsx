@@ -61,7 +61,7 @@ export default async function ApplicationDetailPage(props: { params: Promise<{ i
           <p className="mt-1 text-slate-500">
             {job?.company}
             {job?.location ? ` · ${job.location}` : ""} ·{" "}
-            <a href={job?.url} target="_blank" rel="noreferrer" className="text-[--color-arm-600] hover:underline">
+            <a href={job?.url} target="_blank" rel="noreferrer" className="text-arm-600 hover:underline">
               posting ↗
             </a>
           </p>

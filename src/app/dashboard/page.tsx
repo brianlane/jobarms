@@ -28,14 +28,14 @@ export default async function DashboardPage() {
       <p className="mt-1 text-slate-500">Your arms are ready to work.</p>
 
       {!profile?.onboarding_complete && (
-        <div className="mt-6 rounded-xl border border-[--color-arm-500] bg-teal-50 p-6">
+        <div className="mt-6 rounded-xl border border-arm-500 bg-teal-50 p-6">
           <h2 className="font-semibold text-slate-900">Finish setting up your profile</h2>
           <p className="mt-1 text-sm text-slate-600">
             Upload your resume so your arms know how to answer application questions.
           </p>
           <Link
             href="/onboarding"
-            className="mt-4 inline-block rounded-lg bg-[--color-arm-600] px-4 py-2 text-sm font-semibold text-white hover:bg-[--color-arm-500]"
+            className="mt-4 inline-block rounded-lg bg-arm-600 px-4 py-2 text-sm font-semibold text-white hover:bg-arm-500"
           >
             Start onboarding
           </Link>
@@ -58,7 +58,7 @@ export default async function DashboardPage() {
           <p className="text-sm text-slate-500">Quick action</p>
           <Link
             href="/dashboard/applications/new"
-            className="mt-1 inline-block text-sm font-semibold text-[--color-arm-600] hover:underline"
+            className="mt-1 inline-block text-sm font-semibold text-arm-600 hover:underline"
           >
             Apply to a job →
           </Link>

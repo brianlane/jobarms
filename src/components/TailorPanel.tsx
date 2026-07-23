@@ -65,7 +65,7 @@ export function TailorPanel({
           <button
             onClick={() => run("resume")}
             disabled={busy !== null}
-            className="rounded-lg bg-[--color-arm-600] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+            className="rounded-lg bg-arm-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
           >
             {busy === "resume" ? "Tailoring…" : "Tailor resume"}
           </button>
@@ -84,7 +84,7 @@ export function TailorPanel({
       ) : (
         <Link
           href="/dashboard/billing"
-          className="mt-4 inline-block rounded-lg bg-[--color-arm-600] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[--color-arm-500]"
+          className="mt-4 inline-block rounded-lg bg-arm-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-arm-500"
         >
           Upgrade to unlock
         </Link>
@@ -92,7 +92,7 @@ export function TailorPanel({
 
       {downloadUrl && (
         <p className="mt-4 text-sm">
-          <a href={downloadUrl} className="font-semibold text-[--color-arm-600] hover:underline">
+          <a href={downloadUrl} className="font-semibold text-arm-600 hover:underline">
             Download tailored resume (PDF) ↓
           </a>
         </p>
@@ -102,11 +102,11 @@ export function TailorPanel({
         <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
           <div>
             <p className="font-semibold text-slate-700">Keywords worked in</p>
-            <p className="mt-1 text-slate-500">{keywords.incorporated.join(", ") || "—"}</p>
+            <p className="mt-1 text-slate-500">{keywords.incorporated.join(", ") || "-"}</p>
           </div>
           <div>
             <p className="font-semibold text-slate-700">Gaps to be aware of</p>
-            <p className="mt-1 text-slate-500">{keywords.missing.join(", ") || "—"}</p>
+            <p className="mt-1 text-slate-500">{keywords.missing.join(", ") || "-"}</p>
           </div>
         </div>
       )}

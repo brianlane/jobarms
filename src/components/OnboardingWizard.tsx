@@ -53,7 +53,7 @@ export function OnboardingWizard() {
       });
       setStep("review");
     } else if (res.status === 422) {
-      setError("We stored your resume but couldn't parse it — fill in the basics below.");
+      setError("We stored your resume but couldn't parse it. Fill in the basics below.");
       setStep("review");
     } else {
       setError(body.hint ?? body.error ?? "Upload failed.");
@@ -105,13 +105,13 @@ export function OnboardingWizard() {
   }
 
   const inputCls =
-    "w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-[--color-arm-500] focus:outline-none";
+    "w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-arm-500 focus:outline-none";
 
   return (
     <div className="mx-auto max-w-xl">
       <div className="mb-8 flex gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
         {(["upload", "review", "preferences"] as const).map((s, i) => (
-          <span key={s} className={step === s ? "text-[--color-arm-600]" : ""}>
+          <span key={s} className={step === s ? "text-arm-600" : ""}>
             {i + 1}. {s}
             {i < 2 && <span className="mx-2 text-slate-300">→</span>}
           </span>
@@ -124,7 +124,7 @@ export function OnboardingWizard() {
           <p className="mt-2 text-slate-500">
             PDF or DOCX. Gemini reads it once and builds the profile your arms apply with.
           </p>
-          <label className="mt-6 flex h-40 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-[--color-arm-500]">
+          <label className="mt-6 flex h-40 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-arm-500">
             {busy ? "Parsing your resume…" : "Click to choose a file"}
             <input
               type="file"
@@ -141,7 +141,7 @@ export function OnboardingWizard() {
             onClick={() => setStep("review")}
             className="mt-4 text-sm text-slate-400 hover:text-slate-600"
           >
-            Skip — I&apos;ll fill my profile manually
+            Skip and fill my profile manually
           </button>
         </div>
       )}
@@ -160,7 +160,7 @@ export function OnboardingWizard() {
           <button
             onClick={saveReview}
             disabled={busy}
-            className="mt-6 rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+            className="mt-6 rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
           >
             Looks right →
           </button>
@@ -188,7 +188,7 @@ export function OnboardingWizard() {
           <button
             onClick={savePreferences}
             disabled={busy}
-            className="mt-6 rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+            className="mt-6 rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
           >
             Finish setup
           </button>

@@ -60,7 +60,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
       options: { emailRedirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(next)}` }
     });
     if (error) setError(error.message);
-    else setMessage("Magic link sent — check your email.");
+    else setMessage("Magic link sent. Check your email.");
     setBusy(false);
   }
 
@@ -76,7 +76,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
           placeholder="you@example.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg border border-slate-600 bg-[--color-ink-900] px-4 py-3 text-white placeholder:text-slate-500 focus:border-[--color-arm-400] focus:outline-none"
+          className="w-full rounded-lg border border-slate-600 bg-ink-900 px-4 py-3 text-white placeholder:text-slate-500 focus:border-arm-400 focus:outline-none"
         />
         <input
           type="password"
@@ -85,12 +85,12 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
           placeholder="Password (8+ characters)"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg border border-slate-600 bg-[--color-ink-900] px-4 py-3 text-white placeholder:text-slate-500 focus:border-[--color-arm-400] focus:outline-none"
+          className="w-full rounded-lg border border-slate-600 bg-ink-900 px-4 py-3 text-white placeholder:text-slate-500 focus:border-arm-400 focus:outline-none"
         />
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-lg bg-[--color-arm-500] px-4 py-3 font-semibold text-[--color-ink-950] hover:bg-[--color-arm-400] disabled:opacity-50"
+          className="w-full rounded-lg bg-arm-500 px-4 py-3 font-semibold text-ink-950 hover:bg-arm-400 disabled:opacity-50"
         >
           {mode === "login" ? "Log in" : "Sign up"}
         </button>
@@ -102,20 +102,20 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
       >
         Email me a magic link instead
       </button>
-      {message && <p className="mt-4 text-sm text-[--color-arm-400]">{message}</p>}
+      {message && <p className="mt-4 text-sm text-arm-400">{message}</p>}
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
       <p className="mt-6 text-sm text-slate-400">
         {mode === "login" ? (
           <>
             No account?{" "}
-            <Link href="/signup" className="text-[--color-arm-400] hover:underline">
+            <Link href="/signup" className="text-arm-400 hover:underline">
               Sign up
             </Link>
           </>
         ) : (
           <>
             Already have an account?{" "}
-            <Link href="/login" className="text-[--color-arm-400] hover:underline">
+            <Link href="/login" className="text-arm-400 hover:underline">
               Log in
             </Link>
           </>

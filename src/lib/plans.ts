@@ -4,7 +4,7 @@
  */
 
 export const FREE_ARM_RUNS_PER_MONTH = 5;
-export const PREMIUM_PRICE_USD_MONTHLY = 20;
+export const PREMIUM_PRICE_USD_MONTHLY = 19;
 
 export type Plan = "free" | "premium";
 

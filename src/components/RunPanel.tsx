@@ -85,7 +85,7 @@ export function RunPanel({ run }: { run: RunData }) {
           {run.steps.map((s, i) => (
             <li key={i}>
               <span className="font-medium text-slate-800">{s.step}</span>
-              {s.detail ? ` — ${s.detail}` : ""}
+              {s.detail ? `: ${s.detail}` : ""}
               <span className="ml-2 text-xs text-slate-400">
                 {new Date(s.at).toLocaleTimeString()}
               </span>
@@ -98,14 +98,14 @@ export function RunPanel({ run }: { run: RunData }) {
       {reviewing && answers.length > 0 && (
         <div className="mt-6">
           <h3 className="font-semibold text-amber-700">
-            Review before it submits — edit anything, then approve.
+            Review before it submits. Edit anything, then approve.
           </h3>
           <div className="mt-3 space-y-3">
             {answers.map((a, i) => (
               <div key={a.name}>
                 <label className="mb-0.5 block text-xs font-medium text-slate-500">
                   {a.label || a.name}
-                  {a.skipped && <span className="ml-2 text-amber-600">(arm skipped — fill in)</span>}
+                  {a.skipped && <span className="ml-2 text-amber-600">(arm skipped, fill in)</span>}
                 </label>
                 <textarea
                   rows={a.value.length > 120 ? 4 : 1}
@@ -115,7 +115,7 @@ export function RunPanel({ run }: { run: RunData }) {
                     next[i] = { ...a, value: e.target.value, skipped: false };
                     setAnswers(next);
                   }}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[--color-arm-500] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none"
                 />
               </div>
             ))}
@@ -123,7 +123,7 @@ export function RunPanel({ run }: { run: RunData }) {
           <button
             onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}
             disabled={busy}
-            className="mt-4 rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+            className="mt-4 rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
           >
             {busy ? "Sending…" : "Approve & submit"}
           </button>
@@ -140,7 +140,7 @@ export function RunPanel({ run }: { run: RunData }) {
             {run.answers.map((a) => (
               <div key={a.name}>
                 <dt className="text-xs text-slate-400">{a.label || a.name}</dt>
-                <dd className="text-slate-800">{a.skipped ? "(skipped)" : a.value || "—"}</dd>
+                <dd className="text-slate-800">{a.skipped ? "(skipped)" : a.value || "-"}</dd>
               </div>
             ))}
           </dl>
@@ -156,7 +156,7 @@ export function RunPanel({ run }: { run: RunData }) {
               <img
                 src={s.url}
                 alt="Arm screenshot"
-                className="rounded-lg border border-slate-200 hover:border-[--color-arm-500]"
+                className="rounded-lg border border-slate-200 hover:border-arm-500"
               />
             </a>
           ))}

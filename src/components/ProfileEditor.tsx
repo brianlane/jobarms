@@ -31,7 +31,7 @@ export interface ProfileData {
 }
 
 const inputCls =
-  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[--color-arm-500] focus:outline-none";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none";
 
 export function ProfileEditor({ initial }: { initial: ProfileData }) {
   const [data, setData] = useState<ProfileData>(initial);
@@ -50,7 +50,7 @@ export function ProfileEditor({ initial }: { initial: ProfileData }) {
     });
     setBusy(false);
     if (res.ok) setSaved(true);
-    else setError("Save failed — try again.");
+    else setError("Save failed. Try again.");
   }
 
   function updateWork(i: number, patch: Partial<WorkEntry>) {
@@ -96,7 +96,7 @@ export function ProfileEditor({ initial }: { initial: ProfileData }) {
               const label = prompt("Link label (e.g. linkedin, github, portfolio):");
               if (label) setData({ ...data, links: { ...data.links, [label]: "" } });
             }}
-            className="text-sm text-[--color-arm-600] hover:underline"
+            className="text-sm text-arm-600 hover:underline"
           >
             + Add link
           </button>
@@ -136,7 +136,7 @@ export function ProfileEditor({ initial }: { initial: ProfileData }) {
                 work_history: [...data.work_history, { company: "", title: "", start: "", end: "", bullets: [] }]
               })
             }
-            className="text-sm text-[--color-arm-600] hover:underline"
+            className="text-sm text-arm-600 hover:underline"
           >
             + Add role
           </button>
@@ -164,7 +164,7 @@ export function ProfileEditor({ initial }: { initial: ProfileData }) {
                 education: [...data.education, { school: "", degree: "", field: "", start: "", end: "" }]
               })
             }
-            className="text-sm text-[--color-arm-600] hover:underline"
+            className="text-sm text-arm-600 hover:underline"
           >
             + Add education
           </button>
@@ -188,11 +188,11 @@ export function ProfileEditor({ initial }: { initial: ProfileData }) {
         <button
           onClick={save}
           disabled={busy}
-          className="rounded-lg bg-[--color-arm-600] px-6 py-3 font-semibold text-white hover:bg-[--color-arm-500] disabled:opacity-50"
+          className="rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
         >
           Save profile
         </button>
-        {saved && <span className="text-sm text-[--color-arm-600]">Saved ✓</span>}
+        {saved && <span className="text-sm text-arm-600">Saved ✓</span>}
         {error && <span className="text-sm text-red-500">{error}</span>}
       </div>
     </div>

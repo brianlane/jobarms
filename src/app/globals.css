@@ -2,16 +2,44 @@
 
 @theme {
   /* JobArms palette: deep ink base, electric arm-teal accent */
-  --color-ink-950: #0a0f1e;
-  --color-ink-900: #101830;
-  --color-ink-800: #1a2542;
+  --color-ink-950: #070b14;
+  --color-ink-900: #0c1322;
+  --color-ink-800: #16203a;
+  --color-ink-700: #223051;
   --color-ink-100: #dbe3f4;
-  --color-arm-500: #14b8a6;
+  --color-arm-300: #5eead4;
   --color-arm-400: #2dd4bf;
+  --color-arm-500: #14b8a6;
   --color-arm-600: #0d9488;
-  --font-sans: var(--font-geist-sans, ui-sans-serif, system-ui, sans-serif);
+
+  /* Fonts are injected by next/font in layout.tsx */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-grotesk), var(--font-inter), ui-sans-serif, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, "SF Mono", monospace;
 }
 
 body {
-  @apply bg-white text-slate-900 antialiased;
+  @apply bg-white font-sans text-slate-900 antialiased;
+}
+
+::selection {
+  background: var(--color-arm-400);
+  color: var(--color-ink-950);
+}
+
+/* Mono eyebrow label used across marketing sections */
+.eyebrow {
+  @apply font-mono text-[11px] font-semibold uppercase tracking-[0.3em] text-arm-400;
+}
+
+/* Subtle radial glow behind hero content */
+.hero-glow {
+  background:
+    radial-gradient(600px 300px at 50% 0%, rgba(20, 184, 166, 0.18), transparent 70%),
+    radial-gradient(900px 500px at 80% 100%, rgba(20, 184, 166, 0.06), transparent 60%);
+}
+
+.divider-glow {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.35), transparent);
 }

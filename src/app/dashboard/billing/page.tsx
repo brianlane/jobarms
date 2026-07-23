@@ -24,7 +24,7 @@ export default async function BillingPage() {
       <p className="mt-1 text-slate-500">
         Current plan: <span className="font-semibold capitalize">{plan}</span>
         {sub?.cancel_at_period_end && sub.current_period_end && (
-          <> — cancels {new Date(sub.current_period_end).toLocaleDateString()}</>
+          <>, cancels {new Date(sub.current_period_end).toLocaleDateString()}</>
         )}
       </p>
 
@@ -33,7 +33,7 @@ export default async function BillingPage() {
           <div
             key={tier}
             className={`rounded-2xl border p-6 ${
-              plan === tier ? "border-[--color-arm-500] bg-teal-50" : "border-slate-200 bg-white"
+              plan === tier ? "border-arm-500 bg-teal-50" : "border-slate-200 bg-white"
             }`}
           >
             <h2 className="text-lg font-bold text-slate-900">{PLAN_COPY[tier].name}</h2>

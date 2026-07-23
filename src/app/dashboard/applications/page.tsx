@@ -30,7 +30,7 @@ export default async function ApplicationsPage() {
         </div>
         <Link
           href="/dashboard/applications/new"
-          className="rounded-lg bg-[--color-arm-600] px-5 py-2.5 font-semibold text-white hover:bg-[--color-arm-500]"
+          className="rounded-lg bg-arm-600 px-5 py-2.5 font-semibold text-white hover:bg-arm-500"
         >
           + Apply to a job
         </Link>
@@ -57,12 +57,12 @@ export default async function ApplicationsPage() {
                   <td className="px-4 py-3">
                     <Link
                       href={`/dashboard/applications/${row.id}`}
-                      className="font-medium text-slate-900 hover:text-[--color-arm-600]"
+                      className="font-medium text-slate-900 hover:text-arm-600"
                     >
                       {row.jobs?.title || "Untitled role"}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{row.jobs?.company || "—"}</td>
+                  <td className="px-4 py-3 text-slate-600">{row.jobs?.company || "-"}</td>
                   <td className="px-4 py-3">
                     <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[row.status]}`}>
                       {STATUS_LABELS[row.status]}
