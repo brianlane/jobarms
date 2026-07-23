@@ -6,10 +6,18 @@
  * screenshots are uploaded to storage inside the step.
  */
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { NonRetryableError } from "cloudflare:workflows";
 import type { Answer, Env, RunParams } from "./types";
-import { extractForm, fillAndMaybeSubmit } from "./browser";
+import { extractForm, fillAndMaybeSubmit, FormNotFoundError } from "./browser";
 import { generateAnswers } from "./gemini";
-import { appendScreenshot, logStep, updateApplication, updateRun, uploadScreenshot } from "./db";
+import {
+  appendScreenshot,
+  logStep,
+  recordPlaybook,
+  updateApplication,
+  updateRun,
+  uploadScreenshot
+} from "./db";
 
 export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
   async run(event: WorkflowEvent<RunParams>, step: WorkflowStep) {
@@ -24,7 +32,35 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
         async () => {
           await updateRun(env, params.runId, { status: "running" });
           await logStep(env, params.runId, "navigate", params.jobUrl);
-          const result = await extractForm(env, params);
+          let result;
+          try {
+            result = await extractForm(env, params);
+          } catch (err) {
+            if (err instanceof FormNotFoundError) {
+              // Deterministic: retrying burns browser minutes for nothing.
+              await logStep(env, params.runId, "form_not_found", err.message);
+              throw new NonRetryableError(err.message);
+            }
+            throw err;
+          }
+
+          if (result.recovery) {
+            // Self-healing: the winning strategy becomes this domain's
+            // playbook, so every future run here fixes itself immediately.
+            await recordPlaybook(
+              env,
+              result.recovery.domain,
+              params.ats,
+              result.recovery.strategy
+            );
+            await logStep(
+              env,
+              params.runId,
+              result.recovery.source === "vision" ? "recovery_vision" : "recovery_playbook",
+              result.recovery.strategy.action
+            );
+          }
+
           const shot = await uploadScreenshot(
             env, params.userId, params.runId, "form", result.screenshot
           );

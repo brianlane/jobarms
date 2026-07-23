@@ -8,10 +8,27 @@ import { Buffer } from "node:buffer";
 import { launch, type Browser, type Page } from "@cloudflare/playwright";
 import type { Answer, Env, FormField, RunParams } from "./types";
 import { ADAPTERS } from "./adapters";
+import { looksLikeApplicationForm } from "./form-sanity";
+import { diagnosePage } from "./gemini";
+import { getPlaybook, recordPlaybookFailure } from "./db";
+
+export interface RecoveryStrategy {
+  action: "click" | "iframe" | "scroll";
+  click_text?: string;
+}
 
 export interface FillResult {
   fields: FormField[];
   screenshot: Uint8Array;
+  /** Set when the real form was only reachable through self-healing. */
+  recovery: { source: "playbook" | "vision"; strategy: RecoveryStrategy; domain: string } | null;
+}
+
+/** Terminal: no application form reachable on this page. Not worth retrying. */
+export class FormNotFoundError extends Error {
+  constructor(reason: string) {
+    super(`form_not_found: ${reason}`);
+  }
 }
 
 export interface SubmitResult {
@@ -33,18 +50,125 @@ async function withBrowser<T>(env: Env, fn: (page: Page) => Promise<T>): Promise
   }
 }
 
-/** Extract the form fields from the job's application page. */
+/**
+ * Extract the application form, with self-healing when what we find fails
+ * the "is this actually a job application?" sanity check (the arm's eyes):
+ *   1. a stored per-domain playbook strategy from past successful recoveries,
+ *   2. up to two vision rounds: Gemini looks at a screenshot and tells the
+ *      arm what stands between it and the real form (click Apply, enter an
+ *      embed, scroll).
+ * Terminal failure throws FormNotFoundError so runs fail early and honestly
+ * instead of parking a junk review.
+ */
 export async function extractForm(env: Env, params: RunParams): Promise<FillResult> {
   return withBrowser(env, async (page) => {
     const adapter = ADAPTERS[params.ats];
     await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
     await adapter.openApplication(page);
-    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 });
+    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
 
-    const fields = await collectFields(page, adapter.formSelector);
-    const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-    return { fields, screenshot };
+    const acquire = async (): Promise<FormField[]> =>
+      collectFields(page, adapter.formSelector).catch(() => [] as FormField[]);
+
+    let fields = await acquire();
+    let sanity = looksLikeApplicationForm(fields);
+    if (sanity.ok) {
+      const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+      return { fields, screenshot, recovery: null };
+    }
+
+    const domain = new URL(page.url()).hostname;
+
+    // Round 0: known fix for this domain from previous successful recoveries.
+    const playbook = await getPlaybook(env, domain, params.ats);
+    if (playbook) {
+      await applyStrategy(page, adapter.formSelector, playbook, params.ats);
+      await adapter.openApplication(page);
+      fields = await acquire();
+      sanity = looksLikeApplicationForm(fields);
+      if (sanity.ok) {
+        const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+        return { fields, screenshot, recovery: { source: "playbook", strategy: playbook, domain } };
+      }
+      await recordPlaybookFailure(env, domain, params.ats);
+    }
+
+    // Rounds 1-2: vision. Look at the page, act on what we see.
+    let lastReason = sanity.reason;
+    for (let round = 0; round < 2; round++) {
+      const shot = new Uint8Array(await page.screenshot({ fullPage: false }));
+      const diagnosis = await diagnosePage(env, shot, page.url(), lastReason).catch(() => null);
+      if (!diagnosis || diagnosis.action === "none") {
+        lastReason = diagnosis?.reason || lastReason;
+        break;
+      }
+
+      const strategy: RecoveryStrategy = {
+        action: diagnosis.action,
+        click_text: diagnosis.click_text
+      };
+      await applyStrategy(page, adapter.formSelector, strategy, params.ats);
+      await adapter.openApplication(page);
+      fields = await acquire();
+      sanity = looksLikeApplicationForm(fields);
+      if (sanity.ok) {
+        const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+        return { fields, screenshot, recovery: { source: "vision", strategy, domain } };
+      }
+      lastReason = sanity.reason;
+    }
+
+    throw new FormNotFoundError(lastReason);
   });
+}
+
+/** Execute one recovery strategy against the live page. */
+async function applyStrategy(
+  page: Page,
+  formSelector: string,
+  strategy: RecoveryStrategy,
+  ats: "greenhouse" | "lever"
+): Promise<void> {
+  try {
+    if (strategy.action === "click") {
+      const text = strategy.click_text || "Apply";
+      const target = page
+        .locator(`a:has-text("${text.replace(/"/g, "")}"), button:has-text("${text.replace(/"/g, "")}")`)
+        .first();
+      if ((await target.count()) > 0) {
+        await target.click();
+        await page.waitForLoadState("domcontentloaded").catch(() => {});
+        await page.waitForTimeout(2500);
+      }
+      return;
+    }
+
+    if (strategy.action === "iframe") {
+      const providerHost = ats === "greenhouse" ? "greenhouse.io" : "lever.co";
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const embed = page.locator(`iframe[src*="${providerHost}"]`).first();
+        if ((await embed.count()) > 0) {
+          const src = await embed.getAttribute("src");
+          if (src) {
+            await page.goto(src, { waitUntil: "domcontentloaded" });
+            return;
+          }
+        }
+        await page.mouse.wheel(0, 1200); // lazy embeds mount on scroll
+        await page.waitForTimeout(1500);
+      }
+      return;
+    }
+
+    // scroll: the form may be further down the page
+    for (let i = 0; i < 4; i++) {
+      await page.mouse.wheel(0, 1600);
+      await page.waitForTimeout(800);
+    }
+    await page.waitForSelector(formSelector, { timeout: 5000 }).catch(() => {});
+  } catch {
+    // strategy execution is best-effort; the sanity re-check decides success
+  }
 }
 
 /** Fill the form with approved answers and (optionally) submit. */

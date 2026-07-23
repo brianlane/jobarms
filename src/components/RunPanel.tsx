@@ -37,6 +37,12 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
         ? `Read the form: ${n} question${n === 1 ? "" : "s"}`
         : "Read the application form";
     }
+    case "recovery_vision":
+      return "Looked at the page and found the real application form";
+    case "recovery_playbook":
+      return "Used a known fix for this site";
+    case "form_not_found":
+      return "Couldn't find an application form on this page";
     case "answers_generated":
       return "Drafted your answers";
     case "review_requested":
@@ -145,7 +151,9 @@ export function RunPanel({ run }: { run: RunData }) {
         <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
           {run.error.includes("submit_unconfirmed")
             ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
-            : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved; you can cancel and retry, or apply manually."}
+            : run.error.includes("form_not_found")
+              ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms). The job stays in your tracker; apply manually from the posting link above."
+              : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved; you can cancel and retry, or apply manually."}
         </p>
       )}
 

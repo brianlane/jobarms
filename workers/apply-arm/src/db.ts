@@ -93,3 +93,58 @@ export async function appendScreenshot(env: Env, runId: string, path: string): P
   shots.push(path);
   await updateRun(env, runId, { screenshots: shots });
 }
+
+// --- Self-healing playbooks -------------------------------------------------
+
+export interface PlaybookStrategy {
+  action: "click" | "iframe" | "scroll";
+  click_text?: string;
+}
+
+/** Known recovery strategy for a domain, if one has succeeded before. */
+export async function getPlaybook(
+  env: Env,
+  domain: string,
+  ats: string
+): Promise<PlaybookStrategy | null> {
+  try {
+    const res = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/arm_playbooks?domain=eq.${encodeURIComponent(domain)}&ats=eq.${encodeURIComponent(ats)}&select=strategy,success_count,failure_count`,
+      { headers: headers(env) }
+    );
+    if (!res.ok) return null;
+    const rows = (await res.json()) as Array<{
+      strategy: PlaybookStrategy;
+      success_count: number;
+      failure_count: number;
+    }>;
+    const row = rows[0];
+    if (!row) return null;
+    // A playbook that keeps failing has gone stale; stop applying it.
+    if (row.failure_count > row.success_count) return null;
+    return row.strategy;
+  } catch {
+    return null;
+  }
+}
+
+export async function recordPlaybook(
+  env: Env,
+  domain: string,
+  ats: string,
+  strategy: PlaybookStrategy
+): Promise<void> {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_arm_playbook`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_domain: domain, p_ats: ats, p_strategy: strategy })
+  }).catch(() => {});
+}
+
+export async function recordPlaybookFailure(env: Env, domain: string, ats: string): Promise<void> {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_arm_playbook_failure`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_domain: domain, p_ats: ats })
+  }).catch(() => {});
+}

@@ -13,7 +13,9 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
-async function generateJson(env: Env, prompt: string): Promise<unknown> {
+type Part = { text: string } | { inlineData: { mimeType: string; data: string } };
+
+async function generateJsonFromParts(env: Env, parts: Part[]): Promise<unknown> {
   const model = env.GEMINI_TEXT_MODEL || DEFAULT_MODEL;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -24,7 +26,7 @@ async function generateJson(env: Env, prompt: string): Promise<unknown> {
         "x-goog-api-key": env.GEMINI_API_KEY ?? ""
       },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        contents: [{ role: "user", parts }],
         generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
       })
     }
@@ -38,6 +40,66 @@ async function generateJson(env: Env, prompt: string): Promise<unknown> {
     ? text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "")
     : text.trim();
   return JSON.parse(unfenced);
+}
+
+async function generateJson(env: Env, prompt: string): Promise<unknown> {
+  return generateJsonFromParts(env, [{ text: prompt }]);
+}
+
+export interface PageDiagnosis {
+  form_visible: boolean;
+  action: "click" | "iframe" | "scroll" | "none";
+  click_text?: string;
+  reason: string;
+}
+
+/**
+ * The arm's EYES: show Gemini a screenshot of the page and ask what stands
+ * between us and the real application form. Used when extraction produced
+ * something that fails the application-form sanity check.
+ */
+export async function diagnosePage(
+  env: Env,
+  screenshotPng: Uint8Array,
+  pageUrl: string,
+  problem: string
+): Promise<PageDiagnosis> {
+  const raw = (await generateJsonFromParts(env, [
+    {
+      inlineData: {
+        mimeType: "image/png",
+        // btoa on binary strings chokes on large buffers; chunk it.
+        data: base64FromBytes(screenshotPng)
+      }
+    },
+    {
+      text: `This is a screenshot of ${pageUrl}. We are trying to reach the JOB APPLICATION FORM (name/email/resume upload fields) to apply for a job, but our extraction found: ${problem}.
+
+Look at the screenshot and answer as JSON:
+{"form_visible": <true if a real application form with candidate fields is visible>, "action": <one of "click" (an Apply/Apply Now button or link must be clicked first), "iframe" (the form appears embedded from another provider), "scroll" (the form is likely further down the page), "none" (no path to an application form is visible)>, "click_text": <exact visible text of the button/link to click, only when action is "click">, "reason": <one short sentence>}
+
+Return ONLY the JSON object.`
+    }
+  ])) as Partial<PageDiagnosis>;
+
+  const action = ["click", "iframe", "scroll", "none"].includes(raw.action ?? "")
+    ? (raw.action as PageDiagnosis["action"])
+    : "none";
+  return {
+    form_visible: Boolean(raw.form_visible),
+    action,
+    click_text: typeof raw.click_text === "string" ? raw.click_text.slice(0, 80) : undefined,
+    reason: typeof raw.reason === "string" ? raw.reason.slice(0, 200) : ""
+  };
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }
 
 export async function generateAnswers(
