@@ -1,0 +1,58 @@
+name: Dependabot automerge label
+
+# Tags every Dependabot PR as eligible for auto-merge (patch, minor, AND major).
+# Safety comes from the merger: dependabot-automerge.yml only merges once EVERY
+# CI check for the head commit is green and there are no unresolved review
+# threads, so a major bump that breaks CI can never be auto-merged. Split into
+# two workflows because:
+#   - This one needs write access to label, which requires pull_request_target
+#     (Dependabot's pull_request token is read-only).
+#   - The strict "all checks green" evaluation must run AFTER CI finishes, which
+#     is handled via workflow_run in the companion file.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dependabot-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label-dependabot:
+    name: label-dependabot
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add the automerge label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without a checkout there is no git context, so gh cannot infer the
+          # repo. GH_REPO makes `gh label create` (and friends) target this repo
+          # directly; without it label creation fails and add-label errors with
+          # "'dependabot-automerge' not found".
+          GH_REPO: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: |
+          set -euo pipefail
+
+          # Ensure the label exists (idempotent).
+          gh label create dependabot-automerge \
+            --color 0e8a16 \
+            --description "Dependabot PR eligible for strict auto-merge" \
+            --force
+
+          echo "Dependabot update type: ${UPDATE_TYPE:-<none>}"
+          echo "Marking eligible for auto-merge (the merger still requires all checks green)."
+          gh pr edit "$PR_URL" --add-label "dependabot-automerge"

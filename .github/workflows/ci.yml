@@ -215,11 +215,14 @@ jobs:
   vercel-deploy:
     name: Vercel Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Budget: gate poll (up to 20m) + the deploy itself.
+    timeout-minutes: 30
     needs: [quality, typecheck, test, security, workers-check]
     permissions:
       contents: read
       pull-requests: write
+      checks: read
+      statuses: read
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -227,6 +230,21 @@ jobs:
       - name: Checkout
         if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
+
+      # Push events (post-merge main) skip the PR-shaped gate: review threads
+      # and cross-workflow checks were already enforced on the PR. Dependabot
+      # PRs skip it too (their runs get Dependabot secrets and the auto-merge
+      # evaluator enforces the same all-green bar).
+      - name: Wait for every other check to pass and all threads to resolve
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/deploy-gate.sh
 
       - name: Setup Supabase CLI
         if: github.event_name == 'push'

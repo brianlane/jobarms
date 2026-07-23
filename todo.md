@@ -143,6 +143,25 @@ Repo scaffold:
 - [x] Ingest worker deployed (ingest.jobarms.com, cron live) + 10 companies
       seeded - ~4,000 jobs in the catalog from the first two sweeps
 
+## Tier spec v2 implementation (COMPLETE, Jul 23)
+
+The README pricing table is fully enforced in code:
+
+- [x] Free tier: 3 arm runs/month, 2 resume parses LIFETIME (window-aware
+      quotas + meterKey in src/lib/plans.ts), review-gate only (canFullAuto
+      forced server-side at dispatch and retry)
+- [x] Premium: 200 arm runs/month cap
+- [x] Max tier ($199/mo): Stripe price created (STRIPE_PRICE_MAX_MONTHLY in
+      .env + Vercel), 100 arm runs/DAY (day-keyed reservation), 300/mo AI
+      quotas (migration 20260723211000_max_tier.sql)
+- [x] Tier mapping from Stripe price IDs (tierFromPrice in
+      src/lib/billing.ts; unknown prices can never over-grant Max)
+- [x] Success-only metering: idempotent refund_arm_run RPC + slot_refunded
+      flag + canceled_by provenance (migration
+      20260723220000_run_refunds.sql); worker refunds system failures only
+- [x] Pricing page + PLAN_COPY for three tiers
+- [x] Run retry endpoint + run console + retry-application.ts debug mirror
+
 ## Later / parked
 
 - [ ] Chrome extension (assisted apply in the user's own browser)
