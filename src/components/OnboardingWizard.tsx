@@ -40,7 +40,7 @@ export function OnboardingWizard() {
     setError(null);
     setProgress(4);
 
-    // Parsing takes ~5-20s (upload + Gemini reading the document). True
+    // Parsing takes ~5-20s (upload + the model reading the document). True
     // progress isn't observable from one request, so ease toward 90% and
     // complete on response.
     const startedAt = Date.now();

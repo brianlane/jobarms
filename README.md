@@ -143,18 +143,19 @@ Also: `audit.yml` (weekly + PR dependency audit across every package tree),
 - `setup-vercel.ts` - Stripe webhook + Vercel envs + domains, one shot
 - `seed-companies.ts` - seed/extend the ingestion company list
 
-## Writing style: em dashes are banned
+## Writing style: banned words and characters
 
-Never use the em dash character (U+2014) in ANY context: site copy, code,
-comments, docs, commit messages, or AI-generated output. Use a comma, colon,
-period, or plain hyphen instead. This is enforced three ways:
+**Em dashes.** Never use the em dash character (U+2014) in ANY context: site
+copy, code, comments, docs, commit messages, or AI-generated output. Use a
+comma, colon, period, or plain hyphen instead. Enforced by the `quality` CI
+job (greps every tracked file, lockfiles excluded) and by every model prompt.
 
-- CI: the `quality` job greps every tracked file (lockfiles excluded) and
-  fails the build on any em dash.
-- Model prompts: every Gemini prompt (resume parsing, tailoring, cover
-  letters, the arm's application answers) instructs the model to never emit
-  the character, so AI output stays clean at the source.
-- This rule itself: written without one.
+**"Gemini" in user-facing surfaces.** Public and user views never name the
+underlying model: use "AI", "we", or "JobArms" instead. Enforced by the
+`quality` CI job, which fails on any occurrence of the word in rendered
+component files (`src/**/*.tsx`, comments included, so nothing can drift
+into JSX). Internal code (`src/lib`, `workers/`, scripts, env var names) may
+reference Gemini freely.
 
 ## All work and code modifications must follow this flow
 

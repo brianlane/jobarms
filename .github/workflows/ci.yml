@@ -51,6 +51,17 @@ jobs:
           fi
           echo "No em dashes found."
 
+      # The word "Gemini" must never reach a user-facing surface (rendered
+      # component files, including comments, so nothing can leak into JSX).
+      # Internal code (src/lib, workers, scripts, env names) may reference it.
+      - name: No Gemini in user-facing files
+        run: |
+          if git grep -in "gemini" -- 'src/**/*.tsx' 'src/app/**/*.css'; then
+            echo "::error::'Gemini' found in a user-facing file. Public and user views must use generic AI/JobArms wording."
+            exit 1
+          fi
+          echo "No Gemini mentions in user-facing files."
+
       - name: Lint
         run: npm run lint
 
