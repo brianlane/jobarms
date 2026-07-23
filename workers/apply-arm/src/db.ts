@@ -102,14 +102,13 @@ export async function appendScreenshot(env: Env, runId: string, path: string): P
  */
 export async function releaseArmRunSlot(env: Env, runId: string): Promise<void> {
   try {
-    const run = await getRun(env, runId);
-    const userId = run?.user_id as string | undefined;
-    const meterKey = run?.month_key as string | undefined;
-    if (!userId || !meterKey) return;
-    await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/release_arm_run`, {
+    // refund_arm_run is idempotent per run (slot_refunded flag set atomically
+    // with the usage decrement), so worker retries and the app's retry/cancel
+    // cleanup can all call it without ever double-crediting.
+    await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/refund_arm_run`, {
       method: "POST",
       headers: headers(env),
-      body: JSON.stringify({ p_user_id: userId, p_month_key: meterKey })
+      body: JSON.stringify({ p_run_id: runId })
     });
   } catch {
     // advisory only

@@ -11,6 +11,7 @@ export interface RunData {
   answers: { name: string; label: string; value: string; skipped?: boolean }[] | null;
   form_fields: unknown;
   error: string | null;
+  slot_refunded?: boolean;
   created_at: string;
 }
 
@@ -43,8 +44,11 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
       return "Used a known fix for this site";
     case "form_not_found":
       return "Couldn't find an application form on this page";
-    case "answers_generated":
-      return "Drafted your answers";
+    case "answers_generated": {
+      // A single junk answer isn't "drafting" (old dead-end runs); stay quiet.
+      const n = parseInt(step.detail ?? "", 10);
+      return Number.isFinite(n) && n <= 1 ? null : "Drafted your answers";
+    }
     case "review_requested":
       return "Paused so you can review";
     case "approved":
@@ -63,7 +67,7 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
  * a clear review-and-approve flow when the arm is waiting, and the raw
  * technical log tucked behind a disclosure.
  */
-export function RunPanel({ run }: { run: RunData }) {
+export function RunPanel({ run, applicationId }: { run: RunData; applicationId: string }) {
   const router = useRouter();
   const [answers, setAnswers] = useState(run.answers ?? []);
   const [screenshots, setScreenshots] = useState<{ path: string; url: string }[]>([]);
@@ -109,7 +113,10 @@ export function RunPanel({ run }: { run: RunData }) {
   const status = RUN_STATUS_COPY[run.status] ?? { label: run.status, tone: "muted" as const };
   const reviewing = run.status === "needs_review";
   const working = ["queued", "running", "approved", "submitting"].includes(run.status);
+  const ended = run.status === "failed" || run.status === "canceled";
   const reviewable = answers.filter((a) => (a.label || a.value || "").trim() !== "");
+  const snag = reviewing && reviewable.length === 0;
+  const retryable = snag || ended;
 
   const toneCls =
     status.tone === "action"
@@ -148,24 +155,48 @@ export function RunPanel({ run }: { run: RunData }) {
       </div>
 
       {run.error && (
-        <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          {run.error.includes("submit_unconfirmed")
-            ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
-            : run.error.includes("form_not_found")
-              ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms). The job stays in your tracker; apply manually from the posting link above."
-              : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved; you can cancel and retry, or apply manually."}
-        </p>
+        <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <p>
+            {run.error.includes("submit_unconfirmed")
+              ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
+              : run.error.includes("review_timeout")
+                ? "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted."
+                : run.error.includes("form_not_found")
+                  ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms)."
+                  : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved."}
+          </p>
+          {run.slot_refunded && (
+            <p className="mt-1.5 font-medium text-red-800">
+              This run did not count against your arm runs.
+            </p>
+          )}
+        </div>
       )}
 
-      {/* Friendly progress story */}
+      {/* Terminal runs can go again: arms improve with every application */}
+      {ended && (
+        <button
+          onClick={() => act(`/api/applications/${applicationId}/retry`)}
+          disabled={busy}
+          className="mt-4 rounded-lg bg-arm-600 px-5 py-2.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
+        >
+          {busy ? "Starting..." : "Retry with a fresh arm"}
+        </button>
+      )}
+
+      {/* Friendly progress story (neutral dots when the journey ended badly) */}
       {friendlySteps.length > 0 && (
         <ol className="mt-5 space-y-2">
           {friendlySteps.map((s, i) => (
             <li key={i} className="flex items-center gap-3 text-sm">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-100 text-[10px] font-bold text-teal-700">
-                ✓
+              <span
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                  ended || snag ? "bg-slate-200 text-slate-500" : "bg-teal-100 text-teal-700"
+                }`}
+              >
+                {ended || snag ? "·" : "✓"}
               </span>
-              <span className="text-slate-700">{s.text}</span>
+              <span className={ended || snag ? "text-slate-500" : "text-slate-700"}>{s.text}</span>
               <span className="ml-auto shrink-0 text-xs text-slate-400">
                 {new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
               </span>
@@ -174,8 +205,40 @@ export function RunPanel({ run }: { run: RunData }) {
         </ol>
       )}
 
+      {/* Dead-ended review: nothing to approve, offer the fix */}
+      {snag && (
+        <div className="mt-6 rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
+          <h3 className="font-display text-base font-bold text-amber-900">
+            Your arm hit a snag on this one
+          </h3>
+          <p className="mt-1 text-sm text-amber-800">
+            It reached the page but couldn&apos;t read a real application form, so there&apos;s
+            nothing to review. Arms learn from every attempt; a fresh one may get through now.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              onClick={() => act(`/api/applications/${applicationId}/retry`)}
+              disabled={busy}
+              className="rounded-lg bg-arm-600 px-5 py-2.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
+            >
+              {busy ? "Starting..." : "Retry with a fresh arm"}
+            </button>
+            <button
+              onClick={() => act(`/api/runs/${run.id}/cancel`)}
+              disabled={busy}
+              className="rounded-lg border border-slate-300 px-5 py-2.5 font-semibold text-slate-700 hover:border-slate-400 disabled:opacity-50"
+            >
+              Cancel and apply manually
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-amber-700">
+            Dead-ended runs like this one don&apos;t count against your arm runs.
+          </p>
+        </div>
+      )}
+
       {/* Review gate: the one moment that needs the user */}
-      {reviewing && (
+      {reviewing && !snag && (
         <div className="mt-6 rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
           <h3 className="font-display text-base font-bold text-amber-900">
             Your arm needs you: review the answers below, then approve
@@ -184,61 +247,41 @@ export function RunPanel({ run }: { run: RunData }) {
             Nothing is sent until you approve. Edit anything that reads wrong; answers the arm
             couldn&apos;t figure out are highlighted for you to fill in.
           </p>
-
-          {reviewable.length === 0 ? (
-            <div className="mt-4 rounded-lg bg-white p-4 text-sm text-slate-700">
-              <p className="font-semibold">The arm couldn&apos;t read this application form.</p>
-              <p className="mt-1 text-slate-500">
-                Some career sites block automation or hide their form. Cancel this run and apply
-                manually; the job stays in your tracker either way.
-              </p>
-              <button
-                onClick={() => act(`/api/runs/${run.id}/cancel`)}
-                disabled={busy}
-                className="mt-3 rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:border-slate-400 disabled:opacity-50"
-              >
-                Cancel run
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 space-y-3">
-                {answers.map((a, i) =>
-                  (a.label || a.value || "").trim() === "" ? null : (
-                    <div key={a.name}>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">
-                        {a.label || a.name}
-                        {a.skipped && (
-                          <span className="ml-2 font-semibold text-amber-700">
-                            needs your answer
-                          </span>
-                        )}
-                      </label>
-                      <textarea
-                        rows={a.value.length > 120 ? 4 : 1}
-                        value={a.value}
-                        onChange={(e) => {
-                          const next = [...answers];
-                          next[i] = { ...a, value: e.target.value, skipped: false };
-                          setAnswers(next);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
-                          a.skipped ? "border-amber-400 bg-amber-50/50" : "border-slate-300 bg-white"
-                        }`}
-                      />
-                    </div>
-                  )
-                )}
-              </div>
-              <button
-                onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}
-                disabled={busy}
-                className="mt-5 w-full rounded-lg bg-arm-600 px-6 py-3.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50 sm:w-auto"
-              >
-                {busy ? "Sending..." : "Approve and submit application"}
-              </button>
-            </>
-          )}
+          <div className="mt-4 space-y-3">
+            {answers.map((a, i) =>
+              (a.label || a.value || "").trim() === "" ? null : (
+                <div key={a.name}>
+                  <label className="mb-0.5 block text-xs font-medium text-slate-600">
+                    {a.label || a.name}
+                    {a.skipped && (
+                      <span className="ml-2 font-semibold text-amber-700">
+                        needs your answer
+                      </span>
+                    )}
+                  </label>
+                  <textarea
+                    rows={a.value.length > 120 ? 4 : 1}
+                    value={a.value}
+                    onChange={(e) => {
+                      const next = [...answers];
+                      next[i] = { ...a, value: e.target.value, skipped: false };
+                      setAnswers(next);
+                    }}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
+                      a.skipped ? "border-amber-400 bg-amber-50/50" : "border-slate-300 bg-white"
+                    }`}
+                  />
+                </div>
+              )
+            )}
+          </div>
+          <button
+            onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}
+            disabled={busy}
+            className="mt-5 w-full rounded-lg bg-arm-600 px-6 py-3.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50 sm:w-auto"
+          >
+            {busy ? "Sending..." : "Approve and submit application"}
+          </button>
         </div>
       )}
 

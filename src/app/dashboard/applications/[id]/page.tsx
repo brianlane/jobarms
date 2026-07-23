@@ -27,7 +27,7 @@ export default async function ApplicationDetailPage(props: { params: Promise<{ i
   const [{ data: runs }, { data: sub }] = await Promise.all([
     supabase
       .from("application_runs")
-      .select("id, status, autonomy, steps, answers, form_fields, error, created_at")
+      .select("id, status, autonomy, steps, answers, form_fields, error, slot_refunded, created_at")
       .eq("application_id", id)
       .order("created_at", { ascending: false }),
     supabase
@@ -70,7 +70,9 @@ export default async function ApplicationDetailPage(props: { params: Promise<{ i
         </span>
       </div>
 
-      {latestRun && <RunPanel key={`${latestRun.id}:${latestRun.status}`} run={latestRun} />}
+      {latestRun && (
+        <RunPanel key={`${latestRun.id}:${latestRun.status}`} run={latestRun} applicationId={app.id} />
+      )}
 
       <TailorPanel applicationId={app.id} premium={premium} hasCoverLetter={Boolean(app.cover_letter)} />
 
