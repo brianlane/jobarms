@@ -14,6 +14,8 @@
  *    noreply@mail.app.supabase.io
  *  - JobArms-branded subjects + HTML templates
  */
+export {}; // module scope — import-less scripts otherwise collide globally
+
 const PROJECT_REF = "fjzvlshxcgbuhrhxdsiu";
 
 function need(name: string): string {
