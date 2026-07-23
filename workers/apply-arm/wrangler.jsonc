@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "arm.jobarms.com", "custom_domain": true }],
   // Browser Rendering + Workflows require the Workers Paid plan. CI's
   // workers-deploy job is gated on CLOUDFLARE_API_TOKEN (Phase 3), so this
   // config can carry the bindings before the upgrade happens.

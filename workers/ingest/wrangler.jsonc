@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "ingest.jobarms.com", "custom_domain": true }],
   "triggers": { "crons": ["7,37 * * * *"] },
   // Secrets (wrangler secret put): SUPABASE_URL, SUPABASE_SECRET_KEY,
   // INTERNAL_CRON_SECRET.

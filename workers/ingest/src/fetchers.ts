@@ -34,11 +34,16 @@ async function getJson(url: string): Promise<unknown> {
 export async function fetchGreenhouse(company: string, board: string): Promise<NormalizedJob[]> {
   const body = (await getJson(
     `https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`
-  )) as { jobs?: Array<{ absolute_url?: string; title?: string; location?: { name?: string }; content?: string }> };
+  )) as { jobs?: Array<{ id?: number; absolute_url?: string; title?: string; location?: { name?: string }; content?: string }> };
   return (body.jobs ?? [])
-    .filter((j) => j.absolute_url)
+    .filter((j) => j.id || j.absolute_url)
     .map((j) => ({
-      url: j.absolute_url!,
+      // Canonical hosted-board URL, NOT absolute_url: many companies point
+      // absolute_url at their own careers site, which embeds the Greenhouse
+      // form in an iframe the arm would have to chase. The hosted URL always
+      // renders the form directly (and redirects to job-boards.greenhouse.io
+      // for migrated boards).
+      url: j.id ? `https://boards.greenhouse.io/${board}/jobs/${j.id}` : j.absolute_url!,
       ats: "greenhouse" as const,
       source: "ingest:greenhouse",
       company,

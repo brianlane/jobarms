@@ -37,8 +37,10 @@ Repo scaffold:
 - [x] GitHub Actions secrets set (`gh secret set` from local .env)
 - [x] Vercel project envs + domains attached (scripts/oneshot/setup-vercel.ts)
 - [x] vercel.json (git integration off — CI owns deploys)
-- [ ] Cloudflare DNS records for Vercel (A @ 76.76.21.21, CNAME www
-      cname.vercel-dns.com — DNS-only/grey cloud)
+- [ ] **Manual: Cloudflare DNS records for Vercel** (dashboard → jobarms.com
+      → DNS): A @ → 216.198.79.1 and CNAME www → cname.vercel-dns.com, both
+      DNS-only/grey cloud. (The wrangler OAuth token can't edit DNS; the
+      arm./ingest. records were auto-created by Workers custom domains.)
 
 ## Phase 1 — App skeleton (auth + billing)
 
@@ -65,13 +67,16 @@ Repo scaffold:
 
 ## Phase 3 — Apply arm (the product)
 
-- [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo)
-- [ ] **Manual: mint CLOUDFLARE_API_TOKEN → GitHub secret** (workers-deploy
-      then deploys both workers on the next main push)
-- [ ] **Manual/agent: `wrangler secret put` on both workers** (apply-arm:
+- [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo) — the workers
+      deployed and ran on the free allowance (Browser Rendering free tier =
+      10 browser-minutes/day); upgrade before real usage volume
+- [ ] **Manual: mint CLOUDFLARE_API_TOKEN → GitHub secret** (CI workers-deploy
+      skips gracefully until then; both workers were deployed via local
+      wrangler login: arm.jobarms.com + ingest.jobarms.com)
+- [x] `wrangler secret put` on both workers (apply-arm:
       ARM_WORKER_SHARED_SECRET, SUPABASE_URL, SUPABASE_SECRET_KEY,
       GEMINI_API_KEY; ingest: SUPABASE_URL, SUPABASE_SECRET_KEY,
-      INTERNAL_CRON_SECRET), then set ARM_WORKER_URL in .env + Vercel
+      INTERNAL_CRON_SECRET); ARM_WORKER_URL set in .env + Vercel
 - [x] Schema: jobs, applications, application_runs (+ screenshots bucket)
 - [x] `workers/apply-arm`: ApplyRunWorkflow (extract form → Gemini answers →
       fill + screenshot → review gate (waitForEvent, 7d) → submit → verify)
@@ -85,8 +90,14 @@ Repo scaffold:
       early failure)
 - [x] Failure handling: honest failed status + error + screenshots; job stays
       tracked
-- [ ] Live end-to-end run against a real Greenhouse posting (needs the three
-      manual items above)
+- [x] Live end-to-end run verified (debug/smoke-arm-run.ts): real Lever
+      posting → form extracted (30+ fields) → Gemini answers grounded in the
+      smoke profile → filled + screenshots → parked at needs_review →
+      canceled. Review-gate smoke NEVER submits.
+- [ ] Greenhouse live run: most big boards now redirect to company careers
+      sites that lazy-embed the GH iframe; the adapter chases the iframe but
+      needs validation against a company that still hosts on
+      job-boards.greenhouse.io
 
 ## Phase 4 — Tracker
 
@@ -117,8 +128,8 @@ Repo scaffold:
 - [x] "Send an arm" from the feed (prefills the apply form)
 - [x] Company seed script (scripts/oneshot/seed-companies.ts)
 - [ ] Aggregator API connectors (Adzuna / JSearch / USAJobs) — needs API keys
-- [ ] Ingest worker deployed + companies seeded (rides the Phase 3 manual
-      checklist)
+- [x] Ingest worker deployed (ingest.jobarms.com, cron live) + 10 companies
+      seeded — ~4,000 jobs in the catalog from the first two sweeps
 
 ## Later / parked
 

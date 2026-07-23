@@ -18,16 +18,30 @@ const greenhouse: AtsAdapter = {
   formSelector: 'form[id*="application"], #application-form, #application_form',
 
   async openApplication(page) {
-    // Hosted GH job pages show the form inline; embedded boards need the
-    // "Apply" tab. Click it if the form isn't already there.
-    const form = page.locator('form[id*="application"]');
-    if ((await form.count()) > 0) return;
-    const applyBtn = page
-      .locator('a:has-text("Apply"), button:has-text("Apply")')
-      .first();
-    if ((await applyBtn.count()) > 0) {
-      await applyBtn.click();
-      await page.waitForTimeout(1500);
+    // Hosted GH job pages show the form inline. Most companies now redirect
+    // hosted URLs to their own careers site, which lazy-loads the Greenhouse
+    // form in an iframe — poll for form-or-iframe, then navigate INTO the
+    // embed so the form is top-level for the extractor/filler.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if ((await page.locator('form[id*="application"]').count()) > 0) return;
+
+      const embed = page.locator('iframe[src*="greenhouse.io"]').first();
+      if ((await embed.count()) > 0) {
+        const src = await embed.getAttribute("src");
+        if (src) {
+          await page.goto(src, { waitUntil: "domcontentloaded" });
+          return;
+        }
+      }
+
+      // Some career pages need the Apply button clicked to mount the embed.
+      if (attempt === 4) {
+        const applyBtn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first();
+        if ((await applyBtn.count()) > 0) {
+          await applyBtn.click().catch(() => {});
+        }
+      }
+      await page.waitForTimeout(2000);
     }
   },
 
@@ -54,21 +68,18 @@ const greenhouse: AtsAdapter = {
 };
 
 const lever: AtsAdapter = {
-  formSelector: ".application-form, form#application-form, form[action*='apply']",
+  formSelector: "form",
 
   async openApplication(page) {
     // Posting pages live at /<company>/<id>; the form at /<company>/<id>/apply.
     if (!page.url().includes("/apply")) {
-      const applyBtn = page
-        .locator('a[href*="/apply"], .postings-btn, a:has-text("Apply for this job")')
-        .first();
-      if ((await applyBtn.count()) > 0) {
-        await applyBtn.click();
-        await page.waitForLoadState("domcontentloaded");
-      } else {
-        await page.goto(page.url().replace(/\/?$/, "/apply"), { waitUntil: "domcontentloaded" });
-      }
+      await page.goto(page.url().split("?")[0].replace(/\/?$/, "/apply"), {
+        waitUntil: "domcontentloaded"
+      });
     }
+    // The real fields (not just the form shell) must be present before
+    // extraction — Lever renders name/email synchronously but wait anyway.
+    await page.waitForSelector('input[name="name"], input[name="email"]', { timeout: 20_000 });
   },
 
   async submit(page) {
