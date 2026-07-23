@@ -32,9 +32,12 @@ body {
   @apply font-mono text-[11px] font-semibold uppercase tracking-[0.3em] text-arm-400;
 }
 
-/* Subtle radial glow behind hero content */
+/* Subtle radial glow behind hero content. background-image (NOT the
+   background shorthand) so it never clobbers the element's own
+   background-color utility (bg-ink-950) — the shorthand version turned the
+   auth pages white. */
 .hero-glow {
-  background:
+  background-image:
     radial-gradient(600px 300px at 50% 0%, rgba(20, 184, 166, 0.18), transparent 70%),
     radial-gradient(900px 500px at 80% 100%, rgba(20, 184, 166, 0.06), transparent 60%);
 }
