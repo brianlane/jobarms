@@ -93,7 +93,9 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             env, params.userId, params.runId, "filled", result.screenshot
           );
           await appendScreenshot(env, params.runId, shot);
-          await updateRun(env, params.runId, { status: "needs_review" });
+          // error: null clears residue from a transient earlier attempt
+          // (e.g. a mid-run worker deploy) once the run recovers.
+          await updateRun(env, params.runId, { status: "needs_review", error: null });
           await updateApplication(env, params.applicationId, { status: "needs_review" });
           await logStep(env, params.runId, "review_requested");
         });
@@ -144,7 +146,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
 
       await step.do("finalize", async () => {
         if (confirmed) {
-          await updateRun(env, params.runId, { status: "submitted" });
+          await updateRun(env, params.runId, { status: "submitted", error: null });
           await updateApplication(env, params.applicationId, {
             status: "applied",
             applied_at: new Date().toISOString()
