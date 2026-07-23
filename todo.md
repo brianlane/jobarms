@@ -26,85 +26,99 @@ Manual account setup (done unless unchecked):
 
 Repo scaffold:
 
-- [ ] First commit: .gitignore (protects .env), README skeleton, this todo.md
-- [ ] Next.js 15 + TypeScript + Tailwind app scaffold (src/app)
-- [ ] `workers/` directory scaffold (apply-arm, ingest) with wrangler configs
-- [ ] `supabase/` init: config.toml (tracked), first migration
-- [ ] `.env.example` documenting every variable
-- [ ] CI: ci.yml (quality, typecheck, test, security, workers-check,
+- [x] First commit: .gitignore (protects .env), README skeleton, this todo.md
+- [x] Next.js 16 + TypeScript + Tailwind app scaffold (src/app)
+- [x] `workers/` directory scaffold (apply-arm, ingest) with wrangler configs
+- [x] `supabase/` init: config.toml (tracked), first migration
+- [x] `.env.example` documenting every variable
+- [x] CI: ci.yml (quality, typecheck, test, security, workers-check,
       supabase-drift, vercel-deploy, workers-deploy)
-- [ ] CI: audit.yml (all package trees), codeql.yml, dependabot.yml
-- [ ] GitHub Actions secrets set (`gh secret set` from local .env)
-- [ ] Vercel project linked + domain jobarms.com attached
-- [ ] vercel.json (git integration off — CI owns deploys)
+- [x] CI: audit.yml (all package trees), codeql.yml, dependabot.yml
+- [x] GitHub Actions secrets set (`gh secret set` from local .env)
+- [x] Vercel project envs + domains attached (scripts/oneshot/setup-vercel.ts)
+- [x] vercel.json (git integration off — CI owns deploys)
+- [ ] Cloudflare DNS records for Vercel (A @ 76.76.21.21, CNAME www
+      cname.vercel-dns.com — DNS-only/grey cloud)
 
 ## Phase 1 — App skeleton (auth + billing)
 
-- [ ] Supabase Auth: email/password + magic link (Google OAuth parked)
-- [ ] Auth middleware + session handling (@supabase/ssr)
-- [ ] Marketing landing page (hero, features, pricing, CTA)
-- [ ] Dashboard shell (nav: Applications, Profile, Discover, Billing, Settings)
-- [ ] Schema: profiles, subscriptions + RLS deny-by-default posture
-- [ ] Stripe: one-shot script to create products/prices (test mode)
-- [ ] Stripe: checkout session + customer portal routes
-- [ ] Stripe: webhook route (subscription lifecycle → subscriptions table)
-- [ ] Plan gating helper (free: N arm runs/month; premium: unlimited + tailoring)
-- [ ] Transactional email via Resend (welcome, receipts ride Stripe)
+- [x] Supabase Auth: email/password + magic link (Google OAuth parked)
+- [x] Auth session proxy + route guards (@supabase/ssr, src/proxy.ts)
+- [x] Marketing landing page (hero, features, CTA) + /pricing
+- [x] Dashboard shell (nav: Applications, Discover, Profile, Billing, Settings)
+- [x] Schema: profiles, subscriptions, arm_run_usage + RLS deny-by-default
+- [x] Stripe: one-shot product/price script (ran — price_1TwA3uHGoK50aYq0dmrBqsnx)
+- [x] Stripe: checkout session + customer portal routes
+- [x] Stripe: webhook route (registered at jobarms.com/api/webhooks/stripe)
+- [x] Plan gating helper (free: 5 arm runs/month; premium: unlimited + tailoring)
+- [x] Welcome email via Resend (no-ops until RESEND_API_KEY is set)
 
 ## Phase 2 — Profile + resume (the "one profile")
 
-- [ ] Schema: resumes table + private storage bucket
-- [ ] Resume upload (PDF/DOCX) → Supabase Storage
-- [ ] Gemini resume parse → structured profile JSON (work history, education,
-      skills, links)
-- [ ] Onboarding wizard: upload → review parsed profile → preferences +
-      dealbreakers (salary floor, locations, remote, visa) → EEO answers vault
-- [ ] Profile editor (all sections editable post-onboarding)
-- [ ] Arm autonomy setting: review-gate (default) / full-auto
+- [x] Schema: resumes table + private storage buckets (resumes, run-artifacts)
+- [x] Resume upload (PDF/DOCX) → Supabase Storage
+- [x] Gemini resume parse → structured profile JSON
+- [x] Onboarding wizard: upload → review parsed profile → preferences +
+      dealbreakers → done
+- [x] Profile editor (basics, links, work history, education, skills)
+- [x] Arm autonomy setting: review-gate (default) / full-auto (Settings)
 
 ## Phase 3 — Apply arm (the product)
 
 - [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo)
-- [ ] **Manual: mint CLOUDFLARE_API_TOKEN → GitHub secret**
-- [ ] Schema: jobs, applications, application_runs (+ screenshots bucket)
-- [ ] `workers/apply-arm`: Workflow (navigate → extract form → Gemini answers →
-      fill → screenshot each step → pause at review gate → submit)
-- [ ] Browser Rendering (Playwright) session management
-- [ ] ATS adapters: Greenhouse, then Lever (detect from URL/DOM)
-- [ ] App: paste-a-job-URL → create application + queue arm run
-- [ ] App ↔ worker auth (ARM_WORKER_SHARED_SECRET both directions)
-- [ ] Review-gate UI: answers + screenshots, edit-then-approve, submit resumes
-      the workflow
-- [ ] Full-auto path (skips gate when user opted in)
-- [ ] Free-tier run metering (reserve slot before run starts)
-- [ ] Failure handling: arm marks run failed with reason + last screenshot;
-      user can retry or apply manually
+- [ ] **Manual: mint CLOUDFLARE_API_TOKEN → GitHub secret** (workers-deploy
+      then deploys both workers on the next main push)
+- [ ] **Manual/agent: `wrangler secret put` on both workers** (apply-arm:
+      ARM_WORKER_SHARED_SECRET, SUPABASE_URL, SUPABASE_SECRET_KEY,
+      GEMINI_API_KEY; ingest: SUPABASE_URL, SUPABASE_SECRET_KEY,
+      INTERNAL_CRON_SECRET), then set ARM_WORKER_URL in .env + Vercel
+- [x] Schema: jobs, applications, application_runs (+ screenshots bucket)
+- [x] `workers/apply-arm`: ApplyRunWorkflow (extract form → Gemini answers →
+      fill + screenshot → review gate (waitForEvent, 7d) → submit → verify)
+- [x] Browser Rendering (Playwright) session management
+- [x] ATS adapters: Greenhouse + Lever
+- [x] App: paste-a-job-URL → create application + dispatch arm run
+- [x] App ↔ worker auth (ARM_WORKER_SHARED_SECRET both directions)
+- [x] Review-gate UI: editable answers + screenshots + approve
+- [x] Full-auto path (skips gate per profile setting)
+- [x] Free-tier run metering (row-locked reserve before dispatch, release on
+      early failure)
+- [x] Failure handling: honest failed status + error + screenshots; job stays
+      tracked
+- [ ] Live end-to-end run against a real Greenhouse posting (needs the three
+      manual items above)
 
 ## Phase 4 — Tracker
 
-- [ ] Applications pipeline view: saved → applying → needs_review → applied →
-      interviewing → offer / rejected (list + kanban)
-- [ ] Application detail: exactly what the arm submitted (answers, resume
-      version, screenshots, timestamps)
-- [ ] Manual status updates + notes
-- [ ] Manually-tracked applications (applied elsewhere, still tracked)
+- [x] Applications list with status pipeline (saved → applying → needs_review
+      → applied → interviewing → offer / rejected / withdrawn / failed)
+- [x] Application detail: run timeline, exactly what the arm submitted,
+      screenshots
+- [x] Manual status updates + notes
+- [x] Manually-tracked applications ("Track only" mode)
+- [ ] Kanban board view (list shipped first; kanban when it earns its keep)
 
 ## Phase 5 — Tailoring (premium)
 
-- [ ] Gemini resume tailoring per job (keyword analysis vs job description)
-- [ ] Tailored resume version stored as a child of the base resume
-- [ ] Cover letter generator
-- [ ] Tailored PDF becomes the file the arm uploads for that application
-- [ ] Premium gating wired through the plan helper
+- [x] Gemini resume tailoring per job + keyword analysis (incorporated/missing)
+- [x] Tailored resume stored as `kind='tailored'` child linked to application
+- [x] Cover letter generator (stored on the application)
+- [x] Tailored PDF rendered (pdf-lib) and set as the application's resume —
+      the arm uploads it
+- [x] Premium gating wired through the plan helper (402 + upgrade CTA)
 
 ## Phase 6 — Discovery (post-MVP)
 
-- [ ] `workers/ingest`: cron polling of public ATS JSON endpoints
-      (Greenhouse, Lever, Ashby, Workable) for a tracked-company list
-- [ ] Aggregator API connectors (Adzuna / JSearch / USAJobs)
-- [ ] Jobs normalized into Supabase `jobs`
-- [ ] Matching feed scored against profile preferences + dealbreakers
-- [ ] "Queue for arm" from the feed (this is where full-auto pays off)
+- [x] `workers/ingest`: cron (7,37 * * * *) polling Greenhouse/Lever/Ashby/
+      Workable public endpoints for the `companies` list
+- [x] Jobs normalized + upserted into `jobs` (conflict key: url)
+- [x] Matching feed (/dashboard/discover) scored against profile skills,
+      headline, and location/remote preferences
+- [x] "Send an arm" from the feed (prefills the apply form)
+- [x] Company seed script (scripts/oneshot/seed-companies.ts)
+- [ ] Aggregator API connectors (Adzuna / JSearch / USAJobs) — needs API keys
+- [ ] Ingest worker deployed + companies seeded (rides the Phase 3 manual
+      checklist)
 
 ## Later / parked
 

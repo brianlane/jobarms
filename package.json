@@ -29,6 +29,7 @@
     "@tailwindcss/postcss": "^4.2.2",
     "lucide-react": "^1.25.0",
     "next": "^16.2.10",
+    "pdf-lib": "^1.17.1",
     "postcss": "^8.5.10",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

@@ -1,17 +1,19 @@
 /**
- * JobArms apply arm — Phase 0 skeleton.
+ * JobArms apply arm — HTTP surface.
  *
- * Phase 3 turns this into the real thing: a Workflow that opens the job
- * posting in Browser Rendering (Playwright), extracts the application form,
- * generates answers with Gemini from the user's profile, fills + screenshots
- * each step, pauses at the review gate, and submits on approval.
+ *   POST /runs                 start a run (Workflow instance, id = runId)
+ *   POST /runs/:id/approve     resume a review-gated run (optionally with
+ *                              edited answers)
+ *   POST /runs/:id/cancel      terminate a run
+ *   GET  /health               unauthenticated liveness
  *
- * Every request must carry the ARM_WORKER_SHARED_SECRET bearer — the same
- * secret the worker presents back to the app's callback routes.
+ * Every mutating request must carry the ARM_WORKER_SHARED_SECRET bearer —
+ * the same secret the app uses to call us.
  */
-export interface Env {
-  ARM_WORKER_SHARED_SECRET?: string;
-}
+import type { Answer, Env, RunParams } from "./types";
+import { updateRun } from "./db";
+
+export { ApplyRunWorkflow } from "./workflow";
 
 function authorized(request: Request, env: Env): boolean {
   const header = request.headers.get("authorization") ?? "";
@@ -24,13 +26,58 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
-      return Response.json({ ok: true, service: "jobarms-apply-arm" });
+      return Response.json({
+        ok: true,
+        service: "jobarms-apply-arm",
+        arms: Boolean(env.APPLY_RUN && env.BROWSER)
+      });
     }
 
     if (!authorized(request, env)) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
+    if (request.method !== "POST") {
+      return Response.json({ error: "method_not_allowed" }, { status: 405 });
+    }
+    if (!env.APPLY_RUN) {
+      return Response.json(
+        { error: "arm_offline", hint: "Workflows binding missing (Workers Paid not enabled yet)" },
+        { status: 503 }
+      );
+    }
 
-    return Response.json({ error: "not_implemented", hint: "apply arm lands in Phase 3" }, { status: 501 });
+    // POST /runs
+    if (url.pathname === "/runs") {
+      const params = (await request.json().catch(() => null)) as RunParams | null;
+      if (!params?.runId || !params.jobUrl || !params.ats) {
+        return Response.json({ error: "invalid_body" }, { status: 400 });
+      }
+      const instance = await env.APPLY_RUN.create({ id: params.runId, params });
+      return Response.json({ ok: true, instance_id: instance.id }, { status: 202 });
+    }
+
+    // POST /runs/:id/approve | /runs/:id/cancel
+    const match = url.pathname.match(/^\/runs\/([0-9a-f-]{36})\/(approve|cancel)$/);
+    if (match) {
+      const [, runId, action] = match;
+      let instance;
+      try {
+        instance = await env.APPLY_RUN.get(runId);
+      } catch {
+        return Response.json({ error: "run_not_found" }, { status: 404 });
+      }
+
+      if (action === "approve") {
+        const body = (await request.json().catch(() => ({}))) as { answers?: Answer[] };
+        await instance.sendEvent({ type: "approval", payload: { answers: body.answers } });
+        return Response.json({ ok: true });
+      }
+
+      await instance.terminate();
+      await updateRun(env, runId, { status: "canceled" });
+      return Response.json({ ok: true });
+    }
+
+    return Response.json({ error: "not_found" }, { status: 404 });
   }
 } satisfies ExportedHandler<Env>;

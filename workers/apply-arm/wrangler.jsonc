@@ -4,16 +4,19 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Browser Rendering + Workflows bindings land in Phase 3 (requires the
-  // Workers Paid plan — deliberately deferred; see todo.md Phase 3):
-  //
-  // "browser": { "binding": "BROWSER" },
-  // "workflows": [
-  //   { "name": "apply-run", "binding": "APPLY_RUN", "class_name": "ApplyRunWorkflow" }
-  // ],
-  //
-  // Secrets (wrangler secret put): GEMINI_API_KEY, SUPABASE_URL,
-  // SUPABASE_SECRET_KEY, ARM_WORKER_SHARED_SECRET.
+  // Browser Rendering + Workflows require the Workers Paid plan. CI's
+  // workers-deploy job is gated on CLOUDFLARE_API_TOKEN (Phase 3), so this
+  // config can carry the bindings before the upgrade happens.
+  "browser": { "binding": "BROWSER" },
+  "workflows": [
+    {
+      "name": "apply-run",
+      "binding": "APPLY_RUN",
+      "class_name": "ApplyRunWorkflow"
+    }
+  ],
+  // Secrets (wrangler secret put): ARM_WORKER_SHARED_SECRET, SUPABASE_URL,
+  // SUPABASE_SECRET_KEY, GEMINI_API_KEY.
   "observability": {
     "enabled": true
   }

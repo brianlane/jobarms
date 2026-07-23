@@ -1,0 +1,95 @@
+/**
+ * Minimal Supabase REST + Storage client for the worker (service key —
+ * bypasses RLS; the worker only ever touches rows for the run it was given).
+ * Plain fetch keeps the bundle small.
+ */
+import type { Env } from "./types";
+
+function headers(env: Env): Record<string, string> {
+  const key = env.SUPABASE_SECRET_KEY ?? "";
+  return {
+    apikey: key,
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json"
+  };
+}
+
+export async function updateRun(
+  env: Env,
+  runId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/application_runs?id=eq.${encodeURIComponent(runId)}`,
+    { method: "PATCH", headers: headers(env), body: JSON.stringify(patch) }
+  );
+  if (!res.ok) {
+    throw new Error(`updateRun ${runId} failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+export async function getRun(
+  env: Env,
+  runId: string
+): Promise<Record<string, unknown> | null> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/application_runs?id=eq.${encodeURIComponent(runId)}&select=*`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Record<string, unknown>[];
+  return rows[0] ?? null;
+}
+
+export async function updateApplication(
+  env: Env,
+  applicationId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/applications?id=eq.${encodeURIComponent(applicationId)}`,
+    { method: "PATCH", headers: headers(env), body: JSON.stringify(patch) }
+  );
+  if (!res.ok) {
+    throw new Error(`updateApplication ${applicationId} failed: ${res.status}`);
+  }
+}
+
+/** Append a step to the run's step log (read-modify-write; single writer). */
+export async function logStep(env: Env, runId: string, step: string, detail = ""): Promise<void> {
+  const run = await getRun(env, runId);
+  const steps = Array.isArray(run?.steps) ? (run.steps as unknown[]) : [];
+  steps.push({ at: new Date().toISOString(), step, detail });
+  await updateRun(env, runId, { steps });
+}
+
+/** Upload a screenshot to the private run-artifacts bucket; returns its path. */
+export async function uploadScreenshot(
+  env: Env,
+  userId: string,
+  runId: string,
+  label: string,
+  png: ArrayBuffer | Uint8Array
+): Promise<string> {
+  const path = `${userId}/${runId}/${Date.now()}-${label}.png`;
+  const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/run-artifacts/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SECRET_KEY ?? "",
+      authorization: `Bearer ${env.SUPABASE_SECRET_KEY ?? ""}`,
+      "content-type": "image/png"
+    },
+    body: png as BodyInit
+  });
+  if (!res.ok) {
+    throw new Error(`screenshot upload failed: ${res.status}`);
+  }
+  return path;
+}
+
+export async function appendScreenshot(env: Env, runId: string, path: string): Promise<void> {
+  const run = await getRun(env, runId);
+  const shots = Array.isArray(run?.screenshots) ? (run.screenshots as string[]) : [];
+  shots.push(path);
+  await updateRun(env, runId, { screenshots: shots });
+}
