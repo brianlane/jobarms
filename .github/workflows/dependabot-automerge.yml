@@ -19,6 +19,12 @@ on:
     workflows: ["CI", "CodeQL", "Dependency Audit"]
     types: [completed]
   status:
+  # App checks (GitGuardian etc.) emit NO workflow_run event; when one is the
+  # last thing to finish, nothing re-evaluates the PR. The sweep closes that
+  # gap: every 2 hours (and on demand) evaluate every open labeled PR.
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -36,7 +42,9 @@ jobs:
        github.event.workflow_run.event == 'pull_request' &&
        startsWith(github.event.workflow_run.head_branch, 'dependabot/')) ||
       (github.event_name == 'status' &&
-       github.event.state == 'success')
+       github.event.state == 'success') ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - name: Evaluate checks and merge if all green
         env:
@@ -53,101 +61,125 @@ jobs:
         run: |
           set -euo pipefail
 
+          evaluate_pr() {
+            local PR_NUMBER="$1"
+            local EVENT_SHA="${2:-}"
+
+            local PR_JSON CUR_SHA STATE AUTHOR IS_DRAFT HAS_LABEL
+            PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+              --json headRefOid,state,author,labels,isDraft)
+            CUR_SHA=$(echo "$PR_JSON"   | jq -r '.headRefOid')
+            STATE=$(echo "$PR_JSON"     | jq -r '.state')
+            AUTHOR=$(echo "$PR_JSON"    | jq -r '.author.login')
+            IS_DRAFT=$(echo "$PR_JSON"  | jq -r '.isDraft')
+            HAS_LABEL=$(echo "$PR_JSON" | jq -r --arg l "$REQUIRED_LABEL" \
+              'any(.labels[]?; .name == $l)')
+
+            [ "$STATE" = "OPEN" ]       || { echo "PR #$PR_NUMBER is $STATE; skipping."; return 0; }
+            [ "$IS_DRAFT" = "false" ]   || { echo "PR #$PR_NUMBER is a draft; skipping."; return 0; }
+            # gh reports the Dependabot bot login as "dependabot[bot]" in
+            # webhook payloads but as "app/dependabot" via `gh pr view`.
+            case "$AUTHOR" in
+              "dependabot[bot]"|"app/dependabot") ;;
+              *) echo "PR #$PR_NUMBER author is $AUTHOR; skipping."; return 0 ;;
+            esac
+            [ "$HAS_LABEL" = "true" ]   || { echo "PR #$PR_NUMBER lacks '$REQUIRED_LABEL' label; skipping."; return 0; }
+
+            # Guard against a stale run: only act on checks for the current
+            # head. Sweep mode passes no event sha and uses the current head.
+            if [ -n "$EVENT_SHA" ] && [ "$CUR_SHA" != "$EVENT_SHA" ]; then
+              echo "Stale run: PR #$PR_NUMBER head moved ($EVENT_SHA -> $CUR_SHA); skipping."
+              return 0
+            fi
+            local SHA="$CUR_SHA"
+
+            echo "Evaluating check runs for PR #$PR_NUMBER @ $SHA ..."
+            local CHECKS FILTERED
+            CHECKS=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs" \
+              --jq '.check_runs[] | {name, status, conclusion}')
+            FILTERED=$(echo "$CHECKS" | jq -c --argjson ex "$EXCLUDE_CHECKS" \
+              'select((.name) as $n | ($ex | index($n)) | not)')
+
+            if [ -z "$FILTERED" ]; then
+              echo "No relevant check runs found; refusing to merge."
+              return 0
+            fi
+
+            echo "Relevant checks:"
+            echo "$FILTERED" | jq -r '"  - \(.name): \(.status)/\(.conclusion // "n/a")"'
+
+            if [ -n "$(echo "$FILTERED" | jq -rc 'select(.status != "completed")')" ]; then
+              echo "Some checks are still running; will re-evaluate later."
+              return 0
+            fi
+
+            # Strict gate: every remaining check must have concluded success.
+            local NOT_SUCCESS
+            NOT_SUCCESS=$(echo "$FILTERED" | jq -rc 'select(.conclusion != "success")')
+            if [ -n "$NOT_SUCCESS" ]; then
+              echo "Strict gate failed. Checks not green (success):"
+              echo "$NOT_SUCCESS" | jq -r '"  - \(.name): \(.conclusion // "n/a")"'
+              return 0
+            fi
+
+            # Also honor any legacy commit statuses.
+            local STATUS STATUS_TOTAL STATUS_STATE
+            STATUS=$(gh api "repos/$REPO/commits/$SHA/status" \
+              --jq '{state: .state, total: .total_count}')
+            STATUS_TOTAL=$(echo "$STATUS" | jq -r '.total')
+            STATUS_STATE=$(echo "$STATUS" | jq -r '.state')
+            if [ "$STATUS_TOTAL" -gt 0 ] && [ "$STATUS_STATE" != "success" ]; then
+              echo "Commit statuses not all green (state=$STATUS_STATE); skipping."
+              return 0
+            fi
+
+            # Policy gate: no unresolved review threads.
+            local UNRESOLVED
+            UNRESOLVED=$(gh api graphql -f query='
+              query($owner:String!, $repo:String!, $pr:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$pr) {
+                    reviewThreads(first:100) { nodes { isResolved } }
+                  }
+                }
+              }' -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F pr="$PR_NUMBER" \
+              --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+            if [ "$UNRESOLVED" -gt 0 ]; then
+              echo "PR #$PR_NUMBER has $UNRESOLVED unresolved review thread(s); skipping per merge policy."
+              return 0
+            fi
+
+            echo "All checks green and no unresolved threads. Squash-merging PR #$PR_NUMBER."
+            gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
+          }
+
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] || [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            # Sweep: evaluate every open labeled Dependabot PR. Closes the gap
+            # where an app check (no workflow_run event) finishes last.
+            PRS=$(gh pr list --repo "$REPO" --state open --label "$REQUIRED_LABEL" \
+              --json number --jq '.[].number')
+            if [ -z "$PRS" ]; then
+              echo "Sweep: no open labeled Dependabot PRs."
+              exit 0
+            fi
+            for N in $PRS; do
+              evaluate_pr "$N" ""
+            done
+            exit 0
+          fi
+
           if [ -n "${HEAD_BRANCH:-}" ]; then
             PR_NUMBER=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" \
               --state open --json number --jq '.[0].number // empty')
           else
             # status event: the payload has no branch, so find the open PR
-            # whose head commit is this sha. The endpoint lists every PR
-            # associated with the commit, so filter to PRs headed by it.
+            # whose head commit is this sha.
             PR_NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" |
               jq -r --arg sha "$HEAD_SHA" \
                 '[.[] | select(.state == "open" and .head.sha == $sha)][0].number // empty')
           fi
           if [ -z "$PR_NUMBER" ]; then
-            echo "No open PR for $HEAD_SHA (branch: ${HEAD_BRANCH:-<none>}); nothing to do."
+            echo "No open PR for ${HEAD_SHA:-<none>} (branch: ${HEAD_BRANCH:-<none>}); nothing to do."
             exit 0
           fi
-
-          PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-            --json headRefOid,state,author,labels,isDraft)
-          CUR_SHA=$(echo "$PR_JSON"   | jq -r '.headRefOid')
-          STATE=$(echo "$PR_JSON"     | jq -r '.state')
-          AUTHOR=$(echo "$PR_JSON"    | jq -r '.author.login')
-          IS_DRAFT=$(echo "$PR_JSON"  | jq -r '.isDraft')
-          HAS_LABEL=$(echo "$PR_JSON" | jq -r --arg l "$REQUIRED_LABEL" \
-            'any(.labels[]?; .name == $l)')
-
-          [ "$STATE" = "OPEN" ]       || { echo "PR #$PR_NUMBER is $STATE; skipping."; exit 0; }
-          [ "$IS_DRAFT" = "false" ]   || { echo "PR #$PR_NUMBER is a draft; skipping."; exit 0; }
-          # gh reports the Dependabot bot login as "dependabot[bot]" in webhook
-          # payloads but as "app/dependabot" via `gh pr view --json author`.
-          # Accept both so the guard works regardless of gh's representation.
-          case "$AUTHOR" in
-            "dependabot[bot]"|"app/dependabot") ;;
-            *) echo "PR #$PR_NUMBER author is $AUTHOR; skipping."; exit 0 ;;
-          esac
-          [ "$HAS_LABEL" = "true" ]   || { echo "PR #$PR_NUMBER lacks '$REQUIRED_LABEL' label; skipping."; exit 0; }
-
-          # Guard against a stale run: only act on checks for the current head.
-          if [ "$CUR_SHA" != "$HEAD_SHA" ]; then
-            echo "Stale run: PR head moved ($HEAD_SHA -> $CUR_SHA); skipping."
-            exit 0
-          fi
-
-          echo "Evaluating check runs for $HEAD_SHA ..."
-          CHECKS=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs" \
-            --jq '.check_runs[] | {name, status, conclusion}')
-
-          FILTERED=$(echo "$CHECKS" | jq -c --argjson ex "$EXCLUDE_CHECKS" \
-            'select((.name) as $n | ($ex | index($n)) | not)')
-
-          if [ -z "$FILTERED" ]; then
-            echo "No relevant check runs found; refusing to merge."
-            exit 0
-          fi
-
-          echo "Relevant checks:"
-          echo "$FILTERED" | jq -r '"  - \(.name): \(.status)/\(.conclusion // "n/a")"'
-
-          INCOMPLETE=$(echo "$FILTERED" | jq -rc 'select(.status != "completed")')
-          if [ -n "$INCOMPLETE" ]; then
-            echo "Some checks are still running; will re-evaluate when they finish."
-            exit 0
-          fi
-
-          # Strict gate: every remaining check must have concluded success.
-          NOT_SUCCESS=$(echo "$FILTERED" | jq -rc 'select(.conclusion != "success")')
-          if [ -n "$NOT_SUCCESS" ]; then
-            echo "Strict gate failed. The following checks are not green (success):"
-            echo "$NOT_SUCCESS" | jq -r '"  - \(.name): \(.conclusion // "n/a")"'
-            exit 0
-          fi
-
-          # Also honor any legacy commit statuses (non-check-run integrations).
-          STATUS=$(gh api "repos/$REPO/commits/$HEAD_SHA/status" \
-            --jq '{state: .state, total: .total_count}')
-          STATUS_TOTAL=$(echo "$STATUS" | jq -r '.total')
-          STATUS_STATE=$(echo "$STATUS" | jq -r '.state')
-          if [ "$STATUS_TOTAL" -gt 0 ] && [ "$STATUS_STATE" != "success" ]; then
-            echo "Commit statuses not all green (state=$STATUS_STATE); skipping."
-            exit 0
-          fi
-
-          # Policy gate: no unresolved review threads.
-          UNRESOLVED=$(gh api graphql -f query='
-            query($owner:String!, $repo:String!, $pr:Int!) {
-              repository(owner:$owner, name:$repo) {
-                pullRequest(number:$pr) {
-                  reviewThreads(first:100) { nodes { isResolved } }
-                }
-              }
-            }' -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F pr="$PR_NUMBER" \
-            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
-          if [ "$UNRESOLVED" -gt 0 ]; then
-            echo "PR #$PR_NUMBER has $UNRESOLVED unresolved review thread(s); skipping per merge policy."
-            exit 0
-          fi
-
-          echo "All checks green and no unresolved threads. Squash-merging PR #$PR_NUMBER."
-          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch
+          evaluate_pr "$PR_NUMBER" "$HEAD_SHA"
