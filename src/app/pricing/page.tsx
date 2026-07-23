@@ -6,7 +6,7 @@ import { PLAN_COPY } from "@/lib/plans";
 export const metadata = {
   title: "Pricing",
   description:
-    "JobArms pricing: a real free plan with autonomous applications every month, and Premium for unlimited arms, AI resume tailoring, and cover letters."
+    "JobArms pricing: a real free plan with autonomous applications every month, and Premium with 300 applications a month, AI resume tailoring, and cover letters."
 };
 
 export default function PricingPage() {
@@ -21,7 +21,7 @@ export default function PricingPage() {
             Simple pricing, honest free plan
           </h1>
           <p className="mx-auto mt-5 max-w-xl text-lg text-slate-300">
-            Start free and send real applications today. Upgrade when you want unlimited arms and
+            Start free and send real applications today. Upgrade when you want serious volume and
             AI tailoring.
           </p>
         </div>

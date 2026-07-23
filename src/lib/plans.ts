@@ -4,6 +4,8 @@
  */
 
 export const FREE_ARM_RUNS_PER_MONTH = 5;
+/** Fair-use ceiling: 10/day pace, beyond any real job search, bounds abuse. */
+export const PREMIUM_ARM_RUNS_PER_MONTH = 300;
 export const PREMIUM_PRICE_USD_MONTHLY = 19;
 
 export type Plan = "free" | "premium";
@@ -23,9 +25,9 @@ export function effectivePlan(sub: Pick<SubscriptionRow, "plan" | "status"> | nu
   return sub.plan === "premium" && ACTIVE_STATUSES.has(sub.status) ? "premium" : "free";
 }
 
-/** Monthly arm-run allowance for a plan. -1 = unlimited. */
+/** Monthly arm-run allowance for a plan. */
 export function armRunLimit(plan: Plan): number {
-  return plan === "premium" ? -1 : FREE_ARM_RUNS_PER_MONTH;
+  return plan === "premium" ? PREMIUM_ARM_RUNS_PER_MONTH : FREE_ARM_RUNS_PER_MONTH;
 }
 
 /** Resume tailoring + cover letters are premium-only. */
@@ -73,7 +75,7 @@ export const PLAN_COPY = {
     name: "Premium",
     price: `$${PREMIUM_PRICE_USD_MONTHLY}/mo`,
     features: [
-      "Unlimited autonomous applications",
+      `Up to ${PREMIUM_ARM_RUNS_PER_MONTH} autonomous applications / month`,
       "AI resume tailoring per job",
       "AI cover letter generation",
       "Full-auto mode (opt-in)",

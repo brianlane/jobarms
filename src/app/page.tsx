@@ -63,7 +63,7 @@ const faqs = [
   },
   {
     q: "Is it really free?",
-    a: `Yes. The free plan includes ${FREE_ARM_RUNS_PER_MONTH} autonomous applications a month, your full profile, and the tracker. Premium is $${PREMIUM_PRICE_USD_MONTHLY}/month for unlimited arms plus AI tailoring and cover letters.`
+    a: `Yes. The free plan includes ${FREE_ARM_RUNS_PER_MONTH} autonomous applications a month, your full profile, and the tracker. Premium is $${PREMIUM_PRICE_USD_MONTHLY}/month for up to 300 applications a month plus AI tailoring and cover letters.`
   }
 ];
 
@@ -172,11 +172,11 @@ export default function LandingPage() {
         <div className="mx-auto max-w-4xl text-center">
           <p className="eyebrow">Pricing</p>
           <h2 className="mt-4 font-display text-3xl font-bold tracking-tight sm:text-4xl">
-            Free to start. ${PREMIUM_PRICE_USD_MONTHLY} a month to go unlimited.
+            Free to start. ${PREMIUM_PRICE_USD_MONTHLY} a month for serious volume.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-slate-400">
             The free plan is a real plan: {FREE_ARM_RUNS_PER_MONTH} autonomous applications every
-            month, forever. Premium removes the cap and adds AI tailoring.
+            month, forever. Premium raises that to 300 a month and adds AI tailoring.
           </p>
           <Link
             href="/pricing"

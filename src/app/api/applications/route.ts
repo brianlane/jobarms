@@ -120,7 +120,8 @@ export async function POST(request: Request) {
     .select("plan, status, current_period_end, cancel_at_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
-  const limit = armRunLimit(effectivePlan(sub as SubscriptionRow | null));
+  const plan = effectivePlan(sub as SubscriptionRow | null);
+  const limit = armRunLimit(plan);
   const mk = monthKey();
   const { data: reserved } = await service.rpc("try_reserve_arm_run", {
     p_user_id: user.id,
@@ -129,7 +130,13 @@ export async function POST(request: Request) {
   });
   if (!reserved) {
     return NextResponse.json(
-      { error: "run_limit_reached", hint: "Upgrade to Premium for unlimited arm runs." },
+      {
+        error: "run_limit_reached",
+        hint:
+          plan === "free"
+            ? "You've used this month's free arm runs. Upgrade to Premium for 300 a month."
+            : "You've hit this month's fair-use cap for arm runs. It resets next month."
+      },
       { status: 402 }
     );
   }

@@ -12,7 +12,7 @@ This repository includes:
 - Cloudflare Workers automation edge (`workers/`):
   - **apply-arm** - Browser Rendering (Playwright) + Workflows apply sessions
   - **ingest** - cron polling of public ATS boards into the jobs catalog
-- Stripe billing (free tier with metered arm runs; premium unlimited + tailoring)
+- Stripe billing (every AI surface metered per plan; see src/lib/plans.ts)
 
 ## Stack
 
@@ -30,8 +30,8 @@ This repository includes:
 
 | Tier | Price | Arm runs | Tailoring |
 |------|-------|----------|-----------|
-| Free | $0 | 5 / month | - |
-| Premium | $20/mo | unlimited | AI resume tailoring + cover letters + full-auto |
+| Free | $0 | 5 / month | none |
+| Premium | $19/mo | 300 / month (fair use) | AI resume tailoring + cover letters + full-auto |
 
 One source of truth: [src/lib/plans.ts](src/lib/plans.ts) (limits, gating,
 plan copy). The Stripe product/price is created by

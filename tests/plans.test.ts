@@ -34,8 +34,8 @@ describe("armRunLimit / canTailor", () => {
     expect(canTailor("free")).toBe(false);
   });
 
-  it("premium is unlimited and can tailor", () => {
-    expect(armRunLimit("premium")).toBe(-1);
+  it("premium gets the 300/month fair-use cap and can tailor", () => {
+    expect(armRunLimit("premium")).toBe(300);
     expect(canTailor("premium")).toBe(true);
   });
 });
