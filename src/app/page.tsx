@@ -229,7 +229,7 @@ export default function LandingPage() {
             Your next application can write itself
           </h2>
           <p className="mt-4 text-slate-400">
-            Upload your resume, point an arm at a job, and see the difference tonight.
+            Upload your resume, point an arm at a job, and see the difference now.
           </p>
           <Link
             href="/signup"
