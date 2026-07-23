@@ -1,14 +1,20 @@
 /**
- * Plan definitions + gating. One source of truth for what free vs premium
+ * Plan definitions + gating. One source of truth for what each tier
  * includes - UI copy, API gates, and metering all read from here.
+ *
+ * Quotas are window-aware: month, day, or lifetime. Arm-run metering counts
+ * SUCCESSFUL runs only: the slot is reserved at dispatch, and the worker
+ * refunds it when a run dies from a system failure (user cancels count).
  */
 
-export const FREE_ARM_RUNS_PER_MONTH = 5;
-/** Fair-use ceiling: 10/day pace, beyond any real job search, bounds abuse. */
-export const PREMIUM_ARM_RUNS_PER_MONTH = 300;
+export const FREE_ARM_RUNS_PER_MONTH = 3;
+export const FREE_RESUME_PARSES_LIFETIME = 2;
+export const PREMIUM_ARM_RUNS_PER_MONTH = 200;
+export const MAX_ARM_RUNS_PER_DAY = 100;
 export const PREMIUM_PRICE_USD_MONTHLY = 19;
+export const MAX_PRICE_USD_MONTHLY = 199;
 
-export type Plan = "free" | "premium";
+export type Plan = "free" | "premium" | "max";
 
 export interface SubscriptionRow {
   plan: Plan;
@@ -22,42 +28,84 @@ const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 export function effectivePlan(sub: Pick<SubscriptionRow, "plan" | "status"> | null): Plan {
   if (!sub) return "free";
-  return sub.plan === "premium" && ACTIVE_STATUSES.has(sub.status) ? "premium" : "free";
+  if ((sub.plan === "premium" || sub.plan === "max") && ACTIVE_STATUSES.has(sub.status)) {
+    return sub.plan;
+  }
+  return "free";
 }
 
-/** Monthly arm-run allowance for a plan. */
-export function armRunLimit(plan: Plan): number {
-  return plan === "premium" ? PREMIUM_ARM_RUNS_PER_MONTH : FREE_ARM_RUNS_PER_MONTH;
+export type QuotaWindow = "month" | "day" | "lifetime";
+
+export interface Quota {
+  limit: number;
+  window: QuotaWindow;
 }
 
-/** Resume tailoring + cover letters are premium-only. */
+const ARM_RUN_QUOTAS: Record<Plan, Quota> = {
+  free: { limit: FREE_ARM_RUNS_PER_MONTH, window: "month" },
+  premium: { limit: PREMIUM_ARM_RUNS_PER_MONTH, window: "month" },
+  max: { limit: MAX_ARM_RUNS_PER_DAY, window: "day" }
+};
+
+export function armRunQuota(plan: Plan): Quota {
+  return ARM_RUN_QUOTAS[plan];
+}
+
+/** Resume tailoring + cover letters are paid features. */
 export function canTailor(plan: Plan): boolean {
-  return plan === "premium";
+  return plan !== "free";
+}
+
+/** Full-auto submission (no review gate) is a paid feature. */
+export function canFullAuto(plan: Plan): boolean {
+  return plan !== "free";
 }
 
 export type AiCallKind = "resume_parse" | "tailor_resume" | "cover_letter";
 
 /**
- * Monthly caps for every AI surface, per plan. Every model call the app
- * makes is metered: free users get enough parses to onboard and iterate,
- * premium caps are generous fair-use ceilings that stop abuse loops
- * without a real user ever noticing them. -1 = unlimited.
+ * Quotas for every AI surface, per plan. Free parses are LIFETIME (an
+ * onboarding allowance, and a conversion lever); paid caps are fair-use
+ * ceilings a real user will not hit.
  */
-const AI_CALL_LIMITS: Record<AiCallKind, Record<Plan, number>> = {
-  resume_parse: { free: 5, premium: 100 },
-  tailor_resume: { free: 0, premium: 100 },
-  cover_letter: { free: 0, premium: 100 }
+const AI_CALL_QUOTAS: Record<AiCallKind, Record<Plan, Quota>> = {
+  resume_parse: {
+    free: { limit: FREE_RESUME_PARSES_LIFETIME, window: "lifetime" },
+    premium: { limit: 100, window: "month" },
+    max: { limit: 300, window: "month" }
+  },
+  tailor_resume: {
+    free: { limit: 0, window: "month" },
+    premium: { limit: 100, window: "month" },
+    max: { limit: 300, window: "month" }
+  },
+  cover_letter: {
+    free: { limit: 0, window: "month" },
+    premium: { limit: 100, window: "month" },
+    max: { limit: 300, window: "month" }
+  }
 };
 
-export function aiCallLimit(plan: Plan, kind: AiCallKind): number {
-  return AI_CALL_LIMITS[kind][plan];
+export function aiCallQuota(plan: Plan, kind: AiCallKind): Quota {
+  return AI_CALL_QUOTAS[kind][plan];
 }
 
-/** Month key used by the arm_run_usage table: 'YYYY-MM' in UTC. */
-export function monthKey(date: Date = new Date()): string {
+/**
+ * Metering key for a quota window (stored in the text key column of
+ * arm_run_usage / ai_usage): 'YYYY-MM', 'YYYY-MM-DD', or 'lifetime'.
+ */
+export function meterKey(window: QuotaWindow, date: Date = new Date()): string {
+  if (window === "lifetime") return "lifetime";
   const y = date.getUTCFullYear();
   const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  if (window === "month") return `${y}-${m}`;
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Back-compat helper: the monthly meter key. */
+export function monthKey(date: Date = new Date()): string {
+  return meterKey("month", date);
 }
 
 export const PLAN_COPY = {
@@ -65,9 +113,9 @@ export const PLAN_COPY = {
     name: "Free",
     price: "$0",
     features: [
-      `${FREE_ARM_RUNS_PER_MONTH} autonomous applications / month`,
-      "One profile, resume parsing",
-      "Application tracker",
+      `${FREE_ARM_RUNS_PER_MONTH} autonomous applications a month`,
+      `${FREE_RESUME_PARSES_LIFETIME} free AI resume parses`,
+      "One profile + application tracker",
       "Review-gate on every submit"
     ]
   },
@@ -75,11 +123,22 @@ export const PLAN_COPY = {
     name: "Premium",
     price: `$${PREMIUM_PRICE_USD_MONTHLY}/mo`,
     features: [
-      `Up to ${PREMIUM_ARM_RUNS_PER_MONTH} autonomous applications / month`,
+      `Up to ${PREMIUM_ARM_RUNS_PER_MONTH} autonomous applications a month`,
       "AI resume tailoring per job",
       "AI cover letter generation",
       "Full-auto mode (opt-in)",
-      "Priority arm queue"
+      "100 resume parses a month"
+    ]
+  },
+  max: {
+    name: "Max",
+    price: `$${MAX_PRICE_USD_MONTHLY}/mo`,
+    features: [
+      `${MAX_ARM_RUNS_PER_DAY} autonomous applications every day`,
+      "Only successful submissions count",
+      "300 tailored resumes + cover letters a month",
+      "300 resume parses a month",
+      "Full-auto mode at volume"
     ]
   }
 } as const;

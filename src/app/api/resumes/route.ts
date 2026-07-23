@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { NotAResumeError, parseResume } from "@/lib/resume-parse";
-import { aiCallLimit, effectivePlan, monthKey, type SubscriptionRow } from "@/lib/plans";
+import { aiCallQuota, effectivePlan, meterKey, type SubscriptionRow } from "@/lib/plans";
 
 export const maxDuration = 60; // Gemini parse can take a while on long resumes
 
@@ -41,19 +41,21 @@ export async function POST(request: Request) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const service = createSupabaseServiceClient();
 
-  // Meter the parse (every model call is metered; see plans.aiCallLimit).
+  // Meter the parse (window-aware: free parses are a LIFETIME allowance of
+  // 2, paid plans get monthly caps; see plans.aiCallQuota).
   const { data: sub } = await service
     .from("subscriptions")
     .select("plan, status, current_period_end, cancel_at_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
   const plan = effectivePlan(sub as SubscriptionRow | null);
-  const mk = monthKey();
+  const quota = aiCallQuota(plan, "resume_parse");
+  const mk = meterKey(quota.window);
   const { data: reserved } = await service.rpc("try_reserve_ai_call", {
     p_user_id: user.id,
     p_month_key: mk,
     p_kind: "resume_parse",
-    p_limit: aiCallLimit(plan, "resume_parse")
+    p_limit: quota.limit
   });
   if (!reserved) {
     return NextResponse.json(
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
         error: "parse_limit_reached",
         hint:
           plan === "free"
-            ? "You've used this month's free resume parses. Upgrade to Premium for more."
+            ? "You've used your 2 free resume parses. Upgrade to Premium for 100 a month; your profile stays fully editable either way."
             : "You've hit this month's fair-use parsing cap. It resets next month."
       },
       { status: 402 }

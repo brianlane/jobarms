@@ -4,10 +4,10 @@ import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import {
-  aiCallLimit,
+  aiCallQuota,
   canTailor,
   effectivePlan,
-  monthKey,
+  meterKey,
   type SubscriptionRow
 } from "@/lib/plans";
 import { generateCoverLetter, tailorResume } from "@/lib/tailor";
@@ -58,14 +58,15 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     );
   }
 
-  // Meter the model call (fair-use cap; see plans.aiCallLimit).
+  // Meter the model call (fair-use cap; see plans.aiCallQuota).
   const kind = parsed.data.kind === "resume" ? "tailor_resume" : "cover_letter";
-  const mk = monthKey();
+  const quota = aiCallQuota(plan, kind);
+  const mk = meterKey(quota.window);
   const { data: reserved } = await service.rpc("try_reserve_ai_call", {
     p_user_id: user.id,
     p_month_key: mk,
     p_kind: kind,
-    p_limit: aiCallLimit(plan, kind)
+    p_limit: quota.limit
   });
   if (!reserved) {
     return NextResponse.json(

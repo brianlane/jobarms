@@ -14,6 +14,7 @@ import {
   appendScreenshot,
   logStep,
   recordPlaybook,
+  releaseArmRunSlot,
   updateApplication,
   updateRun,
   uploadScreenshot
@@ -97,10 +98,26 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           await logStep(env, params.runId, "review_requested");
         });
 
-        const approval = await step.waitForEvent<{ answers?: Answer[] }>("await approval", {
-          type: "approval",
-          timeout: "7 days"
-        });
+        let approval: { payload?: { answers?: Answer[] } };
+        try {
+          approval = await step.waitForEvent<{ answers?: Answer[] }>("await approval", {
+            type: "approval",
+            timeout: "7 days"
+          });
+        } catch {
+          // Review-gate timeout = the user walked away. That COUNTS against
+          // quota (compute was spent on their behalf), so no refund: mark
+          // canceled and end the run cleanly.
+          await step.do("review timeout", async () => {
+            await updateRun(env, params.runId, {
+              status: "canceled",
+              error: "review_timeout: the review gate expired after 7 days"
+            });
+            await updateApplication(env, params.applicationId, { status: "saved" });
+            await logStep(env, params.runId, "review_timeout");
+          });
+          return;
+        }
         if (approval.payload?.answers?.length) {
           approvedAnswers = approval.payload.answers;
         }
@@ -140,14 +157,18 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           });
           await updateApplication(env, params.applicationId, { status: "failed" });
           await logStep(env, params.runId, "submit_unconfirmed");
+          // System failure: quota counts successful runs, refund the slot.
+          await releaseArmRunSlot(env, params.runId);
         }
       });
     } catch (err) {
-      // Terminal failure (retries exhausted or review-gate timeout): record
-      // honestly so the user can retry or apply manually.
+      // Terminal SYSTEM failure (retries exhausted): record honestly and
+      // refund the metered slot - the user only pays quota for runs that
+      // actually submit. (Review-gate timeouts exit above WITHOUT a refund.)
       const message = err instanceof Error ? err.message : String(err);
       await updateRun(env, params.runId, { status: "failed", error: message.slice(0, 500) });
       await updateApplication(env, params.applicationId, { status: "failed" });
+      await releaseArmRunSlot(env, params.runId);
       throw err;
     }
   }

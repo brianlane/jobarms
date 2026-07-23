@@ -13,6 +13,22 @@ export interface SubscriptionUpdate {
   cancel_at_period_end: boolean;
 }
 
+/**
+ * Which paid tier does a Stripe price represent? Prefers the exact price id
+ * from env (authoritative), falls back to the lookup key convention
+ * (jobarms_max_* / jobarms_premium_*). Unknown live prices default to
+ * premium so a mapping gap can never over-grant Max.
+ */
+export function tierFromPrice(
+  price: { id?: string; lookup_key?: string | null } | null | undefined
+): "premium" | "max" {
+  if (!price) return "premium";
+  const maxPriceId = process.env.STRIPE_PRICE_MAX_MONTHLY;
+  if (maxPriceId && price.id === maxPriceId) return "max";
+  if (price.lookup_key?.startsWith("jobarms_max")) return "max";
+  return "premium";
+}
+
 export function subscriptionUpdateFromStripe(
   sub: Pick<Stripe.Subscription, "id" | "status" | "cancel_at_period_end" | "items">
 ): SubscriptionUpdate {
@@ -23,7 +39,7 @@ export function subscriptionUpdateFromStripe(
   const live = sub.status === "active" || sub.status === "trialing" || sub.status === "past_due";
 
   return {
-    plan: live ? "premium" : "free",
+    plan: live ? tierFromPrice(item?.price) : "free",
     status: sub.status,
     stripe_subscription_id: sub.id,
     current_period_end: periodEnd,

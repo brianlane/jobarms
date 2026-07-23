@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { subscriptionUpdateFromStripe, SUBSCRIPTION_CLEARED } from "@/lib/billing";
+import { subscriptionUpdateFromStripe, SUBSCRIPTION_CLEARED, tierFromPrice } from "@/lib/billing";
 import type Stripe from "stripe";
 
 function fakeSub(overrides: {
   status: Stripe.Subscription.Status;
   cancel_at_period_end?: boolean;
   current_period_end?: number | null;
+  lookup_key?: string;
 }) {
   return {
     id: "sub_123",
@@ -14,7 +15,8 @@ function fakeSub(overrides: {
     items: {
       data: [
         {
-          current_period_end: overrides.current_period_end ?? 1_790_000_000
+          current_period_end: overrides.current_period_end ?? 1_790_000_000,
+          price: { id: "price_abc", lookup_key: overrides.lookup_key ?? "jobarms_premium_monthly_19" }
         }
       ]
     }
@@ -50,5 +52,31 @@ describe("subscriptionUpdateFromStripe", () => {
   it("cleared state is free with no subscription", () => {
     expect(SUBSCRIPTION_CLEARED.plan).toBe("free");
     expect(SUBSCRIPTION_CLEARED.stripe_subscription_id).toBeNull();
+  });
+});
+
+describe("tierFromPrice", () => {
+  it("maps by env price id when set", () => {
+    process.env.STRIPE_PRICE_MAX_MONTHLY = "price_max_env";
+    expect(tierFromPrice({ id: "price_max_env", lookup_key: null })).toBe("max");
+    expect(tierFromPrice({ id: "price_other", lookup_key: null })).toBe("premium");
+    delete process.env.STRIPE_PRICE_MAX_MONTHLY;
+  });
+
+  it("falls back to the lookup-key convention", () => {
+    expect(tierFromPrice({ id: "x", lookup_key: "jobarms_max_monthly" })).toBe("max");
+    expect(tierFromPrice({ id: "x", lookup_key: "jobarms_premium_monthly_19" })).toBe("premium");
+  });
+
+  it("unknown/missing price defaults to premium (never over-grants)", () => {
+    expect(tierFromPrice(undefined)).toBe("premium");
+    expect(tierFromPrice({ id: "x", lookup_key: null })).toBe("premium");
+  });
+
+  it("an active max subscription maps to the max plan", () => {
+    const update = subscriptionUpdateFromStripe(
+      fakeSub({ status: "active", lookup_key: "jobarms_max_monthly" })
+    );
+    expect(update.plan).toBe("max");
   });
 });

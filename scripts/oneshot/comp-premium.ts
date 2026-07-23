@@ -18,8 +18,10 @@ if (!url || !key) throw new Error("Supabase env not set (source .env first)");
 
 const email = process.argv[2];
 const revoke = process.argv.includes("--revoke");
-if (!email || !email.includes("@")) {
-  throw new Error("usage: comp-premium.ts <email> [--revoke]");
+const tierFlag = process.argv.indexOf("--tier");
+const tier = tierFlag > -1 ? process.argv[tierFlag + 1] : "premium";
+if (!email || !email.includes("@") || !["premium", "max"].includes(tier)) {
+  throw new Error("usage: comp-premium.ts <email> [--tier premium|max] [--revoke]");
 }
 
 async function main() {
@@ -37,7 +39,7 @@ async function main() {
 
   const patch = revoke
     ? { plan: "free", status: "none" }
-    : { plan: "premium", status: "active" };
+    : { plan: tier, status: "active" };
 
   const { error } = await supabase
     .from("subscriptions")

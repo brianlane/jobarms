@@ -28,10 +28,17 @@ This repository includes:
 
 ## Pricing
 
-| Tier | Price | Arm runs | Tailoring |
-|------|-------|----------|-----------|
-| Free | $0 | 5 / month | none |
-| Premium | $19/mo | 300 / month (fair use) | AI resume tailoring + cover letters + full-auto |
+| Tier | Price | Arm runs | AI features |
+|------|-------|----------|-------------|
+| Free | $0 | 3 / month | 2 resume parses (lifetime), review-gate only |
+| Premium | $19/mo | up to 200 / month | tailoring + cover letters (100/mo each), full-auto |
+| Max | $199/mo | 100 / DAY | tailoring + cover letters + parses (300/mo each), full-auto |
+
+Arm-run metering counts SUCCESSFUL runs only: the slot is reserved at
+dispatch and refunded by the worker when a run dies from a system failure
+(workflow error, unconfirmed submit). User cancels, including review-gate
+timeouts, still count. Quotas live in [src/lib/plans.ts](src/lib/plans.ts);
+tier mapping from Stripe prices in [src/lib/billing.ts](src/lib/billing.ts).
 
 One source of truth: [src/lib/plans.ts](src/lib/plans.ts) (limits, gating,
 plan copy). The Stripe product/price is created by

@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { stripeClient } from "@/lib/stripe";
 import { appUrl, requireEnv } from "@/lib/env";
 
-/** Start a Stripe Checkout session for the premium subscription. */
-export async function POST() {
+const bodySchema = z.object({ tier: z.enum(["premium", "max"]).default("premium") });
+
+/** Start a Stripe Checkout session for a paid tier (premium or max). */
+export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user }
@@ -13,6 +16,11 @@ export async function POST() {
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
+  if (!parsed.success) return NextResponse.json({ error: "invalid_body" }, { status: 400 });
+  const priceEnv =
+    parsed.data.tier === "max" ? "STRIPE_PRICE_MAX_MONTHLY" : "STRIPE_PRICE_PREMIUM_MONTHLY";
 
   const stripe = stripeClient();
   const service = createSupabaseServiceClient();
@@ -40,7 +48,7 @@ export async function POST() {
     mode: "subscription",
     customer: customerId,
     client_reference_id: user.id,
-    line_items: [{ price: requireEnv("STRIPE_PRICE_PREMIUM_MONTHLY"), quantity: 1 }],
+    line_items: [{ price: requireEnv(priceEnv), quantity: 1 }],
     allow_promotion_codes: true,
     success_url: `${appUrl()}/dashboard/billing?success=1`,
     cancel_url: `${appUrl()}/dashboard/billing?canceled=1`

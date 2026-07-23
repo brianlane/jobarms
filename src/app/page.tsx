@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { SiteHeader } from "@/components/marketing/SiteHeader";
 import { SiteFooter } from "@/components/marketing/SiteFooter";
-import { FREE_ARM_RUNS_PER_MONTH, PREMIUM_PRICE_USD_MONTHLY } from "@/lib/plans";
+import {
+  FREE_ARM_RUNS_PER_MONTH,
+  MAX_ARM_RUNS_PER_DAY,
+  MAX_PRICE_USD_MONTHLY,
+  PREMIUM_ARM_RUNS_PER_MONTH,
+  PREMIUM_PRICE_USD_MONTHLY
+} from "@/lib/plans";
 
 const steps = [
   {
@@ -63,7 +69,7 @@ const faqs = [
   },
   {
     q: "Is it really free?",
-    a: `Yes. The free plan includes ${FREE_ARM_RUNS_PER_MONTH} autonomous applications a month, your full profile, and the tracker. Premium is $${PREMIUM_PRICE_USD_MONTHLY}/month for up to 300 applications a month plus AI tailoring and cover letters.`
+    a: `Yes. The free plan includes ${FREE_ARM_RUNS_PER_MONTH} autonomous applications a month, your full profile, and the tracker. Premium is $${PREMIUM_PRICE_USD_MONTHLY}/month for up to ${PREMIUM_ARM_RUNS_PER_MONTH} applications a month plus AI tailoring and cover letters. Max is $${MAX_PRICE_USD_MONTHLY}/month for ${MAX_ARM_RUNS_PER_DAY} applications every day, and only successful submissions count.`
   }
 ];
 
@@ -83,6 +89,12 @@ const jsonLd = {
       price: String(PREMIUM_PRICE_USD_MONTHLY),
       priceCurrency: "USD",
       name: "Premium"
+    },
+    {
+      "@type": "Offer",
+      price: String(MAX_PRICE_USD_MONTHLY),
+      priceCurrency: "USD",
+      name: "Max"
     }
   ]
 };
@@ -172,11 +184,14 @@ export default function LandingPage() {
         <div className="mx-auto max-w-4xl text-center">
           <p className="eyebrow">Pricing</p>
           <h2 className="mt-4 font-display text-3xl font-bold tracking-tight sm:text-4xl">
-            Free to start. ${PREMIUM_PRICE_USD_MONTHLY} a month for serious volume.
+            Free to start. Plans that scale to {MAX_ARM_RUNS_PER_DAY} applications a day.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-slate-400">
             The free plan is a real plan: {FREE_ARM_RUNS_PER_MONTH} autonomous applications every
-            month, forever. Premium raises that to 300 a month and adds AI tailoring.
+            month, forever. Premium (${PREMIUM_PRICE_USD_MONTHLY}/mo) raises that to{" "}
+            {PREMIUM_ARM_RUNS_PER_MONTH} a month with AI tailoring. Max ($
+            {MAX_PRICE_USD_MONTHLY}/mo) unlocks {MAX_ARM_RUNS_PER_DAY} every day, and only
+            successful submissions count.
           </p>
           <Link
             href="/pricing"

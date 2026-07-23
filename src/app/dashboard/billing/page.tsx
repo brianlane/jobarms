@@ -27,8 +27,8 @@ export default async function BillingPage() {
         )}
       </p>
 
-      <div className="mt-8 grid gap-6 sm:grid-cols-2">
-        {(["free", "premium"] as const).map((tier) => (
+      <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        {(["free", "premium", "max"] as const).map((tier) => (
           <div
             key={tier}
             className={`rounded-2xl border p-6 ${

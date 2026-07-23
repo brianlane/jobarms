@@ -94,6 +94,28 @@ export async function appendScreenshot(env: Env, runId: string, path: string): P
   await updateRun(env, runId, { screenshots: shots });
 }
 
+/**
+ * Refund the run's metered slot (release_arm_run RPC). Called ONLY for
+ * system failures: quota counts successful runs, so workflow errors and
+ * unconfirmed submits give the slot back. User cancels do NOT refund.
+ * Best-effort: a refund failure must never mask the original error.
+ */
+export async function releaseArmRunSlot(env: Env, runId: string): Promise<void> {
+  try {
+    const run = await getRun(env, runId);
+    const userId = run?.user_id as string | undefined;
+    const meterKey = run?.month_key as string | undefined;
+    if (!userId || !meterKey) return;
+    await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/release_arm_run`, {
+      method: "POST",
+      headers: headers(env),
+      body: JSON.stringify({ p_user_id: userId, p_month_key: meterKey })
+    });
+  } catch {
+    // advisory only
+  }
+}
+
 // --- Self-healing playbooks -------------------------------------------------
 
 export interface PlaybookStrategy {

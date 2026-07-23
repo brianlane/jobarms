@@ -5,11 +5,12 @@ import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { detectAts, normalizeJobUrl, SUPPORTED_ATS } from "@/lib/ats";
 import { fetchJobMeta } from "@/lib/job-fetch";
 import {
-  aiCallLimit,
-  armRunLimit,
+  aiCallQuota,
+  armRunQuota,
+  canFullAuto,
   canTailor,
   effectivePlan,
-  monthKey,
+  meterKey,
   type SubscriptionRow
 } from "@/lib/plans";
 import { randomUUID } from "node:crypto";
@@ -126,23 +127,27 @@ export async function POST(request: Request) {
     .limit(1)
     .maybeSingle();
 
-  // Tailor-first (premium): rewrite the resume around this job's keywords
+  // Plan resolution (used by tailor-first, run metering, and the full-auto gate)
+  const { data: sub } = await service
+    .from("subscriptions")
+    .select("plan, status, current_period_end, cancel_at_period_end")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const plan = effectivePlan(sub as SubscriptionRow | null);
+
+  // Tailor-first (paid plans): rewrite the resume around this job's keywords
   // BEFORE the arm runs, so the tailored PDF is the file it uploads. Any
   // tailoring failure falls back to the base resume; it never blocks the run.
   let tailored = false;
   if (parsed.data.tailor && resume) {
-    const { data: subForTailor } = await service
-      .from("subscriptions")
-      .select("plan, status, current_period_end, cancel_at_period_end")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    const tailorPlan = effectivePlan(subForTailor as SubscriptionRow | null);
-    if (canTailor(tailorPlan)) {
+    if (canTailor(plan)) {
+      const tailorQuota = aiCallQuota(plan, "tailor_resume");
+      const tk = meterKey(tailorQuota.window);
       const { data: slot } = await service.rpc("try_reserve_ai_call", {
         p_user_id: user.id,
-        p_month_key: monthKey(),
+        p_month_key: tk,
         p_kind: "tailor_resume",
-        p_limit: aiCallLimit(tailorPlan, "tailor_resume")
+        p_limit: tailorQuota.limit
       });
       if (slot) {
         try {
@@ -185,7 +190,7 @@ export async function POST(request: Request) {
         } catch {
           await service.rpc("release_ai_call", {
             p_user_id: user.id,
-            p_month_key: monthKey(),
+            p_month_key: tk,
             p_kind: "tailor_resume"
           });
         }
@@ -193,40 +198,36 @@ export async function POST(request: Request) {
     }
   }
 
-  // --- meter the run ---
-  const { data: sub } = await service
-    .from("subscriptions")
-    .select("plan, status, current_period_end, cancel_at_period_end")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  const plan = effectivePlan(sub as SubscriptionRow | null);
-  const limit = armRunLimit(plan);
-  const mk = monthKey();
+  // --- meter the run (window-aware: free/premium monthly, Max daily) ---
+  const quota = armRunQuota(plan);
+  const mk = meterKey(quota.window);
   const { data: reserved } = await service.rpc("try_reserve_arm_run", {
     p_user_id: user.id,
     p_month_key: mk,
-    p_limit: limit
+    p_limit: quota.limit
   });
   if (!reserved) {
-    return NextResponse.json(
-      {
-        error: "run_limit_reached",
-        hint:
-          plan === "free"
-            ? "You've used this month's free arm runs. Upgrade to Premium for 300 a month."
-            : "You've hit this month's fair-use cap for arm runs. It resets next month."
-      },
-      { status: 402 }
-    );
+    const hint =
+      plan === "free"
+        ? "You've used this month's free arm runs. Premium includes up to 200 a month; Max includes 100 every day."
+        : plan === "premium"
+          ? "You've hit this month's 200-run cap. Upgrade to Max for 100 runs every day, or wait for the monthly reset."
+          : "You've used today's 100 runs. A fresh 100 unlocks tomorrow.";
+    return NextResponse.json({ error: "run_limit_reached", hint }, { status: 402 });
   }
 
-  // --- create the run row ---
+  // Full-auto is a paid feature: free plans always get the review gate,
+  // whatever their profile toggle says.
+  const requestedAutonomy = (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate";
+  const autonomy = canFullAuto(plan) ? requestedAutonomy : "review_gate";
+
+  // --- create the run row (month_key doubles as the meter key to refund) ---
   const { data: run, error: runError } = await service
     .from("application_runs")
     .insert({
       application_id: applicationId,
       user_id: user.id,
-      autonomy: profile.arm_autonomy ?? "review_gate",
+      autonomy,
       month_key: mk
     })
     .select("id")
@@ -285,7 +286,7 @@ export async function POST(request: Request) {
     userId: user.id,
     jobUrl,
     ats,
-    autonomy: (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate",
+    autonomy,
     jobTitle: meta.title,
     jobCompany: meta.company,
     jobDescription: meta.description,

@@ -26,17 +26,22 @@ export default function PricingPage() {
           </p>
         </div>
 
-        <div className="mx-auto mt-16 grid max-w-4xl gap-8 text-left sm:grid-cols-2">
-          {(["free", "premium"] as const).map((tier) => (
+        <div className="mx-auto mt-16 grid max-w-6xl gap-8 text-left lg:grid-cols-3">
+          {(["free", "premium", "max"] as const).map((tier) => (
             <div
               key={tier}
-              className={`relative rounded-2xl border p-8 sm:p-10 ${
+              className={`relative rounded-2xl border p-8 ${
                 tier === "premium" ? "border-arm-500 bg-ink-900" : "border-white/10 bg-ink-900"
               }`}
             >
               {tier === "premium" && (
                 <span className="absolute -top-3 left-8 rounded-full bg-arm-500 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-ink-950">
                   Most popular
+                </span>
+              )}
+              {tier === "max" && (
+                <span className="absolute -top-3 left-8 rounded-full bg-ink-800 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-arm-300">
+                  For volume applicants
                 </span>
               )}
               <h2 className="font-display text-xl font-bold">{PLAN_COPY[tier].name}</h2>
@@ -54,12 +59,12 @@ export default function PricingPage() {
               <Link
                 href="/signup"
                 className={`mt-10 block rounded-full px-4 py-3.5 text-center font-semibold transition-colors ${
-                  tier === "premium"
-                    ? "bg-arm-500 text-ink-950 hover:bg-arm-400"
-                    : "border border-slate-600 text-slate-200 hover:border-arm-400 hover:text-white"
+                  tier === "free"
+                    ? "border border-slate-600 text-slate-200 hover:border-arm-400 hover:text-white"
+                    : "bg-arm-500 text-ink-950 hover:bg-arm-400"
                 }`}
               >
-                {tier === "premium" ? "Go Premium" : "Start free"}
+                {tier === "free" ? "Start free" : tier === "premium" ? "Go Premium" : "Go Max"}
               </Link>
             </div>
           ))}
