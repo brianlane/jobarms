@@ -4,7 +4,10 @@
  */
 import type { Answer, Env, FormField, RunParams } from "./types";
 
-const DEFAULT_MODEL = "gemini-3.5-flash";
+// gemini-3.6-flash: same input price as 3.5-flash, cheaper output, better
+// reasoning and computer-use scores (relevant: it answers real application
+// forms). Override with the GEMINI_TEXT_MODEL worker secret.
+const DEFAULT_MODEL = "gemini-3.6-flash";
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;

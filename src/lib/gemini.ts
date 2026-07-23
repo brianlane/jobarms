@@ -1,8 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 import { requireEnv } from "@/lib/env";
 
-/** Default model for structured extraction / generation tasks. */
-export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.5-flash";
+/**
+ * Default model for structured extraction / generation tasks.
+ * gemini-3.6-flash (GA Jul 21 2026) strictly dominates 3.5-flash: same
+ * $1.50/1M input, $7.50 vs $9.00 output, ~17% fewer output tokens, better
+ * reasoning, and it dodges the congested 3.5 pool (live 503s on Jul 23).
+ */
+export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 
 /** Capacity fallback when the primary model returns 503/429 (seen live:
  *  "This model is currently experiencing high demand"). */
