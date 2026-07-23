@@ -130,7 +130,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
       }
 
       // ------------------------------------------------ submit
-      const confirmed = await step.do(
+      const outcome = await step.do(
         "submit",
         { retries: { limit: 1, delay: "30 seconds" } },
         async () => {
@@ -140,27 +140,39 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             env, params.userId, params.runId, "submitted", result.screenshot
           );
           await appendScreenshot(env, params.runId, shot);
-          return result.confirmed;
+          return result.outcome;
         }
       );
 
       await step.do("finalize", async () => {
-        if (confirmed) {
+        if (outcome === "submitted") {
           await updateRun(env, params.runId, { status: "submitted", error: null });
           await updateApplication(env, params.applicationId, {
             status: "applied",
             applied_at: new Date().toISOString()
           });
           await logStep(env, params.runId, "submitted", "confirmation detected");
+        } else if (outcome === "captcha_blocked") {
+          // The arm did the full application; only the employer's anti-bot
+          // check stopped the final send. That is real work, so it CONSUMES
+          // the run (no refund). RunPanel matches the "captcha_blocked:" prefix.
+          await updateRun(env, params.runId, {
+            status: "failed",
+            error:
+              "captcha_blocked: the employer's anti-bot check blocked the automated submit; answers are saved, finish on the employer's site"
+          });
+          await updateApplication(env, params.applicationId, { status: "failed" });
+          await logStep(env, params.runId, "captcha_blocked");
         } else {
+          // unconfirmed: submit clicked, no confirmation shown. The submit most
+          // likely went through and the fill was the expensive work, so this
+          // CONSUMES the run (no refund) per "work done = paid".
           await updateRun(env, params.runId, {
             status: "failed",
             error: "submit_unconfirmed - the ATS never showed a confirmation; verify manually"
           });
           await updateApplication(env, params.applicationId, { status: "failed" });
           await logStep(env, params.runId, "submit_unconfirmed");
-          // System failure: quota counts successful runs, refund the slot.
-          await releaseArmRunSlot(env, params.runId);
         }
       });
     } catch (err) {

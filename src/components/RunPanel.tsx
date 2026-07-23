@@ -57,6 +57,8 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
       return "Submitted and confirmed";
     case "submit_unconfirmed":
       return "Submitted, but confirmation was unclear";
+    case "captcha_blocked":
+      return "Filled everything, but an anti-bot check blocked the final submit";
     default:
       return null; // internal noise stays in the technical log
   }
@@ -157,13 +159,15 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
       {run.error && (
         <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
           <p>
-            {run.error.includes("submit_unconfirmed")
-              ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
-              : run.error.includes("review_timeout")
-                ? "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted."
-                : run.error.includes("form_not_found")
-                  ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms)."
-                  : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved."}
+            {run.error.includes("captcha_blocked")
+              ? "This employer's anti-bot check blocked the automated submit. Your answers are saved; finish on the employer's site from the posting link. This run counted, since the arm did the full application."
+              : run.error.includes("submit_unconfirmed")
+                ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
+                : run.error.includes("review_timeout")
+                  ? "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted."
+                  : run.error.includes("form_not_found")
+                    ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms)."
+                    : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved."}
           </p>
           {run.slot_refunded && (
             <p className="mt-1.5 font-medium text-red-800">
@@ -246,6 +250,9 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
           <p className="mt-1 text-sm text-amber-800">
             Nothing is sent until you approve. Edit anything that reads wrong; answers the arm
             couldn&apos;t figure out are highlighted for you to fill in.
+          </p>
+          <p className="mt-1 text-xs text-amber-700">
+            Your resume is attached automatically, and anti-bot checks are handled for you.
           </p>
           <div className="mt-4 space-y-3">
             {answers.map((a, i) =>

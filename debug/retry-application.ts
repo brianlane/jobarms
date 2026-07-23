@@ -5,7 +5,13 @@
  * metering math before/after.
  *
  *   set -a && source .env && set +a
- *   npx tsx debug/retry-application.ts <application-id>
+ *   npx tsx debug/retry-application.ts <application-id> [--submit]
+ *
+ * Without --submit the run parks at the review gate (safe: never submits).
+ * With --submit it dispatches full_auto and carries through to a REAL submit
+ * on the posting, exercising Layer-1 realism + Layer-2 captcha vision, and
+ * prints the real outcome (submitted | captcha_blocked | submit_unconfirmed).
+ * Only point --submit at a low-stakes posting you're willing to actually apply to.
  */
 import { createClient } from "@supabase/supabase-js";
 import { retryDecision } from "../src/lib/run-outcome";
@@ -21,7 +27,8 @@ function need(name: string): string {
 }
 
 const appId = process.argv[2];
-if (!appId) throw new Error("usage: retry-application.ts <application-id>");
+if (!appId) throw new Error("usage: retry-application.ts <application-id> [--submit]");
+const doSubmit = process.argv.includes("--submit");
 
 const service = createClient(need("NEXT_PUBLIC_SUPABASE_URL"), need("SUPABASE_SECRET_KEY"), {
   auth: { persistSession: false }
@@ -114,17 +121,22 @@ async function main() {
   });
   if (!reserved) throw new Error("run_limit_reached");
 
-  const autonomy = canFullAuto(plan)
+  const profileAutonomy = canFullAuto(plan)
     ? ((profile!.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate")
     : "review_gate";
+  // --submit forces full_auto so the workflow carries through to the real
+  // submit (proving Layers 1-2); otherwise park at review.
+  const autonomy: "review_gate" | "full_auto" = doSubmit ? "full_auto" : "review_gate";
 
   const { data: newRun } = await service
     .from("application_runs")
-    .insert({ application_id: appId, user_id: app.user_id, autonomy: "review_gate", month_key: mk })
+    .insert({ application_id: appId, user_id: app.user_id, autonomy, month_key: mk })
     .select("id")
     .single();
   if (!newRun) throw new Error("run insert failed");
-  console.log(`new run: ${newRun.id} (autonomy forced review_gate for smoke; profile wanted ${autonomy})`);
+  console.log(
+    `new run: ${newRun.id} (autonomy=${autonomy}${doSubmit ? " - WILL SUBMIT" : " for smoke"}; profile wanted ${profileAutonomy})`
+  );
 
   const dispatch = await buildAndDispatchRun(service, {
     runId: newRun.id,
@@ -132,7 +144,7 @@ async function main() {
     userId: app.user_id,
     jobUrl: job.url,
     ats: job.ats,
-    autonomy: "review_gate",
+    autonomy,
     jobTitle: job.title,
     jobCompany: job.company,
     jobDescription: job.description,
@@ -165,7 +177,11 @@ async function main() {
     }
   }
   console.log("usage final:", await usage(app.user_id));
-  console.log("\nDone. The run is parked at review (never submits in this smoke).");
+  console.log(
+    doSubmit
+      ? "\nDone. Full-auto submit path exercised; see the outcome in error/status above."
+      : "\nDone. The run is parked at review (never submits in this smoke)."
+  );
 }
 
 main().catch((err) => {
