@@ -6,6 +6,7 @@ import { detectAts, normalizeJobUrl, SUPPORTED_ATS } from "@/lib/ats";
 import { fetchJobMeta } from "@/lib/job-fetch";
 import { armRunLimit, effectivePlan, monthKey, type SubscriptionRow } from "@/lib/plans";
 import { dispatchRun } from "@/lib/arm";
+import { lessonsFromStats } from "@/lib/answer-memory";
 
 export const maxDuration = 60;
 
@@ -149,6 +150,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "run_insert_failed" }, { status: 500 });
   }
 
+  // --- learning payloads: user memory + anonymous platform lessons ---
+  const [{ data: memoryRows }, { data: statRows }] = await Promise.all([
+    service
+      .from("user_answer_memory")
+      .select("label, answer, source")
+      .eq("user_id", user.id)
+      .order("times_used", { ascending: false })
+      .order("updated_at", { ascending: false })
+      .limit(80),
+    service
+      .from("platform_field_stats")
+      .select("question_key, label_example, times_seen, times_skipped, option_counts")
+      .eq("ats", ats)
+      .order("times_seen", { ascending: false })
+      .limit(60)
+  ]);
+  const memory = {
+    answers: (memoryRows ?? []).map((m) => ({
+      label: m.label as string,
+      answer: m.answer as string,
+      source: m.source as string
+    })),
+    lessons: lessonsFromStats(
+      (statRows ?? []).map((r) => ({
+        question_key: r.question_key as string,
+        label_example: r.label_example as string,
+        times_seen: r.times_seen as number,
+        times_skipped: r.times_skipped as number,
+        option_counts: (r.option_counts ?? {}) as Record<string, number>
+      }))
+    ).map((l) => l.guidance)
+  };
+
   // --- signed resume URL (24h - outlives the review gate for most users) ---
   let signedUrl: string | null = null;
   if (resume) {
@@ -174,7 +208,8 @@ export async function POST(request: Request) {
       signedUrl,
       fileName: resume?.file_name ?? "resume.pdf",
       mimeType: resume?.mime_type ?? "application/pdf"
-    }
+    },
+    memory
   });
 
   if (!dispatch.ok) {

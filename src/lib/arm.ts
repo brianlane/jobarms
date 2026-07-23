@@ -21,6 +21,11 @@ export interface DispatchRunPayload {
   jobDescription: string;
   profile: Record<string, unknown>;
   resume: { signedUrl: string | null; fileName: string; mimeType: string };
+  /** Learning payloads: this user's remembered answers + anonymous platform lessons. */
+  memory: {
+    answers: Array<{ label: string; answer: string; source: string }>;
+    lessons: string[];
+  };
 }
 
 export type ArmDispatchResult =

@@ -45,11 +45,23 @@ export async function generateAnswers(
   params: RunParams,
   fields: FormField[]
 ): Promise<Answer[]> {
+  const memoryAnswers = params.memory?.answers ?? [];
+  const lessons = params.memory?.lessons ?? [];
+
+  const memorySection =
+    memoryAnswers.length > 0
+      ? `\nTHIS CANDIDATE'S PREVIOUSLY APPROVED ANSWERS (their own words from past applications; entries marked user_edited are corrections they made by hand and carry the MOST weight. Reuse these when the same question appears, adapting only if this job's context differs):\n${JSON.stringify(memoryAnswers)}\n`
+      : "";
+  const lessonsSection =
+    lessons.length > 0
+      ? `\nPLATFORM GUIDANCE (anonymous aggregates across all applications, no personal data):\n- ${lessons.join("\n- ")}\n`
+      : "";
+
   const prompt = `You are filling out a job application on behalf of a candidate. Answer every field truthfully from their profile. NEVER invent employers, degrees, or credentials.
 
 CANDIDATE PROFILE (JSON):
 ${JSON.stringify(params.profile)}
-
+${memorySection}${lessonsSection}
 JOB: ${params.jobTitle} at ${params.jobCompany}
 JOB DESCRIPTION (for tailoring open-ended answers):
 ${params.jobDescription.slice(0, 6000)}

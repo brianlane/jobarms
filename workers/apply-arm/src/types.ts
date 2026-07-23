@@ -31,6 +31,11 @@ export interface RunParams {
     fileName: string;
     mimeType: string;
   };
+  /** Learning payloads (optional for runs dispatched by older app builds). */
+  memory?: {
+    answers: Array<{ label: string; answer: string; source: string }>;
+    lessons: string[];
+  };
 }
 
 export interface FormField {
