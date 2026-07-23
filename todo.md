@@ -19,13 +19,23 @@ Manual account setup (done unless unchecked):
 - [x] Vercel project + token
 - [x] Cloudflare zone `jobarms.com` (existing account)
 - [x] Local `.env` populated (gitignored)
-- [ ] Cloudflare **Workers Paid** upgrade (deferred to Phase 3 by decision)
-- [ ] `CLOUDFLARE_API_TOKEN` minted for CI worker deploys (Phase 3)
+- [ ] Cloudflare **Workers Paid** upgrade ($5/mo, dashboard → Workers & Pages
+      → Plans). Everything is deployed and working on the free allowance;
+      the binding limit that matters is Browser Rendering (~10 browser-
+      minutes/day = roughly 3-5 arm runs). Upgrade before real usage.
+- [x] `CLOUDFLARE_API_TOKEN` for CI worker deploys: the `jobarms-ci` token
+      (scoped: Workers Scripts + jobarms.com zone Workers Routes / DNS /
+      Email Routing / Zone Settings) is in .env + GitHub secrets; CI
+      workers-deploy verified green with it. The original broad account
+      token (`job-arms-token-cf`) is now unused except as the token-admin
+      credential that minted jobarms-ci; keep or delete it in dashboard →
+      Account API Tokens.
 - [x] Inbound email (honedtech-style): Cloudflare Email Routing enabled,
       hello@ + catch-all forward to jobarmsteam@gmail.com (destination
       verified Jul 23)
-- [ ] Resend account + jobarms.com domain verification (outbound welcome
-      email; RESEND_API_KEY into .env + Vercel when created)
+- [x] Resend account + jobarms.com domain verified (Jul 23);
+      RESEND_API_KEY in .env + Vercel. Welcome email sends from
+      hello@jobarms.com
 - [ ] Stripe live keys + live webhook (launch)
 
 Repo scaffold:
@@ -41,10 +51,8 @@ Repo scaffold:
 - [x] GitHub Actions secrets set (`gh secret set` from local .env)
 - [x] Vercel project envs + domains attached (scripts/oneshot/setup-vercel.ts)
 - [x] vercel.json (git integration off — CI owns deploys)
-- [ ] **Manual: Cloudflare DNS records for Vercel** (dashboard → jobarms.com
-      → DNS): A @ → 216.198.79.1 and CNAME www → cname.vercel-dns.com, both
-      DNS-only/grey cloud. (The wrangler OAuth token can't edit DNS; the
-      arm./ingest. records were auto-created by Workers custom domains.)
+- [x] Cloudflare DNS records for Vercel (A @ 216.198.79.1, CNAME www, both
+      DNS-only) + Vercel cert issued; jobarms.com and www live over HTTPS
 
 ## Phase 1 — App skeleton (auth + billing)
 
@@ -71,12 +79,12 @@ Repo scaffold:
 
 ## Phase 3 — Apply arm (the product)
 
-- [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo) — the workers
-      deployed and ran on the free allowance (Browser Rendering free tier =
-      10 browser-minutes/day); upgrade before real usage volume
-- [ ] **Manual: mint CLOUDFLARE_API_TOKEN → GitHub secret** (CI workers-deploy
-      skips gracefully until then; both workers were deployed via local
-      wrangler login: arm.jobarms.com + ingest.jobarms.com)
+- [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo). The workers
+      deployed and run on the free allowance (Browser Rendering free tier =
+      10 browser-minutes/day, roughly 3-5 arm runs); upgrade before real
+      usage volume. This is the ONLY remaining Cloudflare item.
+- [x] CLOUDFLARE_API_TOKEN → GitHub secret (`jobarms-ci`, minted Jul 22;
+      CI workers-deploy verified green on run 29984023489)
 - [x] `wrangler secret put` on both workers (apply-arm:
       ARM_WORKER_SHARED_SECRET, SUPABASE_URL, SUPABASE_SECRET_KEY,
       GEMINI_API_KEY; ingest: SUPABASE_URL, SUPABASE_SECRET_KEY,
