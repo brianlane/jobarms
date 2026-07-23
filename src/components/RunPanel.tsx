@@ -14,9 +14,48 @@ export interface RunData {
   created_at: string;
 }
 
+/** Friendly status line for the run header. */
+const RUN_STATUS_COPY: Record<string, { label: string; tone: "working" | "action" | "good" | "bad" | "muted" }> = {
+  queued: { label: "Getting started...", tone: "working" },
+  running: { label: "Your arm is working...", tone: "working" },
+  needs_review: { label: "Waiting for your review", tone: "action" },
+  approved: { label: "Approved, submitting...", tone: "working" },
+  submitting: { label: "Submitting...", tone: "working" },
+  submitted: { label: "Application submitted", tone: "good" },
+  failed: { label: "This run hit a problem", tone: "bad" },
+  canceled: { label: "Run canceled", tone: "muted" }
+};
+
+/** Human translation of the technical step log. */
+function friendlyStep(step: { step: string; detail?: string }): string | null {
+  switch (step.step) {
+    case "navigate":
+      return "Opened the job application";
+    case "form_extracted": {
+      const n = parseInt(step.detail ?? "", 10);
+      return Number.isFinite(n)
+        ? `Read the form: ${n} question${n === 1 ? "" : "s"}`
+        : "Read the application form";
+    }
+    case "answers_generated":
+      return "Drafted your answers";
+    case "review_requested":
+      return "Paused so you can review";
+    case "approved":
+      return "You approved the answers";
+    case "submitted":
+      return "Submitted and confirmed";
+    case "submit_unconfirmed":
+      return "Submitted, but confirmation was unclear";
+    default:
+      return null; // internal noise stays in the technical log
+  }
+}
+
 /**
- * Latest arm run: step timeline, screenshots, and - when the run is parked at
- * the review gate - editable answers with the approve button.
+ * Latest arm run, presented for humans: a friendly status + progress story,
+ * a clear review-and-approve flow when the arm is waiting, and the raw
+ * technical log tucked behind a disclosure.
  */
 export function RunPanel({ run }: { run: RunData }) {
   const router = useRouter();
@@ -25,12 +64,17 @@ export function RunPanel({ run }: { run: RunData }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // NOTE: the parent renders this panel with key={runId}:{status}, so a
+  // status transition (running -> needs_review) REMOUNTS it and useState
+  // re-reads fresh props. Without that key, the review form would never
+  // appear while the page polls (useState ignores prop updates).
+
   useEffect(() => {
     fetch(`/api/runs/${run.id}/screenshots`)
       .then((r) => (r.ok ? r.json() : { screenshots: [] }))
       .then((b) => setScreenshots(b.screenshots ?? []))
       .catch(() => {});
-  }, [run.id]);
+  }, [run.id, run.status]);
 
   // While the arm works, poll for state changes.
   useEffect(() => {
@@ -56,111 +100,194 @@ export function RunPanel({ run }: { run: RunData }) {
     }
   }
 
+  const status = RUN_STATUS_COPY[run.status] ?? { label: run.status, tone: "muted" as const };
   const reviewing = run.status === "needs_review";
+  const working = ["queued", "running", "approved", "submitting"].includes(run.status);
+  const reviewable = answers.filter((a) => (a.label || a.value || "").trim() !== "");
+
+  const toneCls =
+    status.tone === "action"
+      ? "bg-amber-100 text-amber-800"
+      : status.tone === "good"
+        ? "bg-teal-100 text-teal-800"
+        : status.tone === "bad"
+          ? "bg-red-100 text-red-700"
+          : "bg-slate-100 text-slate-600";
+
+  const friendlySteps = run.steps
+    .map((s) => ({ at: s.at, text: friendlyStep(s) }))
+    .filter((s): s is { at: string; text: string } => s.text !== null);
 
   return (
     <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Arm run <span className="text-sm font-normal text-slate-400">({run.status})</span>
-        </h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold text-slate-900">Your arm</h2>
+          <span className={`rounded-full px-3 py-1 text-sm font-semibold ${toneCls}`}>
+            {working && (
+              <span className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-current align-middle" />
+            )}
+            {status.label}
+          </span>
+        </div>
         {["queued", "running", "needs_review"].includes(run.status) && (
           <button
             onClick={() => act(`/api/runs/${run.id}/cancel`)}
             disabled={busy}
-            className="text-sm text-red-500 hover:underline disabled:opacity-50"
+            className="text-sm text-slate-400 hover:text-red-500 disabled:opacity-50"
           >
-            Cancel run
+            Cancel this run
           </button>
         )}
       </div>
 
       {run.error && (
-        <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{run.error}</p>
+        <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          {run.error.includes("submit_unconfirmed")
+            ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
+            : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved; you can cancel and retry, or apply manually."}
+        </p>
       )}
 
-      {/* Step timeline */}
-      {run.steps.length > 0 && (
-        <ol className="mt-4 space-y-1 border-l-2 border-slate-100 pl-4 text-sm text-slate-600">
-          {run.steps.map((s, i) => (
-            <li key={i}>
-              <span className="font-medium text-slate-800">{s.step}</span>
-              {s.detail ? `: ${s.detail}` : ""}
-              <span className="ml-2 text-xs text-slate-400">
-                {new Date(s.at).toLocaleTimeString()}
+      {/* Friendly progress story */}
+      {friendlySteps.length > 0 && (
+        <ol className="mt-5 space-y-2">
+          {friendlySteps.map((s, i) => (
+            <li key={i} className="flex items-center gap-3 text-sm">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-100 text-[10px] font-bold text-teal-700">
+                ✓
+              </span>
+              <span className="text-slate-700">{s.text}</span>
+              <span className="ml-auto shrink-0 text-xs text-slate-400">
+                {new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
               </span>
             </li>
           ))}
         </ol>
       )}
 
-      {/* Review gate */}
-      {reviewing && answers.length > 0 && (
-        <div className="mt-6">
-          <h3 className="font-semibold text-amber-700">
-            Review before it submits. Edit anything, then approve.
+      {/* Review gate: the one moment that needs the user */}
+      {reviewing && (
+        <div className="mt-6 rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
+          <h3 className="font-display text-base font-bold text-amber-900">
+            Your arm needs you: review the answers below, then approve
           </h3>
-          <div className="mt-3 space-y-3">
-            {answers.map((a, i) => (
-              <div key={a.name}>
-                <label className="mb-0.5 block text-xs font-medium text-slate-500">
-                  {a.label || a.name}
-                  {a.skipped && <span className="ml-2 text-amber-600">(arm skipped, fill in)</span>}
-                </label>
-                <textarea
-                  rows={a.value.length > 120 ? 4 : 1}
-                  value={a.value}
-                  onChange={(e) => {
-                    const next = [...answers];
-                    next[i] = { ...a, value: e.target.value, skipped: false };
-                    setAnswers(next);
-                  }}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none"
-                />
+          <p className="mt-1 text-sm text-amber-800">
+            Nothing is sent until you approve. Edit anything that reads wrong; answers the arm
+            couldn&apos;t figure out are highlighted for you to fill in.
+          </p>
+
+          {reviewable.length === 0 ? (
+            <div className="mt-4 rounded-lg bg-white p-4 text-sm text-slate-700">
+              <p className="font-semibold">The arm couldn&apos;t read this application form.</p>
+              <p className="mt-1 text-slate-500">
+                Some career sites block automation or hide their form. Cancel this run and apply
+                manually; the job stays in your tracker either way.
+              </p>
+              <button
+                onClick={() => act(`/api/runs/${run.id}/cancel`)}
+                disabled={busy}
+                className="mt-3 rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:border-slate-400 disabled:opacity-50"
+              >
+                Cancel run
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 space-y-3">
+                {answers.map((a, i) =>
+                  (a.label || a.value || "").trim() === "" ? null : (
+                    <div key={a.name}>
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">
+                        {a.label || a.name}
+                        {a.skipped && (
+                          <span className="ml-2 font-semibold text-amber-700">
+                            needs your answer
+                          </span>
+                        )}
+                      </label>
+                      <textarea
+                        rows={a.value.length > 120 ? 4 : 1}
+                        value={a.value}
+                        onChange={(e) => {
+                          const next = [...answers];
+                          next[i] = { ...a, value: e.target.value, skipped: false };
+                          setAnswers(next);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
+                          a.skipped ? "border-amber-400 bg-amber-50/50" : "border-slate-300 bg-white"
+                        }`}
+                      />
+                    </div>
+                  )
+                )}
               </div>
-            ))}
-          </div>
-          <button
-            onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}
-            disabled={busy}
-            className="mt-4 rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
-          >
-            {busy ? "Sending…" : "Approve & submit"}
-          </button>
+              <button
+                onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}
+                disabled={busy}
+                className="mt-5 w-full rounded-lg bg-arm-600 px-6 py-3.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50 sm:w-auto"
+              >
+                {busy ? "Sending..." : "Approve and submit application"}
+              </button>
+            </>
+          )}
         </div>
       )}
 
-      {/* Submitted answers (read-only after the gate) */}
+      {/* What was submitted (read-only after the gate) */}
       {!reviewing && run.answers && run.answers.length > 0 && (
-        <details className="mt-4">
+        <details className="mt-5">
           <summary className="cursor-pointer text-sm font-medium text-slate-600">
-            What the arm submitted ({run.answers.length} answers)
+            What your arm submitted ({run.answers.length} answers)
           </summary>
           <dl className="mt-3 space-y-2 text-sm">
             {run.answers.map((a) => (
               <div key={a.name}>
                 <dt className="text-xs text-slate-400">{a.label || a.name}</dt>
-                <dd className="text-slate-800">{a.skipped ? "(skipped)" : a.value || "-"}</dd>
+                <dd className="text-slate-800">{a.skipped ? "(left blank)" : a.value || "-"}</dd>
               </div>
             ))}
           </dl>
         </details>
       )}
 
-      {/* Screenshots */}
+      {/* Screenshots: proof of what the arm saw */}
       {screenshots.length > 0 && (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          {screenshots.map((s) => (
-            <a key={s.path} href={s.url} target="_blank" rel="noreferrer">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={s.url}
-                alt="Arm screenshot"
-                className="rounded-lg border border-slate-200 hover:border-arm-500"
-              />
-            </a>
-          ))}
-        </div>
+        <details className="mt-4" open={reviewing}>
+          <summary className="cursor-pointer text-sm font-medium text-slate-600">
+            Screenshots from the arm ({screenshots.length})
+          </summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {screenshots.map((s) => (
+              <a key={s.path} href={s.url} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={s.url}
+                  alt="What the arm saw"
+                  className="rounded-lg border border-slate-200 hover:border-arm-500"
+                />
+              </a>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Raw internals for the curious; never the primary view */}
+      {run.steps.length > 0 && (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-xs font-medium text-slate-400">
+            Technical log
+          </summary>
+          <ol className="mt-2 space-y-1 border-l-2 border-slate-100 pl-4 font-mono text-xs text-slate-500">
+            {run.steps.map((s, i) => (
+              <li key={i}>
+                {s.step}
+                {s.detail ? `: ${s.detail}` : ""}
+                <span className="ml-2 text-slate-300">{new Date(s.at).toLocaleTimeString()}</span>
+              </li>
+            ))}
+          </ol>
+        </details>
       )}
 
       {error && <p className="mt-3 text-sm text-red-500">{error}</p>}

@@ -70,7 +70,7 @@ export default async function ApplicationDetailPage(props: { params: Promise<{ i
         </span>
       </div>
 
-      {latestRun && <RunPanel run={latestRun} />}
+      {latestRun && <RunPanel key={`${latestRun.id}:${latestRun.status}`} run={latestRun} />}
 
       <TailorPanel applicationId={app.id} premium={premium} hasCoverLetter={Boolean(app.cover_letter)} />
 

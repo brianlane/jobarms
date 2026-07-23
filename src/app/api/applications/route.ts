@@ -4,7 +4,18 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { detectAts, normalizeJobUrl, SUPPORTED_ATS } from "@/lib/ats";
 import { fetchJobMeta } from "@/lib/job-fetch";
-import { armRunLimit, effectivePlan, monthKey, type SubscriptionRow } from "@/lib/plans";
+import {
+  aiCallLimit,
+  armRunLimit,
+  canTailor,
+  effectivePlan,
+  monthKey,
+  type SubscriptionRow
+} from "@/lib/plans";
+import { randomUUID } from "node:crypto";
+import { tailorResume } from "@/lib/tailor";
+import { renderResumePdf } from "@/lib/resume-pdf";
+import { parsedResumeSchema } from "@/lib/resume-parse";
 import { dispatchRun } from "@/lib/arm";
 import { lessonsFromStats } from "@/lib/answer-memory";
 
@@ -12,7 +23,8 @@ export const maxDuration = 60;
 
 const bodySchema = z.object({
   url: z.string().max(2000),
-  mode: z.enum(["arm", "track_only"]).default("arm")
+  mode: z.enum(["arm", "track_only"]).default("arm"),
+  tailor: z.boolean().default(false)
 });
 
 /**
@@ -104,7 +116,7 @@ export async function POST(request: Request) {
     .single();
   if (!profile) return NextResponse.json({ error: "profile_missing" }, { status: 400 });
 
-  const { data: resume } = await service
+  let { data: resume } = await service
     .from("resumes")
     .select("id, file_name, storage_path, mime_type")
     .eq("user_id", user.id)
@@ -113,6 +125,73 @@ export async function POST(request: Request) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  // Tailor-first (premium): rewrite the resume around this job's keywords
+  // BEFORE the arm runs, so the tailored PDF is the file it uploads. Any
+  // tailoring failure falls back to the base resume; it never blocks the run.
+  let tailored = false;
+  if (parsed.data.tailor && resume) {
+    const { data: subForTailor } = await service
+      .from("subscriptions")
+      .select("plan, status, current_period_end, cancel_at_period_end")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const tailorPlan = effectivePlan(subForTailor as SubscriptionRow | null);
+    if (canTailor(tailorPlan)) {
+      const { data: slot } = await service.rpc("try_reserve_ai_call", {
+        p_user_id: user.id,
+        p_month_key: monthKey(),
+        p_kind: "tailor_resume",
+        p_limit: aiCallLimit(tailorPlan, "tailor_resume")
+      });
+      if (slot) {
+        try {
+          const result = await tailorResume(
+            profile as Record<string, unknown>,
+            meta.title,
+            meta.company,
+            meta.description
+          );
+          const pdf = await renderResumePdf(parsedResumeSchema.parse(result.resume));
+          const storagePath = `${user.id}/${randomUUID()}.pdf`;
+          const { error: uploadError } = await service.storage
+            .from("resumes")
+            .upload(storagePath, pdf, { contentType: "application/pdf" });
+          if (uploadError) throw uploadError;
+
+          const fileName = `${(meta.company || "tailored").replace(/[^a-z0-9]+/gi, "-")}-resume.pdf`;
+          const { data: tailoredRow } = await service
+            .from("resumes")
+            .insert({
+              user_id: user.id,
+              kind: "tailored",
+              application_id: applicationId,
+              file_name: fileName,
+              storage_path: storagePath,
+              mime_type: "application/pdf",
+              parsed: result.resume,
+              parse_status: "parsed"
+            })
+            .select("id, file_name, storage_path, mime_type")
+            .single();
+          if (tailoredRow) {
+            await service
+              .from("applications")
+              .update({ resume_id: tailoredRow.id })
+              .eq("id", applicationId);
+            resume = tailoredRow;
+            tailored = true;
+          }
+        } catch {
+          await service.rpc("release_ai_call", {
+            p_user_id: user.id,
+            p_month_key: monthKey(),
+            p_kind: "tailor_resume"
+          });
+        }
+      }
+    }
+  }
 
   // --- meter the run ---
   const { data: sub } = await service
@@ -233,5 +312,5 @@ export async function POST(request: Request) {
   }
 
   await service.from("applications").update({ status: "applying" }).eq("id", applicationId);
-  return NextResponse.json({ application_id: applicationId, run_id: run.id });
+  return NextResponse.json({ application_id: applicationId, run_id: run.id, tailored });
 }

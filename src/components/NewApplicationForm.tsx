@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export function NewApplicationForm() {
+export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [url, setUrl] = useState(searchParams.get("url") ?? "");
   const [mode, setMode] = useState<"arm" | "track_only">("arm");
+  const [tailor, setTailor] = useState(premium);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +22,7 @@ export function NewApplicationForm() {
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, mode })
+      body: JSON.stringify({ url, mode, tailor: premium && mode === "arm" && tailor })
     });
     const body = await res.json();
     setBusy(false);
@@ -83,12 +84,38 @@ export function NewApplicationForm() {
         </button>
       </div>
 
+      {premium && mode === "arm" && (
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">
+          <input
+            type="checkbox"
+            checked={tailor}
+            onChange={(e) => setTailor(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-slate-900">
+              Tailor my resume for this job first
+            </span>
+            <span className="mt-0.5 block text-xs text-slate-500">
+              Rewrites your resume around this job&apos;s keywords before applying; the tailored
+              PDF is the file the arm uploads. Adds about 20 seconds.
+            </span>
+          </span>
+        </label>
+      )}
+
       <button
         type="submit"
         disabled={busy}
         className="rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
       >
-        {busy ? "Working…" : mode === "arm" ? "Start the arm" : "Save to tracker"}
+        {busy
+          ? tailor && mode === "arm"
+            ? "Tailoring resume and starting the arm..."
+            : "Working..."
+          : mode === "arm"
+            ? "Start the arm"
+            : "Save to tracker"}
       </button>
 
       {notice && <p className="text-sm text-amber-600">{notice}</p>}
