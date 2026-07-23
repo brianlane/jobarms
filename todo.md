@@ -21,7 +21,11 @@ Manual account setup (done unless unchecked):
 - [x] Local `.env` populated (gitignored)
 - [ ] Cloudflare **Workers Paid** upgrade (deferred to Phase 3 by decision)
 - [ ] `CLOUDFLARE_API_TOKEN` minted for CI worker deploys (Phase 3)
-- [ ] Resend account + jobarms.com domain verification (Phase 1 email)
+- [x] Inbound email (honedtech-style): Cloudflare Email Routing enabled,
+      hello@ + catch-all forward to jobarmsteam@gmail.com (destination
+      verified Jul 23)
+- [ ] Resend account + jobarms.com domain verification (outbound welcome
+      email; RESEND_API_KEY into .env + Vercel when created)
 - [ ] Stripe live keys + live webhook (launch)
 
 Repo scaffold:
