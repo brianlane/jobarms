@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { NotAResumeError, parseResume } from "@/lib/resume-parse";
+import { aiCallLimit, effectivePlan, monthKey, type SubscriptionRow } from "@/lib/plans";
 
 export const maxDuration = 60; // Gemini parse can take a while on long resumes
 
@@ -39,6 +40,34 @@ export async function POST(request: Request) {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const service = createSupabaseServiceClient();
+
+  // Meter the parse (every model call is metered; see plans.aiCallLimit).
+  const { data: sub } = await service
+    .from("subscriptions")
+    .select("plan, status, current_period_end, cancel_at_period_end")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const plan = effectivePlan(sub as SubscriptionRow | null);
+  const mk = monthKey();
+  const { data: reserved } = await service.rpc("try_reserve_ai_call", {
+    p_user_id: user.id,
+    p_month_key: mk,
+    p_kind: "resume_parse",
+    p_limit: aiCallLimit(plan, "resume_parse")
+  });
+  if (!reserved) {
+    return NextResponse.json(
+      {
+        error: "parse_limit_reached",
+        hint:
+          plan === "free"
+            ? "You've used this month's free resume parses. Upgrade to Premium for more."
+            : "You've hit this month's fair-use parsing cap. It resets next month."
+      },
+      { status: 402 }
+    );
+  }
+
   const storagePath = `${user.id}/${randomUUID()}.${ext}`;
 
   const { error: uploadError } = await service.storage
@@ -113,6 +142,8 @@ export async function POST(request: Request) {
       .eq("id", row.id);
 
     if (notAResume) {
+      // The model call happened (and told us this isn't a resume), so the
+      // metered slot stays consumed: junk uploads can't loop for free.
       return NextResponse.json(
         {
           resume_id: row.id,
@@ -122,6 +153,12 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
+    // Transient failure: give the slot back.
+    await service.rpc("release_ai_call", {
+      p_user_id: user.id,
+      p_month_key: mk,
+      p_kind: "resume_parse"
+    });
     return NextResponse.json(
       {
         resume_id: row.id,

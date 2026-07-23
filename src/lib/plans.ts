@@ -33,6 +33,24 @@ export function canTailor(plan: Plan): boolean {
   return plan === "premium";
 }
 
+export type AiCallKind = "resume_parse" | "tailor_resume" | "cover_letter";
+
+/**
+ * Monthly caps for every AI surface, per plan. Every model call the app
+ * makes is metered: free users get enough parses to onboard and iterate,
+ * premium caps are generous fair-use ceilings that stop abuse loops
+ * without a real user ever noticing them. -1 = unlimited.
+ */
+const AI_CALL_LIMITS: Record<AiCallKind, Record<Plan, number>> = {
+  resume_parse: { free: 5, premium: 100 },
+  tailor_resume: { free: 0, premium: 100 },
+  cover_letter: { free: 0, premium: 100 }
+};
+
+export function aiCallLimit(plan: Plan, kind: AiCallKind): number {
+  return AI_CALL_LIMITS[kind][plan];
+}
+
 /** Month key used by the arm_run_usage table: 'YYYY-MM' in UTC. */
 export function monthKey(date: Date = new Date()): string {
   const y = date.getUTCFullYear();

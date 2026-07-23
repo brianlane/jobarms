@@ -40,6 +40,22 @@ describe("armRunLimit / canTailor", () => {
   });
 });
 
+describe("aiCallLimit", () => {
+  it("free tier: enough parses to onboard, no tailoring", async () => {
+    const { aiCallLimit } = await import("@/lib/plans");
+    expect(aiCallLimit("free", "resume_parse")).toBe(5);
+    expect(aiCallLimit("free", "tailor_resume")).toBe(0);
+    expect(aiCallLimit("free", "cover_letter")).toBe(0);
+  });
+
+  it("premium tier: generous fair-use ceilings, never unlimited", async () => {
+    const { aiCallLimit } = await import("@/lib/plans");
+    expect(aiCallLimit("premium", "resume_parse")).toBe(100);
+    expect(aiCallLimit("premium", "tailor_resume")).toBe(100);
+    expect(aiCallLimit("premium", "cover_letter")).toBe(100);
+  });
+});
+
 describe("monthKey", () => {
   it("formats UTC YYYY-MM with zero padding", () => {
     expect(monthKey(new Date(Date.UTC(2026, 0, 15)))).toBe("2026-01");

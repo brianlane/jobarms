@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { canTailor, effectivePlan, type SubscriptionRow } from "@/lib/plans";
+import {
+  aiCallLimit,
+  canTailor,
+  effectivePlan,
+  monthKey,
+  type SubscriptionRow
+} from "@/lib/plans";
 import { generateCoverLetter, tailorResume } from "@/lib/tailor";
 import { renderResumePdf } from "@/lib/resume-pdf";
 import { parsedResumeSchema } from "@/lib/resume-parse";
@@ -44,9 +50,26 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     .select("plan, status, current_period_end, cancel_at_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!canTailor(effectivePlan(sub as SubscriptionRow | null))) {
+  const plan = effectivePlan(sub as SubscriptionRow | null);
+  if (!canTailor(plan)) {
     return NextResponse.json(
       { error: "premium_required", hint: "Resume tailoring and cover letters are Premium features." },
+      { status: 402 }
+    );
+  }
+
+  // Meter the model call (fair-use cap; see plans.aiCallLimit).
+  const kind = parsed.data.kind === "resume" ? "tailor_resume" : "cover_letter";
+  const mk = monthKey();
+  const { data: reserved } = await service.rpc("try_reserve_ai_call", {
+    p_user_id: user.id,
+    p_month_key: mk,
+    p_kind: kind,
+    p_limit: aiCallLimit(plan, kind)
+  });
+  if (!reserved) {
+    return NextResponse.json(
+      { error: "ai_limit_reached", hint: "You've hit this month's fair-use cap for this feature. It resets next month." },
       { status: 402 }
     );
   }
@@ -118,6 +141,15 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       download_url: signed?.signedUrl ?? null
     });
   } catch {
-    return NextResponse.json({ error: "generation_failed" }, { status: 502 });
+    // Generation failed: give the metered slot back.
+    await service.rpc("release_ai_call", {
+      p_user_id: user.id,
+      p_month_key: mk,
+      p_kind: kind
+    });
+    return NextResponse.json(
+      { error: "generation_failed", hint: "Temporary AI error. Try again in a moment." },
+      { status: 503 }
+    );
   }
 }
