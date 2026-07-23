@@ -326,11 +326,14 @@ Dependabot is fully automated within the merge policy:
   Dependabot PR `dependabot-automerge`; safety lives in the merger, not the
   label.
 - `dependabot-automerge.yml` evaluates after CI, CodeQL, and Dependency
-  Audit complete (plus Vercel's late status events) and squash-merges ONLY
-  when every check run on the head commit concluded success (skipped,
-  neutral, and cancelled all block), every commit status is green, and
-  there are zero unresolved review threads. A red check on a major bump
-  blocks it forever, by design.
+  Audit complete (plus status events and a 2-hourly sweep that catches app
+  checks finishing last) and squash-merges ONLY when every check run on the
+  head commit concluded success (skipped, neutral, and cancelled all
+  block), every commit status is green, and there are zero unresolved
+  review threads. A red check on a major bump blocks it forever, by design.
+  Note: merges performed with the workflow token do not trigger a main CI
+  run (GitHub recursion prevention), so auto-merged bumps deploy with the
+  next regular push to main.
 
 Also: `audit.yml` (weekly + PR dependency audit across every package tree)
 and `codeql.yml` (static analysis).
