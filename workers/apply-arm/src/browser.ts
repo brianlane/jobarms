@@ -9,8 +9,10 @@ import { launch, type Browser, type Page } from "@cloudflare/playwright";
 import type { Answer, Env, FormField, RunParams } from "./types";
 import { ADAPTERS } from "./adapters";
 import { looksLikeApplicationForm } from "./form-sanity";
+import { filterApplicationFields } from "./field-filter";
 import { diagnosePage } from "./gemini";
 import { getPlaybook, recordPlaybookFailure } from "./db";
+import { detectInteractiveChallenge, solveInteractiveChallenge } from "./captcha-vision";
 
 export interface RecoveryStrategy {
   action: "click" | "iframe" | "scroll";
@@ -31,8 +33,19 @@ export class FormNotFoundError extends Error {
   }
 }
 
+/**
+ * - filled: review-gate fill only (submit=false).
+ * - submitted: the employer confirmed receipt.
+ * - captcha_blocked: everything filled, but an anti-bot check could not be
+ *   cleared (invisible score too low, or a visible challenge we couldn't solve).
+ *   Counts as work done (consumed), not a system failure.
+ * - unconfirmed: submit clicked, no confirmation and no captcha signal (likely
+ *   went through; treated as work done upstream).
+ */
+export type SubmitOutcome = "filled" | "submitted" | "captcha_blocked" | "unconfirmed";
+
 export interface SubmitResult {
-  confirmed: boolean;
+  outcome: SubmitOutcome;
   screenshot: Uint8Array;
 }
 
@@ -70,11 +83,13 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
     const acquire = async (): Promise<FormField[]> =>
       collectFields(page, adapter.formSelector).catch(() => [] as FormField[]);
 
+    // Sanity always runs on RAW fields (keeps the type==="file" resume signal);
+    // the surfaced set is filtered to real questions only.
     let fields = await acquire();
     let sanity = looksLikeApplicationForm(fields);
     if (sanity.ok) {
       const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-      return { fields, screenshot, recovery: null };
+      return { fields: filterApplicationFields(fields), screenshot, recovery: null };
     }
 
     const domain = new URL(page.url()).hostname;
@@ -88,7 +103,11 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
       sanity = looksLikeApplicationForm(fields);
       if (sanity.ok) {
         const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-        return { fields, screenshot, recovery: { source: "playbook", strategy: playbook, domain } };
+        return {
+          fields: filterApplicationFields(fields),
+          screenshot,
+          recovery: { source: "playbook", strategy: playbook, domain }
+        };
       }
       await recordPlaybookFailure(env, domain, params.ats);
     }
@@ -107,7 +126,11 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
         if (looksLikeApplicationForm(wide).ok) {
           const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
           const strategy: RecoveryStrategy = { action: "scroll" }; // "extract page-wide"
-          return { fields: wide, screenshot, recovery: { source: "vision", strategy, domain } };
+          return {
+            fields: filterApplicationFields(wide),
+            screenshot,
+            recovery: { source: "vision", strategy, domain }
+          };
         }
       }
       if (diagnosis.action === "none") {
@@ -130,7 +153,11 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
       }
       if (looksLikeApplicationForm(fields).ok) {
         const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-        return { fields, screenshot, recovery: { source: "vision", strategy, domain } };
+        return {
+          fields: filterApplicationFields(fields),
+          screenshot,
+          recovery: { source: "vision", strategy, domain }
+        };
       }
       lastReason = sanity.reason;
     }
@@ -210,17 +237,54 @@ export async function fillAndMaybeSubmit(
     for (const answer of answers) {
       if (answer.skipped || answer.value === "") continue;
       await fillField(page, adapter.formSelector, answer);
+      // Human-like dwell between fields (Layer 1 behavioral realism).
+      await page.waitForTimeout(300 + Math.floor(Math.random() * 900));
     }
 
     if (!submit) {
       const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-      return { confirmed: false, screenshot };
+      return { outcome: "filled", screenshot };
     }
 
+    // Layer 2: if a visible interactive challenge is present before submit
+    // (e.g. reCAPTCHA v2 checkbox on the form), try to clear it ourselves.
+    const preKind = await detectInteractiveChallenge(page);
+    if (preKind) {
+      await solveInteractiveChallenge(env, page, preKind).catch(() => false);
+    }
+
+    // Longer human pause before the final submit so v3 behavioral scoring
+    // sees deliberate interaction, then click the REAL control (never
+    // programmatic submit) so the site's captcha JS mints its token.
+    await page.waitForTimeout(1000 + Math.floor(Math.random() * 1000));
     await adapter.submit(page);
-    const confirmed = await adapter.confirmSubmitted(page);
+    await page.waitForTimeout(2500);
+
+    if (await adapter.confirmSubmitted(page)) {
+      const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+      return { outcome: "submitted", screenshot };
+    }
+
+    // A challenge escalated on submit (invisible check failed and forced a
+    // visible puzzle, or the form re-rendered with a captcha). Try once more.
+    const postKind = await detectInteractiveChallenge(page);
+    if (postKind) {
+      const solved = await solveInteractiveChallenge(env, page, postKind).catch(() => false);
+      if (solved) {
+        await adapter.submit(page).catch(() => {});
+        await page.waitForTimeout(2500);
+        if (await adapter.confirmSubmitted(page)) {
+          const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+          return { outcome: "submitted", screenshot };
+        }
+      }
+      const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+      return { outcome: "captcha_blocked", screenshot };
+    }
+
+    // No confirmation, no captcha signal: submit most likely went through.
     const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-    return { confirmed, screenshot };
+    return { outcome: "unconfirmed", screenshot };
   });
 }
 
@@ -325,6 +389,11 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
   const tag = await el.evaluate((node: any) => node.tagName.toLowerCase());
   const type = tag === "input" ? await el.getAttribute("type") : tag;
 
+  // Layer 1 realism: bring the field into view and move the mouse to it
+  // before interacting, so behavior reads less like a bot.
+  await el.scrollIntoViewIfNeeded().catch(() => {});
+  await moveMouseTo(page, el).catch(() => {});
+
   try {
     switch ((type ?? "text").toLowerCase()) {
       case "select":
@@ -352,11 +421,26 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
       case "file":
         break; // handled by attachResume
       default:
-        await el.fill(answer.value);
+        // Type character-by-character with jitter instead of instant fill.
+        await el.click().catch(() => {});
+        await el.fill("");
+        await el.pressSequentially(answer.value, { delay: 40 + Math.floor(Math.random() * 50) });
     }
   } catch {
     // Field visible in DOM but not interactable - leave for review.
   }
+}
+
+/** Move the mouse to an element's center in a couple of steps (human-like). */
+async function moveMouseTo(
+  page: Page,
+  el: ReturnType<Page["locator"]>
+): Promise<void> {
+  const box = await el.boundingBox();
+  if (!box) return;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y, { steps: 6 });
 }
 
 function CSS_escape(value: string): string {

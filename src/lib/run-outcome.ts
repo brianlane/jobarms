@@ -50,6 +50,9 @@ export function retryDecision(run: RunLike | null, now: Date = new Date()): Retr
     // Terminal runs already settled their own metering (worker refunds
     // system failures; refund_arm_run is idempotent so a second call from
     // retry is harmless for legacy runs that predate worker refunds).
+    // "Work done = paid": a failed run that still produced real drafted answers
+    // (captcha_blocked, submit_unconfirmed) does NOT refund; only a failure with
+    // nothing to show (form_not_found, early crash) does.
     return {
       eligible: true,
       cancelStale: false,

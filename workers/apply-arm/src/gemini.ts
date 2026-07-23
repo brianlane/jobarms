@@ -93,6 +93,51 @@ Return ONLY the JSON object.`
   };
 }
 
+/**
+ * Parse the model's tile response into validated, in-range, unique indices.
+ * Pure (unit-tested): the model returns {"tiles": [0,3,5]} for a gridCount-cell
+ * challenge; anything out of range or non-numeric is dropped.
+ */
+export function parseTileResponse(raw: unknown, gridCount: number): number[] {
+  const arr =
+    raw && typeof raw === "object" && Array.isArray((raw as { tiles?: unknown }).tiles)
+      ? (raw as { tiles: unknown[] }).tiles
+      : Array.isArray(raw)
+        ? (raw as unknown[])
+        : [];
+  const seen = new Set<number>();
+  for (const v of arr) {
+    const n = typeof v === "number" ? v : parseInt(String(v), 10);
+    if (Number.isInteger(n) && n >= 0 && n < gridCount) seen.add(n);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Vision solve for an image-grid captcha challenge (reCAPTCHA v2 / hCaptcha).
+ * Given a screenshot of the challenge, the instruction ("select all squares
+ * with crosswalks"), and the grid size, ask Gemini which cells match.
+ * Cells are numbered left-to-right, top-to-bottom starting at 0.
+ */
+export async function solveImageGrid(
+  env: Env,
+  screenshotPng: Uint8Array,
+  instruction: string,
+  rows: number,
+  cols: number
+): Promise<number[]> {
+  const gridCount = rows * cols;
+  const raw = await generateJsonFromParts(env, [
+    {
+      inlineData: { mimeType: "image/png", data: base64FromBytes(screenshotPng) }
+    },
+    {
+      text: `This image is a ${rows}x${cols} captcha grid. The instruction is: "${instruction}". Cells are numbered 0 to ${gridCount - 1}, left to right, top to bottom (row 0 is cells 0..${cols - 1}). Return JSON {"tiles": [<indices of every cell that clearly matches the instruction>]}. If a cell only partially contains the object, include it. Return ONLY the JSON.`
+    }
+  ]);
+  return parseTileResponse(raw, gridCount);
+}
+
 function base64FromBytes(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;

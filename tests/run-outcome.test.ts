@@ -46,6 +46,13 @@ describe("retryDecision", () => {
     expect(d.refundStale).toBe(false);
   });
 
+  it("captcha_blocked / submit_unconfirmed CONSUME: failed with drafted answers never refunds", () => {
+    // Both outcomes end as status=failed but carry the drafted answers the arm
+    // filled in, so "work done = paid" -> no refund on retry.
+    const d = retryDecision({ status: "failed", answers: realAnswers, created_at: stale }, NOW);
+    expect(d.refundStale).toBe(false);
+  });
+
   it("canceled run: eligible, metering already settled", () => {
     const d = retryDecision({ status: "canceled", answers: null, created_at: recent }, NOW);
     expect(d.eligible).toBe(true);
