@@ -1,14 +1,13 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/supabase/auth";
 import { effectivePlan, PLAN_COPY, type SubscriptionRow } from "@/lib/plans";
 import { BillingActions } from "@/components/BillingActions";
 
 export const metadata = { title: "Billing" };
 
 export default async function BillingPage() {
+  const user = await getAuthUser();
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
 
   const { data: sub } = await supabase
     .from("subscriptions")

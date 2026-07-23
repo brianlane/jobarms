@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/supabase/auth";
 import { scoreJob, type MatchProfile } from "@/lib/match";
 import { SUPPORTED_ATS, type Ats } from "@/lib/ats";
 
@@ -17,10 +18,8 @@ interface JobRow {
 }
 
 export default async function DiscoverPage() {
+  const user = await getAuthUser();
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
 
   const [{ data: profileRow }, { data: jobRows }, { data: applied }] = await Promise.all([
     supabase.from("profiles").select("headline, skills, preferences").eq("id", user!.id).single(),

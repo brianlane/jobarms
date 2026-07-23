@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/supabase/auth";
 import { STATUS_LABELS, STATUS_STYLES, type ApplicationStatus } from "@/lib/application-status";
 import { StatusControls } from "@/components/StatusControls";
 import { RunPanel, type RunData } from "@/components/RunPanel";
@@ -11,10 +12,8 @@ export const metadata = { title: "Application" };
 
 export default async function ApplicationDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
+  const user = await getAuthUser();
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
 
   const { data: app } = await supabase
     .from("applications")

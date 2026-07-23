@@ -1,13 +1,12 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/supabase/auth";
 import { ProfileEditor, type ProfileData } from "@/components/ProfileEditor";
 
 export const metadata = { title: "Profile" };
 
 export default async function ProfilePage() {
+  const user = await getAuthUser();
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
 
   const { data: profile } = await supabase
     .from("profiles")

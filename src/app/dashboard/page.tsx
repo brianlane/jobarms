@@ -1,14 +1,13 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/supabase/auth";
 import { armRunLimit, effectivePlan, monthKey, type SubscriptionRow } from "@/lib/plans";
 
 export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
+  const user = await getAuthUser();
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
 
   const [{ data: profile }, { data: sub }, { data: usage }] = await Promise.all([
     supabase.from("profiles").select("full_name, onboarding_complete").eq("id", user!.id).maybeSingle(),

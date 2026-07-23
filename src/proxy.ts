@@ -28,11 +28,13 @@ export default async function proxy(request: NextRequest) {
     }
   );
 
-  // IMPORTANT: getUser() (not getSession()) — revalidates the JWT against
-  // Supabase Auth and refreshes expired sessions.
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
+  // getClaims() verifies the JWT locally against the project's public
+  // signing key (cached JWKS) and still refreshes expired sessions through
+  // the cookie plumbing above — unlike getUser(), it doesn't add a network
+  // round trip to Supabase Auth on EVERY request, which was the biggest
+  // chunk of per-page latency.
+  const { data } = await supabase.auth.getClaims();
+  const user = data?.claims?.sub ? data.claims : null;
 
   const path = request.nextUrl.pathname;
   const needsAuth = path.startsWith("/dashboard") || path.startsWith("/onboarding");
