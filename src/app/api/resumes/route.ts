@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { parseResume } from "@/lib/resume-parse";
+import { NotAResumeError, parseResume } from "@/lib/resume-parse";
 
 export const maxDuration = 60; // Gemini parse can take a while on long resumes
 
@@ -102,14 +102,33 @@ export async function POST(request: Request) {
       .eq("id", user.id);
 
     return NextResponse.json({ resume_id: row.id, parsed });
-  } catch {
+  } catch (err) {
+    // Record the REAL error (the earlier constant string made the first
+    // production failure, a transient Gemini 503, undiagnosable).
+    const message = err instanceof Error ? err.message : String(err);
+    const notAResume = err instanceof NotAResumeError;
     await service
       .from("resumes")
-      .update({ parse_status: "failed", parse_error: "gemini_parse_failed" })
+      .update({ parse_status: "failed", parse_error: message.slice(0, 500) })
       .eq("id", row.id);
+
+    if (notAResume) {
+      return NextResponse.json(
+        {
+          resume_id: row.id,
+          error: "not_a_resume",
+          hint: "That file doesn't look like a resume. Upload your resume as PDF or DOCX."
+        },
+        { status: 422 }
+      );
+    }
     return NextResponse.json(
-      { resume_id: row.id, error: "parse_failed", hint: "File stored; you can fill the profile manually." },
-      { status: 422 }
+      {
+        resume_id: row.id,
+        error: "parse_failed",
+        hint: "The AI reader hit a temporary error. Your file is saved; try Parse again in a moment."
+      },
+      { status: 503 }
     );
   }
 }

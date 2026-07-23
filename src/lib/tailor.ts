@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { geminiClient, GEMINI_TEXT_MODEL, extractJson } from "@/lib/gemini";
+import { generateWithRetry, extractJson } from "@/lib/gemini";
 import { parsedResumeSchema, type ParsedResume } from "@/lib/resume-parse";
 
 export const tailorResultSchema = z.object({
@@ -23,9 +23,7 @@ export async function tailorResume(
   jobCompany: string,
   jobDescription: string
 ): Promise<TailorResult> {
-  const ai = geminiClient();
-  const response = await ai.models.generateContent({
-    model: GEMINI_TEXT_MODEL,
+  const text = await generateWithRetry({
     contents: [
       {
         role: "user",
@@ -54,7 +52,7 @@ Return JSON: {"resume": {full_name, email, phone, location, headline, summary, l
     config: { responseMimeType: "application/json", temperature: 0.3 }
   });
 
-  return tailorResultSchema.parse(extractJson<unknown>(response.text ?? ""));
+  return tailorResultSchema.parse(extractJson<unknown>(text));
 }
 
 /** First-person cover letter grounded only in real profile facts. */
@@ -64,9 +62,7 @@ export async function generateCoverLetter(
   jobCompany: string,
   jobDescription: string
 ): Promise<string> {
-  const ai = geminiClient();
-  const response = await ai.models.generateContent({
-    model: GEMINI_TEXT_MODEL,
+  const raw = await generateWithRetry({
     contents: [
       {
         role: "user",
@@ -88,7 +84,7 @@ Rules: 250-350 words, first person, specific to this company and role, grounded 
     config: { temperature: 0.5 }
   });
 
-  const text = (response.text ?? "").trim();
+  const text = raw.trim();
   if (!text) throw new Error("empty cover letter");
   return text;
 }

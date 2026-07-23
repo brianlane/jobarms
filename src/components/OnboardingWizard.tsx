@@ -18,6 +18,7 @@ export function OnboardingWizard() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("upload");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>({
     full_name: "",
@@ -37,11 +38,46 @@ export function OnboardingWizard() {
   async function uploadResume(file: File) {
     setBusy(true);
     setError(null);
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/resumes", { method: "POST", body: form });
-    const body = await res.json();
+    setProgress(4);
+
+    // Parsing takes ~5-20s (upload + Gemini reading the document). True
+    // progress isn't observable from one request, so ease toward 90% and
+    // complete on response.
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const eased = Math.min(90, Math.round(100 * (1 - Math.exp(-elapsed / 7))));
+      setProgress((p) => Math.max(p, eased));
+    }, 250);
+
+    interface ParsedFields {
+      full_name?: string;
+      headline?: string;
+      location?: string;
+      phone?: string;
+      summary?: string;
+      skills?: string[];
+    }
+    let res: Response;
+    let body: { parsed?: ParsedFields; hint?: string; error?: string } = {};
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      res = await fetch("/api/resumes", { method: "POST", body: form });
+      body = await res.json();
+    } catch {
+      clearInterval(ticker);
+      setBusy(false);
+      setProgress(0);
+      setError("Network error. Try again.");
+      return;
+    }
+    clearInterval(ticker);
+    setProgress(100);
+    await new Promise((r) => setTimeout(r, 350)); // let the bar land
     setBusy(false);
+    setProgress(0);
+
     if (res.ok && body.parsed) {
       setDraft({
         full_name: body.parsed.full_name ?? "",
@@ -52,11 +88,10 @@ export function OnboardingWizard() {
         skills: body.parsed.skills ?? []
       });
       setStep("review");
-    } else if (res.status === 422) {
-      setError("We stored your resume but couldn't parse it. Fill in the basics below.");
-      setStep("review");
     } else {
-      setError(body.hint ?? body.error ?? "Upload failed.");
+      // not_a_resume, transient AI error, bad file type: stay on the upload
+      // step with the server's specific message so the user can just retry.
+      setError(body.hint ?? body.error ?? "Upload failed. Try again.");
     }
   }
 
@@ -124,8 +159,33 @@ export function OnboardingWizard() {
           <p className="mt-2 text-slate-500">
             PDF or DOCX. Gemini reads it once and builds the profile your arms apply with.
           </p>
-          <label className="mt-6 flex h-40 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-arm-500">
-            {busy ? "Parsing your resume…" : "Click to choose a file"}
+          <label className="mt-6 flex h-40 cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-slate-300 px-8 text-slate-500 hover:border-arm-500">
+            {busy ? (
+              <>
+                <span className="text-sm font-medium text-slate-600">
+                  {progress < 25
+                    ? "Uploading your resume..."
+                    : progress < 90
+                      ? "Gemini is reading your resume..."
+                      : "Building your profile..."}
+                </span>
+                <span
+                  className="block h-2 w-full max-w-sm overflow-hidden rounded-full bg-slate-200"
+                  role="progressbar"
+                  aria-valuenow={progress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
+                  <span
+                    className="block h-full rounded-full bg-arm-500 transition-[width] duration-300 ease-out"
+                    style={{ width: `${progress}%` }}
+                  />
+                </span>
+                <span className="font-mono text-xs text-slate-400">{progress}%</span>
+              </>
+            ) : (
+              "Click to choose a file"
+            )}
             <input
               type="file"
               accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"

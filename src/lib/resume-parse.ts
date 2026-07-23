@@ -1,38 +1,50 @@
 import { z } from "zod";
-import { geminiClient, GEMINI_TEXT_MODEL, extractJson } from "@/lib/gemini";
+import { generateWithRetry, extractJson } from "@/lib/gemini";
 
-/** Structured resume shape - mirrors the profiles table columns it fills. */
+/**
+ * Structured resume shape - mirrors the profiles table columns it fills.
+ * Every field uses .catch() defaults: a model quirk (null instead of "",
+ * a stray type) can NEVER fail a real resume. Parsing only fails when the
+ * model call itself fails after retries, or the output is not JSON at all.
+ */
+const str = z.string().catch("");
+const strArr = z.array(z.string().catch("")).catch([]);
+
 export const parsedResumeSchema = z.object({
-  full_name: z.string().default(""),
-  email: z.string().default(""),
-  phone: z.string().default(""),
-  location: z.string().default(""),
-  headline: z.string().default(""),
-  summary: z.string().default(""),
-  links: z.record(z.string(), z.string()).default({}),
+  full_name: str,
+  email: str,
+  phone: str,
+  location: str,
+  headline: str,
+  summary: str,
+  links: z.record(z.string(), z.string().catch("")).catch({}),
   work_history: z
     .array(
-      z.object({
-        company: z.string().default(""),
-        title: z.string().default(""),
-        start: z.string().default(""),
-        end: z.string().default(""),
-        bullets: z.array(z.string()).default([])
-      })
+      z
+        .object({
+          company: str,
+          title: str,
+          start: str,
+          end: str,
+          bullets: strArr
+        })
+        .catch({ company: "", title: "", start: "", end: "", bullets: [] })
     )
-    .default([]),
+    .catch([]),
   education: z
     .array(
-      z.object({
-        school: z.string().default(""),
-        degree: z.string().default(""),
-        field: z.string().default(""),
-        start: z.string().default(""),
-        end: z.string().default("")
-      })
+      z
+        .object({
+          school: str,
+          degree: str,
+          field: str,
+          start: str,
+          end: str
+        })
+        .catch({ school: "", degree: "", field: "", start: "", end: "" })
     )
-    .default([]),
-  skills: z.array(z.string()).default([])
+    .catch([]),
+  skills: strArr
 });
 
 export type ParsedResume = z.infer<typeof parsedResumeSchema>;
@@ -43,19 +55,26 @@ links (object mapping label like "linkedin"/"github"/"portfolio" to URL),
 work_history (array of {company, title, start, end, bullets[]}; dates as "MMM YYYY" or "" if absent; current roles end="Present"),
 education (array of {school, degree, field, start, end}),
 skills (array of short skill strings).
-Use "" or [] for anything absent. Never use the em dash character anywhere in your output; use a comma, colon, or hyphen instead. Return ONLY the JSON object.`;
+Use "" or [] for anything absent (never null). If the document is clearly NOT a resume or CV (e.g. an invoice, essay, or random document), return {"not_a_resume": true} instead.
+Never use the em dash character anywhere in your output; use a comma, colon, or hyphen instead. Return ONLY the JSON object.`;
+
+export class NotAResumeError extends Error {
+  constructor() {
+    super("not_a_resume");
+  }
+}
 
 /**
  * Parse a resume file (PDF or DOCX bytes) into a structured profile via
- * Gemini. Throws on model/parse failure - callers record parse_status.
+ * Gemini, with capacity retries + model fallback. Throws NotAResumeError
+ * only when the model says the document is blatantly not a resume;
+ * throws the underlying error when the model call fails outright.
  */
 export async function parseResume(
   fileBytes: Uint8Array,
   mimeType: string
 ): Promise<ParsedResume> {
-  const ai = geminiClient();
-  const response = await ai.models.generateContent({
-    model: GEMINI_TEXT_MODEL,
+  const text = await generateWithRetry({
     contents: [
       {
         role: "user",
@@ -68,6 +87,9 @@ export async function parseResume(
     config: { responseMimeType: "application/json", temperature: 0 }
   });
 
-  const raw = extractJson<unknown>(response.text ?? "");
+  const raw = extractJson<Record<string, unknown>>(text);
+  if (raw && typeof raw === "object" && raw.not_a_resume === true) {
+    throw new NotAResumeError();
+  }
   return parsedResumeSchema.parse(raw);
 }
