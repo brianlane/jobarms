@@ -98,8 +98,20 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
     for (let round = 0; round < 2; round++) {
       const shot = new Uint8Array(await page.screenshot({ fullPage: false }));
       const diagnosis = await diagnosePage(env, shot, page.url(), lastReason).catch(() => null);
-      if (!diagnosis || diagnosis.action === "none") {
-        lastReason = diagnosis?.reason || lastReason;
+      if (!diagnosis) break;
+
+      // Vision sees a real form but our adapter selector missed it (custom
+      // career-site markup). Widen extraction to every form on the page.
+      if (diagnosis.form_visible && diagnosis.action === "none") {
+        const wide = await collectFields(page, "body").catch(() => [] as FormField[]);
+        if (looksLikeApplicationForm(wide).ok) {
+          const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+          const strategy: RecoveryStrategy = { action: "scroll" }; // "extract page-wide"
+          return { fields: wide, screenshot, recovery: { source: "vision", strategy, domain } };
+        }
+      }
+      if (diagnosis.action === "none") {
+        lastReason = diagnosis.reason || lastReason;
         break;
       }
 
@@ -111,7 +123,12 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
       await adapter.openApplication(page);
       fields = await acquire();
       sanity = looksLikeApplicationForm(fields);
-      if (sanity.ok) {
+      if (!sanity.ok) {
+        // Selector still missed it; try a page-wide sweep before giving up.
+        const wide = await collectFields(page, "body").catch(() => [] as FormField[]);
+        if (looksLikeApplicationForm(wide).ok) fields = wide;
+      }
+      if (looksLikeApplicationForm(fields).ok) {
         const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
         return { fields, screenshot, recovery: { source: "vision", strategy, domain } };
       }
@@ -293,9 +310,14 @@ async function collectFields(page: Page, formSelector: string): Promise<FormFiel
 
 async function fillField(page: Page, formSelector: string, answer: Answer): Promise<void> {
   const esc = answer.name.replace(/"/g, '\\"');
-  const base = `${formSelector} [name="${esc}"], ${formSelector} #${CSS_escape(answer.name)}`;
+  const scoped = `${formSelector} [name="${esc}"], ${formSelector} #${CSS_escape(answer.name)}`;
 
-  const el = page.locator(base).first();
+  // Prefer the adapter-scoped match; fall back to a page-wide match so
+  // recovered custom forms (extracted page-wide) still fill.
+  let el = page.locator(scoped).first();
+  if ((await el.count()) === 0) {
+    el = page.locator(`[name="${esc}"], #${CSS_escape(answer.name)}`).first();
+  }
   const count = await el.count();
   if (count === 0) return;
 
