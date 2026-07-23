@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { generateWithRetry, extractJson } from "@/lib/gemini";
+import {
+  fixShoutyField,
+  fixShoutyProse,
+  normalizeEmail,
+  normalizePhone
+} from "@/lib/normalize";
 
 /**
  * Structured resume shape - mirrors the profiles table columns it fills.
@@ -91,5 +97,35 @@ export async function parseResume(
   if (raw && typeof raw === "object" && raw.not_a_resume === true) {
     throw new NotAResumeError();
   }
-  return parsedResumeSchema.parse(raw);
+  return normalizeParsedResume(parsedResumeSchema.parse(raw));
+}
+
+/**
+ * Deterministic cleanup applied to every parse: resumes styled in ALL CAPS
+ * come through shouting, and phone formats vary wildly. Fixed in code so it
+ * never depends on model behavior.
+ */
+export function normalizeParsedResume(parsed: ParsedResume): ParsedResume {
+  return {
+    ...parsed,
+    full_name: fixShoutyField(parsed.full_name),
+    email: normalizeEmail(parsed.email),
+    phone: normalizePhone(parsed.phone),
+    location: fixShoutyField(parsed.location),
+    headline: fixShoutyField(parsed.headline),
+    summary: fixShoutyProse(parsed.summary),
+    work_history: parsed.work_history.map((role) => ({
+      ...role,
+      company: fixShoutyField(role.company),
+      title: fixShoutyField(role.title),
+      bullets: role.bullets.map(fixShoutyProse)
+    })),
+    education: parsed.education.map((ed) => ({
+      ...ed,
+      school: fixShoutyField(ed.school),
+      degree: fixShoutyField(ed.degree),
+      field: fixShoutyField(ed.field)
+    })),
+    skills: parsed.skills.map((skill) => fixShoutyField(skill))
+  };
 }
