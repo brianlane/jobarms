@@ -55,7 +55,7 @@ export function DashboardNav({ variant }: { variant: "sidebar" | "topbar" }) {
             aria-current={active ? "page" : undefined}
             className={`rounded-lg px-3.5 py-2.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors ${
               active
-                ? "border-l-2 border-arm-400 bg-ink-800 font-bold text-arm-300"
+                ? "bg-ink-800 font-bold text-arm-300"
                 : "text-slate-400 hover:bg-ink-800 hover:text-white"
             }`}
           >

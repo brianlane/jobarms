@@ -57,8 +57,9 @@ export default async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    // Skip static assets and images; run everywhere else.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"
-  ]
+  // Only routes that need session refresh / auth gating. Marketing pages
+  // (/, /pricing, sitemap, OG images) deliberately DON'T match: routing them
+  // through the proxy forced every static page through a server-function
+  // invocation (cold starts included) instead of the edge cache.
+  matcher: ["/dashboard/:path*", "/onboarding/:path*", "/login", "/signup"]
 };
