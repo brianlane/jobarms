@@ -134,8 +134,8 @@ export const PLAN_COPY = {
     name: "Max",
     price: `$${MAX_PRICE_USD_MONTHLY}/mo`,
     features: [
+      "Everything included in Premium",
       `${MAX_ARM_RUNS_PER_DAY} autonomous applications every day`,
-      "Only successful submissions count",
       "300 tailored resumes + cover letters a month",
       "300 resume parses a month",
       "Full-auto mode at volume"
