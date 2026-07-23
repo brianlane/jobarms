@@ -1,7 +1,7 @@
 {
   "name": "jobarms-ingest",
   "version": "0.1.0",
-  "description": "JobArms ingestion worker — cron polling of public ATS endpoints + aggregator APIs into Supabase",
+  "description": "JobArms ingestion worker - cron polling of public ATS endpoints + aggregator APIs into Supabase",
   "private": true,
   "type": "module",
   "scripts": {

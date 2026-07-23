@@ -1,6 +1,6 @@
 /**
  * Plan definitions + gating. One source of truth for what free vs premium
- * includes — UI copy, API gates, and metering all read from here.
+ * includes - UI copy, API gates, and metering all read from here.
  */
 
 export const FREE_ARM_RUNS_PER_MONTH = 5;

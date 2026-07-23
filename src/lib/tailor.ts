@@ -14,7 +14,7 @@ export type TailorResult = z.infer<typeof tailorResultSchema>;
 
 /**
  * Tailor the user's profile into a job-specific resume. Rewrites summaries
- * and bullets around the job's language — but NEVER invents employers,
+ * and bullets around the job's language - but NEVER invents employers,
  * titles, dates, or credentials.
  */
 export async function tailorResume(
@@ -44,6 +44,7 @@ Hard rules:
 - NEVER invent employers, job titles, dates, degrees, or certifications. Every factual claim must exist in the profile.
 - You MAY rewrite the summary, reorder skills, and rewrite work_history bullets to emphasize relevant experience using the job description's own terminology.
 - Keep bullets concise and achievement-oriented.
+- Never use the em dash character anywhere in your output; use a comma, colon, or hyphen instead.
 
 Return JSON: {"resume": {full_name, email, phone, location, headline, summary, links, work_history:[{company,title,start,end,bullets[]}], education:[{school,degree,field,start,end}], skills[]}, "keywords": {"incorporated": [terms from the JD you worked in], "missing": [important JD terms the candidate genuinely lacks]}}. Return ONLY the JSON.`
           }
@@ -79,7 +80,7 @@ ${JSON.stringify(profile)}
 JOB DESCRIPTION:
 ${jobDescription.slice(0, 8000)}
 
-Rules: 250-350 words, first person, specific to this company and role, grounded ONLY in real profile facts (never invent experience), no salutation placeholders like "[Hiring Manager]" — use "Hi ${jobCompany} team,". Plain text only.`
+Rules: 250-350 words, first person, specific to this company and role, grounded ONLY in real profile facts (never invent experience), no salutation placeholders like "[Hiring Manager]" - use "Hi ${jobCompany} team,". Never use the em dash character anywhere; use a comma, colon, or hyphen instead. Plain text only.`
           }
         ]
       }

@@ -1,5 +1,5 @@
 /**
- * ApplyRunWorkflow — one instance per arm run.
+ * ApplyRunWorkflow - one instance per arm run.
  *
  * queued → running (extract + answer) → [review gate] → submitting →
  * submitted | failed. Each step is retryable and returns only small JSON;
@@ -100,7 +100,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
         } else {
           await updateRun(env, params.runId, {
             status: "failed",
-            error: "submit_unconfirmed — the ATS never showed a confirmation; verify manually"
+            error: "submit_unconfirmed - the ATS never showed a confirmation; verify manually"
           });
           await updateApplication(env, params.applicationId, { status: "failed" });
           await logStep(env, params.runId, "submit_unconfirmed");

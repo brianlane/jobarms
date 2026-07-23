@@ -21,7 +21,7 @@ export interface SubmitResult {
 
 async function withBrowser<T>(env: Env, fn: (page: Page) => Promise<T>): Promise<T> {
   if (!env.BROWSER) {
-    throw new Error("BROWSER binding missing — Workers Paid + wrangler.jsonc bindings required");
+    throw new Error("BROWSER binding missing - Workers Paid + wrangler.jsonc bindings required");
   }
   const browser: Browser = await launch(env.BROWSER);
   try {
@@ -60,7 +60,7 @@ export async function fillAndMaybeSubmit(
     await adapter.openApplication(page);
     await page.waitForSelector(adapter.formSelector, { timeout: 20_000 });
 
-    // Attach the resume first — some ATSes autofill fields from it and we
+    // Attach the resume first - some ATSes autofill fields from it and we
     // want typed answers to win.
     if (params.resume.signedUrl) {
       await attachResume(page, params);
@@ -87,7 +87,7 @@ export async function fillAndMaybeSubmit(
 
 async function collectFields(page: Page, formSelector: string): Promise<FormField[]> {
   // The callback below is serialized and executed IN THE PAGE (browser DOM),
-  // so it's typed loosely — the worker's tsconfig has no DOM lib on purpose.
+  // so it's typed loosely - the worker's tsconfig has no DOM lib on purpose.
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const inPage = (elements: any[]): FormField[] => {
     const doc = (globalThis as any).document;
@@ -209,7 +209,7 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
         await el.fill(answer.value);
     }
   } catch {
-    // Field visible in DOM but not interactable — leave for review.
+    // Field visible in DOM but not interactable - leave for review.
   }
 }
 
@@ -234,6 +234,6 @@ async function attachResume(page: Page, params: RunParams): Promise<void> {
     // Give ATS-side resume parsing a moment before typed answers land.
     await page.waitForTimeout(3000);
   } catch {
-    // Upload widget not a plain input — leave for review gate.
+    // Upload widget not a plain input - leave for review gate.
   }
 }

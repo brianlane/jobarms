@@ -75,7 +75,7 @@ export async function renderResumePdf(resume: ParsedResume): Promise<Uint8Array>
     heading("Experience");
     for (const role of resume.work_history) {
       ensureRoom(30);
-      draw(`${role.title}${role.title && role.company ? " — " : ""}${role.company}`, bold, 11);
+      draw(`${role.title}${role.title && role.company ? " - " : ""}${role.company}`, bold, 11);
       const dates = [role.start, role.end].filter(Boolean).join(" – ");
       if (dates) draw(dates, font, 9, GRAY);
       for (const bullet of role.bullets.filter(Boolean)) {
@@ -89,7 +89,7 @@ export async function renderResumePdf(resume: ParsedResume): Promise<Uint8Array>
     heading("Education");
     for (const ed of resume.education) {
       const line1 = [ed.degree, ed.field].filter(Boolean).join(", ");
-      draw(`${ed.school}${line1 ? ` — ${line1}` : ""}`, bold, 11);
+      draw(`${ed.school}${line1 ? ` - ${line1}` : ""}`, bold, 11);
       const dates = [ed.start, ed.end].filter(Boolean).join(" – ");
       if (dates) draw(dates, font, 9, GRAY);
       y -= 2;

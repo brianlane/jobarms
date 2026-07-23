@@ -3,7 +3,7 @@ import type { Plan } from "@/lib/plans";
 
 /**
  * Pure mapping from a Stripe subscription object to our subscriptions row
- * shape — kept side-effect-free so the webhook logic is unit-testable.
+ * shape - kept side-effect-free so the webhook logic is unit-testable.
  */
 export interface SubscriptionUpdate {
   plan: Plan;

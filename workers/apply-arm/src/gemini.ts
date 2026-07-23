@@ -1,5 +1,5 @@
 /**
- * Gemini REST calls (plain fetch — no SDK in the worker bundle).
+ * Gemini REST calls (plain fetch - no SDK in the worker bundle).
  * Generates application answers from the user's profile + the extracted form.
  */
 import type { Answer, Env, FormField, RunParams } from "./types";
@@ -62,6 +62,7 @@ Rules:
 - Voluntary self-identification (EEO) fields: use the profile's eeo values if present; otherwise choose the "decline to answer" style option when available, else skip.
 - Open-ended questions ("Why do you want to work here?", cover letter): 2-5 sentences, first person, grounded ONLY in real profile facts, tailored to the job description.
 - If a field truly cannot be answered from the profile (e.g. asks for information the profile lacks), set skipped true and value "".
+- Never use the em dash character anywhere in any answer; use a comma, colon, or hyphen instead.
 Return ONLY the JSON array.`;
 
   const raw = await generateJson(env, prompt);

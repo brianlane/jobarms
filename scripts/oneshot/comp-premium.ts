@@ -1,6 +1,6 @@
 /**
  * One-shot: comp an account to Premium without Stripe (owner/test accounts).
- * Flips the user's subscriptions row to plan=premium, status=active — the
+ * Flips the user's subscriptions row to plan=premium, status=active - the
  * plan gate (src/lib/plans.ts effectivePlan) reads exactly these fields, so
  * every Premium feature unlocks: unlimited arm runs, tailoring, cover
  * letters, full-auto. No Stripe customer is created, so webhooks never
@@ -33,7 +33,7 @@ async function main() {
     userId = data.users.find((u) => u.email?.toLowerCase() === email.toLowerCase())?.id ?? null;
     if (data.users.length < 200) break;
   }
-  if (!userId) throw new Error(`No auth user found for ${email} — sign up on the site first.`);
+  if (!userId) throw new Error(`No auth user found for ${email} - sign up on the site first.`);
 
   const patch = revoke
     ? { plan: "free", status: "none" }

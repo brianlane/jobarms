@@ -63,7 +63,7 @@ alter table public.resumes
   foreign key (application_id) references public.applications (id) on delete set null;
 
 -- ---------------------------------------------------------------------------
--- application_runs — one row per arm session. Users see their runs; ONLY the
+-- application_runs - one row per arm session. Users see their runs; ONLY the
 -- arm (service role) writes them.
 -- ---------------------------------------------------------------------------
 create table public.application_runs (

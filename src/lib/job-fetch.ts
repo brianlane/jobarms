@@ -96,7 +96,7 @@ export async function fetchJobMeta(rawUrl: string): Promise<JobMeta> {
       };
     }
   } catch {
-    // network/timeout — tracker row just gets the URL
+    // network/timeout - tracker row just gets the URL
   }
   return fallback;
 }

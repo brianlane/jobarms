@@ -149,7 +149,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "run_insert_failed" }, { status: 500 });
   }
 
-  // --- signed resume URL (24h — outlives the review gate for most users) ---
+  // --- signed resume URL (24h - outlives the review gate for most users) ---
   let signedUrl: string | null = null;
   if (resume) {
     const { data: signed } = await service.storage

@@ -1,5 +1,5 @@
 /**
- * JobArms ingestion worker — cron-polls the public ATS endpoints of every
+ * JobArms ingestion worker - cron-polls the public ATS endpoints of every
  * active row in `companies` and upserts normalized postings into `jobs`
  * (conflict key: url). Runs on the half hour; a manual POST /ingest with the
  * cron secret does the same for testing.

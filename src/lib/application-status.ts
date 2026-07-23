@@ -1,4 +1,4 @@
-/** Tracker status display metadata (pure — unit-tested). */
+/** Tracker status display metadata (pure - unit-tested). */
 
 export const APPLICATION_STATUSES = [
   "saved",

@@ -1,5 +1,5 @@
 /**
- * Minimal Supabase REST + Storage client for the worker (service key —
+ * Minimal Supabase REST + Storage client for the worker (service key -
  * bypasses RLS; the worker only ever touches rows for the run it was given).
  * Plain fetch keeps the bundle small.
  */

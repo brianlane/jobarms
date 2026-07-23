@@ -15,7 +15,7 @@ env:
   NODE_VERSION: "24"
 
 jobs:
-  # Audits EVERY package tree in the repo, not just the root — sub-trees are
+  # Audits EVERY package tree in the repo, not just the root - sub-trees are
   # otherwise invisible to CI until Dependabot flags them.
   # - Root (`.`) audits prod deps only (`--omit=dev`); the dev tree doesn't
   #   ship to Vercel.

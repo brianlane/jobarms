@@ -14,13 +14,13 @@ export interface AtsAdapter {
 
 const greenhouse: AtsAdapter = {
   // Classic hosted boards use #application-form (new) or #application_form /
-  // #main_fields (legacy) — match either.
+  // #main_fields (legacy) - match either.
   formSelector: 'form[id*="application"], #application-form, #application_form',
 
   async openApplication(page) {
     // Hosted GH job pages show the form inline. Most companies now redirect
     // hosted URLs to their own careers site, which lazy-loads the Greenhouse
-    // form in an iframe — poll for form-or-iframe, then navigate INTO the
+    // form in an iframe - poll for form-or-iframe, then navigate INTO the
     // embed so the form is top-level for the extractor/filler.
     for (let attempt = 0; attempt < 10; attempt++) {
       if ((await page.locator('form[id*="application"]').count()) > 0) return;
@@ -78,7 +78,7 @@ const lever: AtsAdapter = {
       });
     }
     // The real fields (not just the form shell) must be present before
-    // extraction — Lever renders name/email synchronously but wait anyway.
+    // extraction - Lever renders name/email synchronously but wait anyway.
     await page.waitForSelector('input[name="name"], input[name="email"]', { timeout: 20_000 });
   },
 

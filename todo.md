@@ -1,4 +1,4 @@
-# JobArms build plan — todo.md
+# JobArms build plan - todo.md
 
 Simplify-style job-search platform at **jobarms.com** whose wedge is autonomous
 application: a Gemini-driven **arm** running a server-side headless browser
@@ -8,7 +8,7 @@ full-auto opt-in. Multi-user with Stripe free/premium tiers from day 1.
 Working agreement: branch → PR → babysit CI to green → merge (see README).
 Check items off as they land on `main`.
 
-## Phase 0 — Setup + scaffold
+## Phase 0 - Setup + scaffold
 
 Manual account setup (done unless unchecked):
 
@@ -50,24 +50,24 @@ Repo scaffold:
 - [x] CI: audit.yml (all package trees), codeql.yml, dependabot.yml
 - [x] GitHub Actions secrets set (`gh secret set` from local .env)
 - [x] Vercel project envs + domains attached (scripts/oneshot/setup-vercel.ts)
-- [x] vercel.json (git integration off — CI owns deploys)
+- [x] vercel.json (git integration off - CI owns deploys)
 - [x] Cloudflare DNS records for Vercel (A @ 216.198.79.1, CNAME www, both
       DNS-only) + Vercel cert issued; jobarms.com and www live over HTTPS
 
-## Phase 1 — App skeleton (auth + billing)
+## Phase 1 - App skeleton (auth + billing)
 
 - [x] Supabase Auth: email/password + magic link (Google OAuth parked)
 - [x] Auth session proxy + route guards (@supabase/ssr, src/proxy.ts)
 - [x] Marketing landing page (hero, features, CTA) + /pricing
 - [x] Dashboard shell (nav: Applications, Discover, Profile, Billing, Settings)
 - [x] Schema: profiles, subscriptions, arm_run_usage + RLS deny-by-default
-- [x] Stripe: one-shot product/price script (ran — price_1TwA3uHGoK50aYq0dmrBqsnx)
+- [x] Stripe: one-shot product/price script (ran - price_1TwA3uHGoK50aYq0dmrBqsnx)
 - [x] Stripe: checkout session + customer portal routes
 - [x] Stripe: webhook route (registered at jobarms.com/api/webhooks/stripe)
 - [x] Plan gating helper (free: 5 arm runs/month; premium: unlimited + tailoring)
 - [x] Welcome email via Resend (no-ops until RESEND_API_KEY is set)
 
-## Phase 2 — Profile + resume (the "one profile")
+## Phase 2 - Profile + resume (the "one profile")
 
 - [x] Schema: resumes table + private storage buckets (resumes, run-artifacts)
 - [x] Resume upload (PDF/DOCX) → Supabase Storage
@@ -77,7 +77,7 @@ Repo scaffold:
 - [x] Profile editor (basics, links, work history, education, skills)
 - [x] Arm autonomy setting: review-gate (default) / full-auto (Settings)
 
-## Phase 3 — Apply arm (the product)
+## Phase 3 - Apply arm (the product)
 
 - [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo). The workers
       deployed and run on the free allowance (Browser Rendering free tier =
@@ -111,7 +111,7 @@ Repo scaffold:
       needs validation against a company that still hosts on
       job-boards.greenhouse.io
 
-## Phase 4 — Tracker
+## Phase 4 - Tracker
 
 - [x] Applications list with status pipeline (saved → applying → needs_review
       → applied → interviewing → offer / rejected / withdrawn / failed)
@@ -121,16 +121,16 @@ Repo scaffold:
 - [x] Manually-tracked applications ("Track only" mode)
 - [ ] Kanban board view (list shipped first; kanban when it earns its keep)
 
-## Phase 5 — Tailoring (premium)
+## Phase 5 - Tailoring (premium)
 
 - [x] Gemini resume tailoring per job + keyword analysis (incorporated/missing)
 - [x] Tailored resume stored as `kind='tailored'` child linked to application
 - [x] Cover letter generator (stored on the application)
-- [x] Tailored PDF rendered (pdf-lib) and set as the application's resume —
+- [x] Tailored PDF rendered (pdf-lib) and set as the application's resume -
       the arm uploads it
 - [x] Premium gating wired through the plan helper (402 + upgrade CTA)
 
-## Phase 6 — Discovery (post-MVP)
+## Phase 6 - Discovery (post-MVP)
 
 - [x] `workers/ingest`: cron (7,37 * * * *) polling Greenhouse/Lever/Ashby/
       Workable public endpoints for the `companies` list
@@ -139,9 +139,9 @@ Repo scaffold:
       headline, and location/remote preferences
 - [x] "Send an arm" from the feed (prefills the apply form)
 - [x] Company seed script (scripts/oneshot/seed-companies.ts)
-- [ ] Aggregator API connectors (Adzuna / JSearch / USAJobs) — needs API keys
+- [ ] Aggregator API connectors (Adzuna / JSearch / USAJobs) - needs API keys
 - [x] Ingest worker deployed (ingest.jobarms.com, cron live) + 10 companies
-      seeded — ~4,000 jobs in the catalog from the first two sweeps
+      seeded - ~4,000 jobs in the catalog from the first two sweeps
 
 ## Later / parked
 

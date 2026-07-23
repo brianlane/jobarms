@@ -1,5 +1,5 @@
 /**
- * JobArms apply arm — HTTP surface.
+ * JobArms apply arm - HTTP surface.
  *
  *   POST /runs                 start a run (Workflow instance, id = runId)
  *   POST /runs/:id/approve     resume a review-gated run (optionally with
@@ -7,7 +7,7 @@
  *   POST /runs/:id/cancel      terminate a run
  *   GET  /health               unauthenticated liveness
  *
- * Every mutating request must carry the ARM_WORKER_SHARED_SECRET bearer —
+ * Every mutating request must carry the ARM_WORKER_SHARED_SECRET bearer -
  * the same secret the app uses to call us.
  */
 import type { Answer, Env, RunParams } from "./types";

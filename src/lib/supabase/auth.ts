@@ -11,7 +11,7 @@ export interface AuthUser {
  *
  * Uses getClaims(), which verifies the session JWT against the project's
  * public signing key LOCALLY (one cached JWKS fetch per runtime) instead of
- * getUser()'s network round trip to Supabase Auth on every page load —
+ * getUser()'s network round trip to Supabase Auth on every page load -
  * layout + page used to each pay that round trip sequentially, which is
  * what made dashboard navigation feel slow. React cache() collapses the
  * layout's and page's calls into one per request.

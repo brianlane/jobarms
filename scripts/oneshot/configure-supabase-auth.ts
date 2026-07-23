@@ -1,6 +1,6 @@
 /**
  * One-shot: production Supabase Auth config via the Management API.
- * Idempotent — safe to re-run after edits.
+ * Idempotent - safe to re-run after edits.
  *
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/configure-supabase-auth.ts
@@ -14,7 +14,7 @@
  *    noreply@mail.app.supabase.io
  *  - JobArms-branded subjects + HTML templates
  */
-export {}; // module scope — import-less scripts otherwise collide globally
+export {}; // module scope - import-less scripts otherwise collide globally
 
 const PROJECT_REF = "fjzvlshxcgbuhrhxdsiu";
 

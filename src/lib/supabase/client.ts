@@ -2,7 +2,7 @@
 
 import { createBrowserClient } from "@supabase/ssr";
 
-/** Browser Supabase client (publishable key — RLS applies). */
+/** Browser Supabase client (publishable key - RLS applies). */
 export function createSupabaseBrowserClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

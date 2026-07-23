@@ -19,7 +19,7 @@ $$;
 revoke execute on function public.set_updated_at() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- profiles — the "one profile" that powers every application
+-- profiles - the "one profile" that powers every application
 -- ---------------------------------------------------------------------------
 create table public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
@@ -58,7 +58,7 @@ create trigger profiles_set_updated_at
   for each row execute function public.set_updated_at();
 
 -- ---------------------------------------------------------------------------
--- subscriptions — Stripe state cache (one row per user, written by webhook)
+-- subscriptions - Stripe state cache (one row per user, written by webhook)
 -- ---------------------------------------------------------------------------
 create table public.subscriptions (
   user_id uuid primary key references auth.users (id) on delete cascade,
@@ -110,7 +110,7 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- ---------------------------------------------------------------------------
--- arm_run_usage — monthly metering for the free tier
+-- arm_run_usage - monthly metering for the free tier
 -- ---------------------------------------------------------------------------
 create table public.arm_run_usage (
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -127,7 +127,7 @@ create policy arm_run_usage_select_own on public.arm_run_usage
 -- writes: only through the reserve/release functions below (service_role)
 
 -- Atomically reserve one arm run against the monthly cap. p_limit < 0 means
--- unlimited (premium). Returns false when the cap is already spent — the
+-- unlimited (premium). Returns false when the cap is already spent - the
 -- caller must refuse to start the run.
 create or replace function public.try_reserve_arm_run(
   p_user_id uuid,

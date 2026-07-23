@@ -4,7 +4,7 @@ import { requireEnv } from "@/lib/env";
 
 /**
  * Cookie-bound Supabase client for Server Components, Server Actions, and
- * Route Handlers. Runs as the signed-in user — RLS applies.
+ * Route Handlers. Runs as the signed-in user - RLS applies.
  */
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
@@ -23,7 +23,7 @@ export async function createSupabaseServerClient() {
               cookieStore.set(name, value, options)
             );
           } catch {
-            // Called from a Server Component — session refresh is handled by
+            // Called from a Server Component - session refresh is handled by
             // the proxy, so ignoring the write is safe.
           }
         }

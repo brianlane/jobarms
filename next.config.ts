@@ -4,7 +4,7 @@ import type { NextConfig } from "next";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
-// Baseline HTTP security headers applied to every response — the
+// Baseline HTTP security headers applied to every response - the
 // unambiguously-safe set that doesn't risk breaking Stripe Checkout or
 // Supabase auth. A full script/style CSP is deferred to a separately tuned,
 // Report-Only-baked rollout.

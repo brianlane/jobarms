@@ -108,7 +108,7 @@ async function main() {
   if (webhookSecret) {
     await upsertEnv("STRIPE_WEBHOOK_SECRET", webhookSecret);
   } else {
-    console.warn("STRIPE_WEBHOOK_SECRET unknown — set it in Vercel manually if the webhook predates this run.");
+    console.warn("STRIPE_WEBHOOK_SECRET unknown - set it in Vercel manually if the webhook predates this run.");
   }
 
   await addDomain("jobarms.com");

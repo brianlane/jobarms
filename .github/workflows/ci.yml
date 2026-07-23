@@ -39,6 +39,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Em dashes are banned in ANY context (see README "Writing style").
+      # The pattern is built with printf so this workflow file itself never
+      # contains the character.
+      - name: No em dashes
+        run: |
+          EMDASH=$(printf '\xe2\x80\x94')
+          if git grep -n "$EMDASH" -- ':!*package-lock.json'; then
+            echo "::error::Em dash (U+2014) found. The em dash is banned in any context; use a comma, colon, period, or hyphen."
+            exit 1
+          fi
+          echo "No em dashes found."
+
       - name: Lint
         run: npm run lint
 
@@ -123,7 +135,7 @@ jobs:
 
   # Typecheck + dry-run deploy for every Cloudflare worker tree. A dry run
   # bundles the worker exactly as `wrangler deploy` would, so config or
-  # bundling breakage fails the PR — without needing a Cloudflare API token
+  # bundling breakage fails the PR - without needing a Cloudflare API token
   # (real deploys happen in workers-deploy on main, once the token exists).
   workers-check:
     name: Workers Check (${{ matrix.worker }})
@@ -153,7 +165,7 @@ jobs:
         run: npm run check
 
   # Catches Supabase migration-ledger drift at REVIEW time instead of at
-  # deploy time on main. No `needs` — it starts the moment the PR run does,
+  # deploy time on main. No `needs` - it starts the moment the PR run does,
   # so drift shows up as a red check while the other jobs are still building.
   # On Dependabot PRs the steps no-op and the job reports success (dependabot
   # runs get Dependabot secrets, not repo secrets, so the check could never
@@ -186,7 +198,7 @@ jobs:
   # Vercel deploys live in CI (vercel.json sets git.deploymentEnabled: false)
   # so a deployment only happens once the checks above are green. Previews
   # deploy per PR; pushes to main deploy production. On push to main this job
-  # ALSO deploys Supabase first — `db push` + bulk edge-function deploy — as
+  # ALSO deploys Supabase first - `db push` + bulk edge-function deploy - as
   # ordered steps BEFORE the Vercel production deploy, so a failed migration
   # blocks the app deploy instead of shipping code whose schema never landed.
   vercel-deploy:
@@ -227,7 +239,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::error::VERCEL_TOKEN secret is not available to this run — cannot deploy."
+            echo "::error::VERCEL_TOKEN secret is not available to this run - cannot deploy."
             exit 1
           fi
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -253,7 +265,7 @@ jobs:
         run: |
           MARKER="<!-- ci-vercel-preview -->"
           BODY="$MARKER
-          **Vercel preview** (deployed by CI after all checks passed): ${{ steps.deploy.outputs.url }} — commit ${{ github.event.pull_request.head.sha }}"
+          **Vercel preview** (deployed by CI after all checks passed): ${{ steps.deploy.outputs.url }} - commit ${{ github.event.pull_request.head.sha }}"
           EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             --paginate -q ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
           if [ -n "$EXISTING" ]; then
@@ -264,7 +276,7 @@ jobs:
 
   # Deploy every worker on pushes to main, after the app deploy. Skips
   # gracefully while CLOUDFLARE_API_TOKEN is unset (Workers Paid + token are
-  # deliberately deferred to Phase 3 — see todo.md).
+  # deliberately deferred to Phase 3 - see todo.md).
   workers-deploy:
     name: Workers Deploy (${{ matrix.worker }})
     if: github.event_name == 'push'
@@ -296,7 +308,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "CLOUDFLARE_API_TOKEN not set — skipping worker deploy (expected until Phase 3)."
+            echo "CLOUDFLARE_API_TOKEN not set - skipping worker deploy (expected until Phase 3)."
             exit 0
           fi
           npm run deploy

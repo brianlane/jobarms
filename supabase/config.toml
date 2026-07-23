@@ -1,4 +1,4 @@
-# Supabase project config — TRACKED in git.
+# Supabase project config - TRACKED in git.
 # project_id is the public project ref (it appears in every Supabase URL);
 # CI reads it to `supabase link` for drift checks and deploys. Link-time
 # credentials live in supabase/.temp/, which is gitignored.

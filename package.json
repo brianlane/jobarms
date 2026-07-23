@@ -1,7 +1,7 @@
 {
   "name": "jobarms",
   "version": "0.1.0",
-  "description": "JobArms — AI job search platform: one profile, autonomous application (jobarms.com)",
+  "description": "JobArms - AI job search platform: one profile, autonomous application (jobarms.com)",
   "private": true,
   "type": "module",
   "engines": {

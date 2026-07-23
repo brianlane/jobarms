@@ -11,7 +11,7 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     // Strip live credentials (sourced .env) from the unit-test process so no
-    // test can reach a real external service — see tests/setup-env.ts.
+    // test can reach a real external service - see tests/setup-env.ts.
     setupFiles: ["tests/setup-env.ts"],
     testTimeout: 15000,
     coverage: {

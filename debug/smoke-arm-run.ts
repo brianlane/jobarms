@@ -5,7 +5,7 @@
  *   3. Creates application + run rows and dispatches the arm worker.
  *   4. Polls the run until it parks at needs_review (or fails), prints the
  *      step log / generated answers / screenshots.
- *   5. Cancels the run — review_gate guarantees zero risk of a real
+ *   5. Cancels the run - review_gate guarantees zero risk of a real
  *      submission to a real employer.
  *
  *   set -a && source .env && set +a
@@ -104,7 +104,7 @@ async function pickJob(argUrl?: string) {
     .not("description", "eq", "")
     .order("created_at", { ascending: false })
     .limit(1);
-  if (!data?.[0]) throw new Error("no greenhouse job in catalog — pass a URL");
+  if (!data?.[0]) throw new Error("no greenhouse job in catalog - pass a URL");
   return data[0];
 }
 
@@ -113,7 +113,7 @@ async function main() {
   console.log(`smoke user: ${userId}`);
 
   const job = await pickJob(process.argv[2]);
-  console.log(`job: ${job.title || "?"} @ ${job.company || "?"} — ${job.url}`);
+  console.log(`job: ${job.title || "?"} @ ${job.company || "?"} - ${job.url}`);
 
   // application + run rows (idempotent per run: always a fresh run)
   const { data: app, error: appErr } = await supabase
@@ -177,7 +177,7 @@ async function main() {
   }
 
   if (!final) {
-    console.log("TIMEOUT — run still in flight; inspect application_runs manually.");
+    console.log("TIMEOUT - run still in flight; inspect application_runs manually.");
   } else {
     console.log("\n=== FINAL ===");
     console.log(`status: ${final.status}`);
@@ -188,7 +188,7 @@ async function main() {
     console.log(`screenshots: ${JSON.stringify(final.screenshots)}`);
   }
 
-  // Always cancel — the smoke must never submit.
+  // Always cancel - the smoke must never submit.
   const cancel = await fetch(`${ARM_URL}/runs/${run.id}/cancel`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${ARM_SECRET}` }

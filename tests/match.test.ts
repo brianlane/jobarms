@@ -12,7 +12,7 @@ describe("scoreJob", () => {
     const result = scoreJob(
       {
         title: "Senior TypeScript Engineer",
-        location: "Remote — US",
+        location: "Remote - US",
         description: "You will build React frontends backed by Postgres."
       },
       profile

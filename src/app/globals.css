@@ -34,7 +34,7 @@ body {
 
 /* Subtle radial glow behind hero content. background-image (NOT the
    background shorthand) so it never clobbers the element's own
-   background-color utility (bg-ink-950) — the shorthand version turned the
+   background-color utility (bg-ink-950) - the shorthand version turned the
    auth pages white. */
 .hero-glow {
   background-image:

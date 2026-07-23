@@ -1,8 +1,8 @@
-# JobArms — jobarms.com
+# JobArms - jobarms.com
 
 AI job-search platform: one profile, autonomous application. A Gemini-driven
 **arm** running a server-side headless browser fills out and submits job
-applications for the user — review-gate by default (the arm fills everything,
+applications for the user - review-gate by default (the arm fills everything,
 the user approves before submit), full-auto opt-in per user.
 
 This repository includes:
@@ -10,18 +10,18 @@ This repository includes:
 - Next.js dashboard + marketing app (deployed to Vercel by CI)
 - Supabase migrations (Postgres, deny-by-default RLS), auth, and resume storage
 - Cloudflare Workers automation edge (`workers/`):
-  - **apply-arm** — Browser Rendering (Playwright) + Workflows apply sessions
-  - **ingest** — cron polling of public ATS boards into the jobs catalog
+  - **apply-arm** - Browser Rendering (Playwright) + Workflows apply sessions
+  - **ingest** - cron polling of public ATS boards into the jobs catalog
 - Stripe billing (free tier with metered arm runs; premium unlimited + tailoring)
 
 ## Stack
 
 - **App core**: Next.js (App Router, TypeScript, Tailwind 4) on Vercel;
   Supabase for auth (email/password + magic link), Postgres, and storage
-- **Automation edge**: Cloudflare Workers — Browser Rendering (Playwright) +
+- **Automation edge**: Cloudflare Workers - Browser Rendering (Playwright) +
   Workflows for apply sessions (`workers/apply-arm`), cron ingestion
   (`workers/ingest`)
-- **AI**: Gemini API (dedicated "Job Arms" Google project, paid tier — prompts
+- **AI**: Gemini API (dedicated "Job Arms" Google project, paid tier - prompts
   are not used for model training). Default model `gemini-3.5-flash`
   (override: `GEMINI_TEXT_MODEL`)
 - **Billing**: Stripe (test mode until launch)
@@ -30,7 +30,7 @@ This repository includes:
 
 | Tier | Price | Arm runs | Tailoring |
 |------|-------|----------|-----------|
-| Free | $0 | 5 / month | — |
+| Free | $0 | 5 / month | - |
 | Premium | $20/mo | unlimited | AI resume tailoring + cover letters + full-auto |
 
 One source of truth: [src/lib/plans.ts](src/lib/plans.ts) (limits, gating,
@@ -41,7 +41,7 @@ plan copy). The Stripe product/price is created by
 ## How an arm run works
 
 1. User pastes a job URL (`POST /api/applications`). The app normalizes the
-   URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) — Greenhouse and
+   URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse and
    Lever drive today), upserts the job (public ATS APIs provide
    title/company/description), **reserves a metered run**
    (`try_reserve_arm_run` RPC, row-locked monthly cap), snapshots the
@@ -52,15 +52,15 @@ plan copy). The Stripe product/price is created by
    the profile's vault or decline-to-answer) → fill for review (screenshot).
 3. **Review gate** (default): the run parks at `needs_review`
    (`step.waitForEvent`, 7-day timeout). The user reviews/edits every answer
-   in the dashboard and approves — the app forwards approval to the worker,
+   in the dashboard and approves - the app forwards approval to the worker,
    which resumes the workflow.
 4. **Submit**: a fresh browser session re-fills with the approved answers,
    attaches the resume, submits, and verifies the ATS confirmation
    (screenshot). Tracker flips to `applied` (or `failed` with an honest
-   `submit_unconfirmed` error — never a silent maybe). Full-auto users skip
+   `submit_unconfirmed` error - never a silent maybe). Full-auto users skip
    step 3.
 
-Run state lives in `application_runs` (step log, answers, screenshots) —
+Run state lives in `application_runs` (step log, answers, screenshots) -
 the worker writes it directly to Supabase; the dashboard polls and renders
 the timeline, screenshots (signed URLs), and the review UI.
 
@@ -83,7 +83,7 @@ Deny-by-default, inherited from prior builds:
   Unit tests strip live credentials (`tests/setup-env.ts`) so no test can
   reach a real service.
 - Baseline security headers on every response (HSTS, nosniff, frame-deny,
-  CSP base) — see [next.config.ts](next.config.ts).
+  CSP base) - see [next.config.ts](next.config.ts).
 
 ## Development
 
@@ -119,7 +119,7 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 
 - **quality** (lint + build), **typecheck**, **test** (vitest + coverage
   artifact), **security** (npm audit, prod deps, high+), **workers-check**
-  (typecheck + `wrangler deploy --dry-run` per worker — no token needed)
+  (typecheck + `wrangler deploy --dry-run` per worker - no token needed)
 - **supabase-drift** (PR-only): dry-run `db push` against the production
   ledger so migration drift is caught at review time, not deploy time
 - **vercel-deploy**: deploys are CI-driven (`vercel.json` disables the git
@@ -128,7 +128,7 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
   failed migration blocks the app deploy
   (`.github/scripts/supabase-deploy.sh`)
 - **workers-deploy** (main only): `wrangler deploy` per worker after the app
-  deploy — **skips gracefully until `CLOUDFLARE_API_TOKEN` is set** (Workers
+  deploy - **skips gracefully until `CLOUDFLARE_API_TOKEN` is set** (Workers
   Paid + token are the Phase 3 go-live checklist in [todo.md](todo.md))
 
 Also: `audit.yml` (weekly + PR dependency audit across every package tree),
@@ -136,12 +136,25 @@ Also: `audit.yml` (weekly + PR dependency audit across every package tree),
 
 ## Operations (one-shot scripts)
 
-`scripts/oneshot/` — run locally with `set -a && source .env && set +a`:
+`scripts/oneshot/` - run locally with `set -a && source .env && set +a`:
 
-- `create-stripe-prices.ts` — Premium product + price (idempotent)
-- `create-stripe-webhook.ts <url>` — register the Stripe webhook
-- `setup-vercel.ts` — Stripe webhook + Vercel envs + domains, one shot
-- `seed-companies.ts` — seed/extend the ingestion company list
+- `create-stripe-prices.ts` - Premium product + price (idempotent)
+- `create-stripe-webhook.ts <url>` - register the Stripe webhook
+- `setup-vercel.ts` - Stripe webhook + Vercel envs + domains, one shot
+- `seed-companies.ts` - seed/extend the ingestion company list
+
+## Writing style: em dashes are banned
+
+Never use the em dash character (U+2014) in ANY context: site copy, code,
+comments, docs, commit messages, or AI-generated output. Use a comma, colon,
+period, or plain hyphen instead. This is enforced three ways:
+
+- CI: the `quality` job greps every tracked file (lockfiles excluded) and
+  fails the build on any em dash.
+- Model prompts: every Gemini prompt (resume parsing, tailoring, cover
+  letters, the arm's application answers) instructs the model to never emit
+  the character, so AI output stays clean at the source.
+- This rule itself: written without one.
 
 ## All work and code modifications must follow this flow
 

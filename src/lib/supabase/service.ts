@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { requireEnv } from "@/lib/env";
 
 /**
- * Service-role Supabase client — bypasses RLS. Server-only: import from API
+ * Service-role Supabase client - bypasses RLS. Server-only: import from API
  * routes / server actions after the caller's own auth check. NEVER expose to
  * the browser.
  */

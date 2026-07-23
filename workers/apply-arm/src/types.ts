@@ -2,7 +2,7 @@
 // @cloudflare/workers-types; `WorkflowEntrypoint` is imported from
 // "cloudflare:workers" where it's used.
 export interface Env {
-  // Bindings (require Workers Paid — configured in wrangler.jsonc Phase 3)
+  // Bindings (require Workers Paid - configured in wrangler.jsonc Phase 3)
   BROWSER?: Fetcher;
   APPLY_RUN?: Workflow;
 

@@ -1,6 +1,6 @@
 /**
  * One-shot: register the Stripe webhook endpoint for subscription lifecycle
- * events. Idempotent — finds an existing endpoint with the same URL first.
+ * events. Idempotent - finds an existing endpoint with the same URL first.
  *
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/create-stripe-webhook.ts https://<app-domain>/api/webhooks/stripe

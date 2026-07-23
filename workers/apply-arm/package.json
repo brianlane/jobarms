@@ -1,7 +1,7 @@
 {
   "name": "jobarms-apply-arm",
   "version": "0.1.0",
-  "description": "JobArms apply arm — Browser Rendering + Workflows worker that fills and submits job applications",
+  "description": "JobArms apply arm - Browser Rendering + Workflows worker that fills and submits job applications",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# supabase-deploy.sh — keep production Supabase in lockstep with the repo.
+# supabase-deploy.sh - keep production Supabase in lockstep with the repo.
 # (Ported from the newcoworker pipeline.)
 #
 #   check   drift check only (PRs): `supabase db push --dry-run` fails loudly
@@ -8,7 +8,7 @@
 #           migrations WOULD be applied, so a reviewer sees the exact DDL a
 #           merge will run.
 #   deploy  (push to main): apply pending migrations with `supabase db push`
-#           (same built-in drift guard — drift blocks the deploy rather than
+#           (same built-in drift guard - drift blocks the deploy rather than
 #           being papered over), then bulk-deploy EVERY edge function so no
 #           deployed bundle can go stale relative to the repo. Function
 #           verify_jwt flags come from supabase/config.toml (tracked), so a

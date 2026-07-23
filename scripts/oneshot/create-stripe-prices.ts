@@ -1,6 +1,6 @@
 /**
  * One-shot: create the JobArms Premium product + monthly price in Stripe.
- * Idempotent by lookup key — re-running finds the existing price.
+ * Idempotent by lookup key - re-running finds the existing price.
  *
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/create-stripe-prices.ts

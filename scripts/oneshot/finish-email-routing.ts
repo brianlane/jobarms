@@ -8,7 +8,7 @@
  *
  * Creates: hello@jobarms.com forward + catch-all, both -> jobarmsteam@gmail.com.
  */
-export {}; // module scope — import-less scripts otherwise collide globally
+export {}; // module scope - import-less scripts otherwise collide globally
 
 const ZONE = "d62b0510c0f73b95215b1138eba9f023";
 const DEST = "jobarmsteam@gmail.com";

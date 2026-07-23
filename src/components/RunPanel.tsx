@@ -15,8 +15,8 @@ export interface RunData {
 }
 
 /**
- * Latest arm run: step timeline, screenshots, and — when the run is parked at
- * the review gate — editable answers with the approve button.
+ * Latest arm run: step timeline, screenshots, and - when the run is parked at
+ * the review gate - editable answers with the approve button.
  */
 export function RunPanel({ run }: { run: RunData }) {
   const router = useRouter();

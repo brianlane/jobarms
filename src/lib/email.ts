@@ -20,11 +20,11 @@ export async function sendWelcomeEmail(to: string, firstName: string): Promise<b
         "",
         "Welcome to JobArms. Your profile is set up, which means your arms are ready to work.",
         "",
-        "Paste any Greenhouse or Lever job link into the dashboard and an arm will fill out the entire application from your profile — you review every answer before it submits.",
+        "Paste any Greenhouse or Lever job link into the dashboard and an arm will fill out the entire application from your profile - you review every answer before it submits.",
         "",
         "Apply to something: https://jobarms.com/dashboard/applications/new",
         "",
-        "— JobArms"
+        "- JobArms"
       ].join("\n")
     });
     return true;

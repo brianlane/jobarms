@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { geminiClient, GEMINI_TEXT_MODEL, extractJson } from "@/lib/gemini";
 
-/** Structured resume shape — mirrors the profiles table columns it fills. */
+/** Structured resume shape - mirrors the profiles table columns it fills. */
 export const parsedResumeSchema = z.object({
   full_name: z.string().default(""),
   email: z.string().default(""),
@@ -43,11 +43,11 @@ links (object mapping label like "linkedin"/"github"/"portfolio" to URL),
 work_history (array of {company, title, start, end, bullets[]}; dates as "MMM YYYY" or "" if absent; current roles end="Present"),
 education (array of {school, degree, field, start, end}),
 skills (array of short skill strings).
-Use "" or [] for anything absent. Return ONLY the JSON object.`;
+Use "" or [] for anything absent. Never use the em dash character anywhere in your output; use a comma, colon, or hyphen instead. Return ONLY the JSON object.`;
 
 /**
  * Parse a resume file (PDF or DOCX bytes) into a structured profile via
- * Gemini. Throws on model/parse failure — callers record parse_status.
+ * Gemini. Throws on model/parse failure - callers record parse_status.
  */
 export async function parseResume(
   fileBytes: Uint8Array,
