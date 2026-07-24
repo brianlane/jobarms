@@ -28,19 +28,6 @@ export async function updateRun(
   }
 }
 
-export async function getRun(
-  env: Env,
-  runId: string
-): Promise<Record<string, unknown> | null> {
-  const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/application_runs?id=eq.${encodeURIComponent(runId)}&select=*`,
-    { headers: headers(env) }
-  );
-  if (!res.ok) return null;
-  const rows = (await res.json()) as Record<string, unknown>[];
-  return rows[0] ?? null;
-}
-
 export async function updateApplication(
   env: Env,
   applicationId: string,
@@ -55,12 +42,17 @@ export async function updateApplication(
   }
 }
 
-/** Append a step to the run's step log (read-modify-write; single writer). */
+/** Append a step to the run's step log atomically (append_run_step RPC). */
 export async function logStep(env: Env, runId: string, step: string, detail = ""): Promise<void> {
-  const run = await getRun(env, runId);
-  const steps = Array.isArray(run?.steps) ? (run.steps as unknown[]) : [];
-  steps.push({ at: new Date().toISOString(), step, detail });
-  await updateRun(env, runId, { steps });
+  const entry = { at: new Date().toISOString(), step, detail };
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/append_run_step`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_run_id: runId, p_step: entry })
+  });
+  if (!res.ok) {
+    throw new Error(`logStep ${runId} failed: ${res.status}`);
+  }
 }
 
 /** Upload a screenshot to the private run-artifacts bucket; returns its path. */
@@ -87,11 +79,16 @@ export async function uploadScreenshot(
   return path;
 }
 
+/** Append a screenshot path atomically (append_run_screenshot RPC). */
 export async function appendScreenshot(env: Env, runId: string, path: string): Promise<void> {
-  const run = await getRun(env, runId);
-  const shots = Array.isArray(run?.screenshots) ? (run.screenshots as string[]) : [];
-  shots.push(path);
-  await updateRun(env, runId, { screenshots: shots });
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/append_run_screenshot`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_run_id: runId, p_path: path })
+  });
+  if (!res.ok) {
+    throw new Error(`appendScreenshot ${runId} failed: ${res.status}`);
+  }
 }
 
 /**
