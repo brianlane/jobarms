@@ -206,6 +206,27 @@ npm run check        # typecheck + wrangler deploy --dry-run (no token needed)
 npm run deploy       # requires wrangler auth (CI does this on main)
 ```
 
+### Test coverage (100%, CI-gated)
+
+Coverage is enforced at **100%** (statements, branches, functions, lines) and
+is a hard CI gate: `npm test` runs vitest with `--coverage`, and the v8
+`thresholds` in [vitest.config.ts](vitest.config.ts) fail the run (and the
+`test` job) if anything in scope drops below 100%. New code must land with the
+tests that keep it there.
+
+Coverage scope is the `include` list in the vitest config and grows one layer
+at a time as each is brought to full coverage (so the gate is always 100% for
+everything measured, never a soft average):
+
+- [x] `src/lib/**` (pure logic + I/O wrappers; external SDKs and `fetch` are
+      mocked at the transport seam, matching the hermetic `tests/setup-env.ts`)
+- [ ] `src/app/api/**` route handlers
+- [ ] `src/components/**` + `src/app/**` pages (jsdom + Testing Library)
+- [ ] `workers/**` (Playwright + `fetch` mocked)
+
+The unit suite is hermetic: `tests/setup-env.ts` strips every live credential
+so no test can reach a real service.
+
 ## Adding an ATS adapter (required checklist)
 
 An ATS the arm can drive must be wired at EVERY layer, or jobs on it
@@ -300,7 +321,9 @@ key, live Stripe, live Cloudflare): read before running.
 `.github/workflows/ci.yml` (PRs + pushes to main):
 
 - **quality** (banned-word gates, lint, build), **typecheck**, **test**
-  (vitest + coverage artifact), **security** (npm audit, prod deps, high+),
+  (vitest + coverage artifact; the run fails if coverage of the in-scope
+  files drops below the 100% threshold), **security** (npm audit, prod deps,
+  high+),
   **workers-check** (typecheck + `wrangler deploy --dry-run` per worker,
   no token needed)
 - **supabase-drift** (PR-only): dry-run `db push` against the production

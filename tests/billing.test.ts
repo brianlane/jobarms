@@ -52,6 +52,13 @@ describe("subscriptionUpdateFromStripe", () => {
     ).toBe(true);
   });
 
+  it("a missing/zero current_period_end yields a null period end", () => {
+    const update = subscriptionUpdateFromStripe(
+      fakeSub({ status: "active", current_period_end: 0 })
+    );
+    expect(update.current_period_end).toBeNull();
+  });
+
   it("cleared state is free with no subscription", () => {
     expect(SUBSCRIPTION_CLEARED.plan).toBe("free");
     expect(SUBSCRIPTION_CLEARED.stripe_subscription_id).toBeNull();

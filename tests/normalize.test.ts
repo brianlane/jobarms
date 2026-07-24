@@ -3,6 +3,7 @@ import {
   fixShoutyField,
   fixShoutyProse,
   isShouty,
+  normalizeEmail,
   normalizePhone,
   titleCase
 } from "@/lib/normalize";
@@ -79,5 +80,27 @@ describe("normalizePhone", () => {
   it("leaves non-US / odd lengths untouched", () => {
     expect(normalizePhone("+44 20 7946 0958")).toBe("+44 20 7946 0958");
     expect(normalizePhone("")).toBe("");
+  });
+});
+
+describe("normalizeEmail", () => {
+  it("trims and lowercases", () => {
+    expect(normalizeEmail("  Jane.DOE@Example.COM ")).toBe("jane.doe@example.com");
+    expect(normalizeEmail("")).toBe("");
+  });
+});
+
+describe("fixShoutyProse edge cases", () => {
+  it("returns empty input untouched", () => {
+    expect(fixShoutyProse("")).toBe("");
+    expect(fixShoutyProse("   ")).toBe("");
+  });
+
+  it("leaves a short leading shouty run alone (below the 6-letter floor)", () => {
+    // "QA" then prose: the leading-run branch requires >=6 letters, so this
+    // falls through unchanged.
+    expect(fixShoutyProse("QA and testing across the stack.")).toBe(
+      "QA and testing across the stack."
+    );
   });
 });
