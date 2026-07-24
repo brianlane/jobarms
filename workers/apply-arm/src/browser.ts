@@ -563,9 +563,11 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
 }
 
 /**
- * Operate a react-select / ARIA combobox: open it, then click the option whose
- * text matches the answer; fall back to typing + Enter (works for typeaheads
- * like Country). The options only exist in the DOM once the menu is open.
+ * Operate a react-select / ARIA combobox. The options only exist in the DOM
+ * once the menu is open, and (critically) the value only COMMITS when an option
+ * is actually clicked/Enter-selected from the open menu - typing text alone is
+ * discarded on blur. So: open, click the matching option (typing first only to
+ * filter long lists), then VERIFY the selection stuck and retry once if not.
  */
 async function fillCombobox(
   page: Page,
@@ -573,25 +575,62 @@ async function fillCombobox(
   value: string
 ): Promise<void> {
   if (!value) return;
-  await el.click().catch(() => {});
-  await page.waitForTimeout(400);
 
-  const exact = page.getByRole("option", { name: value, exact: true }).first();
-  if ((await exact.count().catch(() => 0)) > 0) {
-    await exact.click().catch(() => {});
-    return;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await el.click().catch(() => {}); // open the menu
+    await page.waitForTimeout(350);
+
+    // Prefer an exact option; if the list is long/lazy, type to filter first.
+    let option = page.getByRole("option", { name: value, exact: true }).first();
+    if ((await option.count().catch(() => 0)) === 0) {
+      await el
+        .pressSequentially(value.slice(0, REALISTIC_TYPING_MAX), {
+          delay: 25 + Math.floor(Math.random() * 25)
+        })
+        .catch(() => {});
+      await page.waitForTimeout(450);
+      option = page.getByRole("option", { name: value, exact: true }).first();
+      if ((await option.count().catch(() => 0)) === 0) {
+        // Looser match (e.g. "United States" vs "United States+1").
+        option = page.getByRole("option").filter({ hasText: value }).first();
+      }
+    }
+
+    if ((await option.count().catch(() => 0)) > 0) {
+      // Click the option to COMMIT (Enter alone is unreliable across widgets).
+      await option.click().catch(() => {});
+    } else {
+      await page.keyboard.press("Enter").catch(() => {});
+    }
+    await page.waitForTimeout(250);
+
+    if (await comboboxHasValue(el)) return;
+    // Nothing committed: close the menu and try once more.
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(200);
   }
-  // Type to filter, then take the exact match if it appeared, else the top hit.
-  await el.pressSequentially(value.slice(0, REALISTIC_TYPING_MAX), {
-    delay: 30 + Math.floor(Math.random() * 30)
-  }).catch(() => {});
-  await page.waitForTimeout(500);
-  const filtered = page.getByRole("option", { name: value, exact: true }).first();
-  if ((await filtered.count().catch(() => 0)) > 0) {
-    await filtered.click().catch(() => {});
-    return;
-  }
-  await page.keyboard.press("Enter").catch(() => {});
+}
+
+/** True once a react-select/ARIA combobox actually holds a chosen value. */
+async function comboboxHasValue(el: ReturnType<Page["locator"]>): Promise<boolean> {
+  return el
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .evaluate((node: any) => {
+      // react-select: a value is committed ONLY when the value node renders.
+      // (The input keeps stale typed text after a failed select, so raw input
+      // text must NOT be treated as committed here.)
+      const rsControl = node.closest('[class*="select__control"]');
+      if (rsControl) {
+        return !!rsControl.querySelector('[class*="single-value"], [class*="multi-value"]');
+      }
+      const anyControl = node.closest('[class*="control"]');
+      if (anyControl?.querySelector('[class*="single-value"], [class*="multi-value"]')) return true;
+      // Generic ARIA combobox (not react-select): trust a non-placeholder value.
+      const v = (node.value ?? "").trim();
+      const ph = node.getAttribute("placeholder");
+      return v.length > 0 && v !== ph;
+    })
+    .catch(() => false);
 }
 
 /**
