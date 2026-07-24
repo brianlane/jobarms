@@ -50,6 +50,7 @@ function usePage(page: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  adapter.openApplication.mockResolvedValue(undefined);
   adapter.confirmSubmitted.mockResolvedValue(true);
   db.getPlaybook.mockResolvedValue(null);
   captcha.detectInteractiveChallenge.mockResolvedValue(null);
@@ -125,6 +126,18 @@ describe("extractForm", () => {
     usePage(page);
     await expect(extractForm(env, params())).rejects.toBeInstanceOf(FormNotFoundError);
   });
+
+  it("still self-heals when the adapter opener throws (Lever custom pages)", async () => {
+    // The Lever opener waits on name/email inputs and throws on hostile pages.
+    // That throw must not abort the run before playbook/vision recovery runs.
+    adapter.openApplication.mockRejectedValue(new Error("waitForSelector timeout"));
+    gemini.diagnosePage.mockResolvedValue({ form_visible: true, action: "none", reason: "form here" });
+    const page = fakePage({ eval$$: (selector) => (selector.startsWith("body") ? REAL_FORM : []) });
+    usePage(page);
+    const result = await extractForm(env, params());
+    expect(result.recovery?.source).toBe("vision");
+    expect(result.fields.map((f) => f.name)).toEqual(["email", "first_name"]);
+  });
 });
 
 describe("fillAndMaybeSubmit", () => {
@@ -176,5 +189,13 @@ describe("fillAndMaybeSubmit", () => {
     const res = await fillAndMaybeSubmit(env, params(), [], true);
     expect(captcha.solveInteractiveChallenge).toHaveBeenCalled();
     expect(res.outcome).toBe("submitted");
+  });
+
+  it("still fills when the adapter opener throws on the fill session", async () => {
+    adapter.openApplication.mockRejectedValue(new Error("waitForSelector timeout"));
+    const page = fakePage({ eval$$: () => REAL_FORM });
+    usePage(page);
+    const res = await fillAndMaybeSubmit(env, params(), [{ name: "email", label: "Email", value: "a@b.com" }], false);
+    expect(res.outcome).toBe("filled");
   });
 });

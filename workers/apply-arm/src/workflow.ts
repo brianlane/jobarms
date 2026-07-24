@@ -130,16 +130,28 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
       }
 
       // ------------------------------------------------ submit
+      // NO retries: fillAndMaybeSubmit clicks the employer's real submit
+      // control and is not idempotent. A retry after a partial failure could
+      // send the SAME application twice (the first attempt may have landed
+      // even when a later await threw). A submit crash fails the run honestly
+      // and refunds via the outer catch; the user can retry with a fresh arm.
       const outcome = await step.do(
         "submit",
-        { retries: { limit: 1, delay: "30 seconds" } },
+        { retries: { limit: 0, delay: "30 seconds" } },
         async () => {
           await updateRun(env, params.runId, { status: "submitting" });
           const result = await fillAndMaybeSubmit(env, params, approvedAnswers, true);
-          const shot = await uploadScreenshot(
-            env, params.userId, params.runId, "submitted", result.screenshot
-          );
-          await appendScreenshot(env, params.runId, shot);
+          // Post-submit bookkeeping is best-effort: once the application has
+          // been submitted, a screenshot/storage hiccup must never fail this
+          // step (a missing proof shot is cosmetic; a failed step is not).
+          try {
+            const shot = await uploadScreenshot(
+              env, params.userId, params.runId, "submitted", result.screenshot
+            );
+            await appendScreenshot(env, params.runId, shot);
+          } catch {
+            // keep the outcome; the confirmation state is what matters
+          }
           return result.outcome;
         }
       );

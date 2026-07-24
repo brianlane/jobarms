@@ -4,7 +4,8 @@ import { fakeClient, fakeFrom } from "../helpers/supabase";
 const holder = vi.hoisted(() => ({ service: null as unknown }));
 const stripe = vi.hoisted(() => ({
   webhooks: { constructEvent: vi.fn() },
-  subscriptions: { retrieve: vi.fn() }
+  subscriptions: { retrieve: vi.fn() },
+  customers: { retrieve: vi.fn() }
 }));
 vi.mock("@/lib/supabase/service", () => ({ createSupabaseServiceClient: vi.fn(() => holder.service) }));
 vi.mock("@/lib/stripe", () => ({ stripeClient: () => stripe }));
@@ -75,13 +76,54 @@ describe("POST /api/webhooks/stripe", () => {
     expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
   });
 
-  it("customer.subscription.updated updates by customer id", async () => {
+  it("customer.subscription.updated updates by customer id when the row matches", async () => {
     stripe.webhooks.constructEvent.mockReturnValueOnce({
       type: "customer.subscription.updated",
       data: { object: { ...SUB, customer: "cus_1" } }
     });
+    holder.service = fakeClient({
+      from: fakeFrom({ subscriptions: [{ data: [{ user_id: "u1" }], error: null }] })
+    });
     const res = await POST(req());
     expect((await res.json()).received).toBe(true);
+    expect(stripe.customers.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("subscription event with no matching row resolves the user from the customer and upserts", async () => {
+    stripe.webhooks.constructEvent.mockReturnValueOnce({
+      type: "customer.subscription.created",
+      data: { object: { ...SUB, customer: "cus_1" } }
+    });
+    stripe.customers.retrieve.mockResolvedValueOnce({ deleted: undefined, metadata: { user_id: "u9" } });
+    const from = fakeFrom({ subscriptions: [{ data: [], error: null }, { error: null }] });
+    holder.service = fakeClient({ from });
+    expect((await POST(req())).status).toBe(200);
+    expect(stripe.customers.retrieve).toHaveBeenCalledWith("cus_1");
+    expect(from).toHaveBeenCalledTimes(2); // failed update, then the upsert
+  });
+
+  it("no-matching-row fallback skips a deleted Stripe customer", async () => {
+    stripe.webhooks.constructEvent.mockReturnValueOnce({
+      type: "customer.subscription.updated",
+      data: { object: { ...SUB, customer: "cus_1" } }
+    });
+    stripe.customers.retrieve.mockResolvedValueOnce({ deleted: true });
+    const from = fakeFrom({ subscriptions: [{ data: [], error: null }] });
+    holder.service = fakeClient({ from });
+    expect((await POST(req())).status).toBe(200);
+    expect(from).toHaveBeenCalledTimes(1); // update only; nothing to upsert
+  });
+
+  it("no-matching-row fallback skips a customer without user metadata", async () => {
+    stripe.webhooks.constructEvent.mockReturnValueOnce({
+      type: "customer.subscription.updated",
+      data: { object: { ...SUB, customer: "cus_1" } }
+    });
+    stripe.customers.retrieve.mockResolvedValueOnce({ deleted: undefined }); // no metadata at all
+    const from = fakeFrom({ subscriptions: [{ error: null }] }); // update resolves with null data
+    holder.service = fakeClient({ from });
+    expect((await POST(req())).status).toBe(200);
+    expect(from).toHaveBeenCalledTimes(1);
   });
 
   it("subscription event without a string customer is skipped", async () => {

@@ -229,4 +229,30 @@ describe("solveHcaptcha", () => {
     const p = pageWith({ "hcaptcha.com": loc({ count: async () => 1 }) }, frame);
     expect(await solveInteractiveChallenge(env, p, "hcaptcha")).toBe(false);
   });
+
+  it("hcaptcha trusts the checkbox's aria-checked=true even with the challenge iframe still present", async () => {
+    const grid = loc({ textContent: async () => null, count: async () => 0 });
+    const frame = (inner: string) =>
+      inner.includes("#checkbox") ? loc({ getAttribute: async () => "true" }) : grid;
+    const p = pageWith({ "hcaptcha.com": loc({ count: async () => 1 }) }, frame);
+    expect(await solveInteractiveChallenge(env, p, "hcaptcha")).toBe(true);
+  });
+
+  it("hcaptcha never claims success when the checkbox reports unchecked, even with the iframe gone", async () => {
+    const grid = loc({ textContent: async () => null, count: async () => 0 });
+    const frame = (inner: string) =>
+      inner.includes("#checkbox") ? loc({ getAttribute: async () => "false" }) : grid;
+    const p = pageWith({ "hcaptcha.com": loc({ count: async () => 0 }) }, frame);
+    expect(await solveInteractiveChallenge(env, p, "hcaptcha")).toBe(false);
+  });
+
+  it("hcaptcha falls back to the iframe-gone signal when the checked state is unreadable", async () => {
+    const grid = loc({ textContent: async () => null, count: async () => 0 });
+    const frame = (inner: string) =>
+      inner.includes("#checkbox")
+        ? loc({ getAttribute: async () => { throw new Error("detached"); } })
+        : grid;
+    const p = pageWith({ "hcaptcha.com": loc({ count: async () => 0 }) }, frame);
+    expect(await solveInteractiveChallenge(env, p, "hcaptcha")).toBe(true);
+  });
 });

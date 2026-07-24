@@ -55,10 +55,29 @@ export async function POST(request: Request) {
       const sub = event.data.object;
       const customerId = typeof sub.customer === "string" ? sub.customer : null;
       if (customerId) {
-        await service
+        const update = subscriptionUpdateFromStripe(sub);
+        const { data: matched } = await service
           .from("subscriptions")
-          .update(subscriptionUpdateFromStripe(sub))
-          .eq("stripe_customer_id", customerId);
+          .update(update)
+          .eq("stripe_customer_id", customerId)
+          .select("user_id");
+        if (!matched || matched.length === 0) {
+          // Stripe does not guarantee event order: a subscription event can
+          // arrive before checkout persisted the customer id (or for a
+          // subscription created outside our checkout). Resolve the app user
+          // from the customer's metadata (set at customer creation) and
+          // upsert so a paid plan is never silently dropped.
+          const customer = await stripe.customers.retrieve(customerId);
+          const userId = customer.deleted ? undefined : customer.metadata?.user_id;
+          if (userId) {
+            await service
+              .from("subscriptions")
+              .upsert(
+                { user_id: userId, stripe_customer_id: customerId, ...update },
+                { onConflict: "user_id" }
+              );
+          }
+        }
       }
       break;
     }
