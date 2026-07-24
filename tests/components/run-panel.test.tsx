@@ -1,0 +1,235 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { RunPanel, type RunData } from "@/components/RunPanel";
+
+const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+
+const AT = "2026-07-24T10:00:00Z";
+
+function run(over: Partial<RunData>): RunData {
+  return {
+    id: "run-1",
+    status: "running",
+    autonomy: "review_gate",
+    steps: [],
+    answers: null,
+    form_fields: [],
+    error: null,
+    slot_refunded: false,
+    created_at: AT,
+    ...over
+  };
+}
+
+/** fetch stub: screenshots GET returns `shots`, everything else returns ok. */
+function stubFetch(shots: { path: string; url: string }[] = [], actionOk = true) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (typeof url === "string" && url.endsWith("/screenshots")) {
+        return { ok: true, json: async () => ({ screenshots: shots }) };
+      }
+      return { ok: actionOk, json: async () => (actionOk ? {} : { hint: "Action failed." }) };
+    })
+  );
+}
+
+beforeEach(() => {
+  router.refresh.mockClear();
+  stubFetch();
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe("RunPanel review gate", () => {
+  it("renders editable answers and approves", async () => {
+    stubFetch([{ path: "p1", url: "https://s/1" }]); // screenshots open while reviewing
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [
+            { name: "phone", label: "Phone", value: "555" },
+            { name: "nolabel", label: "", value: "has value but no label" },
+            { name: "long", label: "Essay", value: "x".repeat(150) },
+            { name: "blank", label: "", value: "" }, // filtered out of the review list
+            { name: "why", label: "Why?", value: "", skipped: true }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/review the answers below/)).toBeInTheDocument();
+    await screen.findByText(/Screenshots from the arm/);
+    const phone = screen.getByDisplayValue("555");
+    fireEvent.change(phone, { target: { value: "555-1234" } });
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/approve", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("shows the snag state when there is nothing reviewable", async () => {
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "x", label: "", value: "" }] })} applicationId="app-1" />);
+    expect(screen.getByText(/hit a snag/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Retry with a fresh arm"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/applications/app-1/retry", expect.any(Object)));
+  });
+
+  it("surfaces an action error hint", async () => {
+    stubFetch([], false);
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "p", label: "P", value: "v" }] })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    expect(await screen.findByText("Action failed.")).toBeInTheDocument();
+  });
+
+  it("cancels a review-gated run from the header control", async () => {
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "p", label: "P", value: "v" }] })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Cancel this run"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/cancel", expect.any(Object)));
+  });
+
+  it("cancels from the snag block", async () => {
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "x", label: "", value: "" }] })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Cancel and apply manually"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/cancel", expect.any(Object)));
+  });
+});
+
+describe("RunPanel terminal + errors", () => {
+  it("failed run shows a retry (with neutral step dots) and the refund note", async () => {
+    render(
+      <RunPanel
+        run={run({
+          status: "failed",
+          error: "some crash",
+          slot_refunded: true,
+          steps: [{ at: AT, step: "navigate" }, { at: AT, step: "form_extracted", detail: "3" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/did not count against your arm runs/)).toBeInTheDocument();
+    expect(screen.getByText("Opened the job application")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Retry with a fresh arm"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/applications/app-1/retry", expect.any(Object)));
+  });
+
+  it.each([
+    ["captcha_blocked: x", /anti-bot check blocked/],
+    ["submit_unconfirmed - x", /never showed a confirmation/],
+    ["review_timeout: x", /sat for 7 days/],
+    ["form_not_found: x", /couldn't find a real application form/],
+    ["weird error", /couldn't recover from/]
+  ])("maps error %s to a friendly message", (error, re) => {
+    render(<RunPanel run={run({ status: "failed", error })} applicationId="app-1" />);
+    expect(screen.getByText(re)).toBeInTheDocument();
+  });
+
+  it("canceled run renders the muted status", () => {
+    render(<RunPanel run={run({ status: "canceled" })} applicationId="app-1" />);
+    expect(screen.getByText("Run canceled")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw label for an unrecognized status", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({}) }))); // no screenshots key
+    render(<RunPanel run={run({ status: "mystery_state" })} applicationId="app-1" />);
+    expect(screen.getByText("mystery_state")).toBeInTheDocument();
+  });
+
+  it("shows b.error and tolerates a failed screenshots fetch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/screenshots")
+          ? { ok: false, json: async () => ({}) }
+          : { ok: false, json: async () => ({ error: "boom" }) }
+      )
+    );
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "p", label: "P", value: "v" }] })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+
+  it("falls back to a generic action error when the body is unparseable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/screenshots")
+          ? { ok: true, json: async () => ({ screenshots: [] }) }
+          : {
+              ok: false,
+              json: async () => {
+                throw new Error("bad json");
+              }
+            }
+      )
+    );
+    render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "p", label: "P", value: "v" }] })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    expect(await screen.findByText("Action failed.")).toBeInTheDocument();
+  });
+});
+
+describe("RunPanel steps, screenshots, submitted answers", () => {
+  it("translates the full step log and shows submitted answers + screenshots", async () => {
+    stubFetch([{ path: "p1", url: "https://s/1" }]);
+    render(
+      <RunPanel
+        run={run({
+          status: "submitted",
+          answers: [
+            { name: "a", label: "A", value: "yes" },
+            { name: "b", label: "B", value: "", skipped: true },
+            { name: "c", label: "", value: "" }
+          ],
+          steps: [
+            { at: AT, step: "navigate" },
+            { at: AT, step: "form_extracted", detail: "5" },
+            { at: AT, step: "form_extracted", detail: "1" },
+            { at: AT, step: "form_extracted", detail: "x" },
+            { at: AT, step: "form_extracted" },
+            { at: AT, step: "answers_generated" },
+            { at: AT, step: "recovery_vision" },
+            { at: AT, step: "recovery_playbook" },
+            { at: AT, step: "form_not_found" },
+            { at: AT, step: "answers_generated", detail: "3" },
+            { at: AT, step: "answers_generated", detail: "1" },
+            { at: AT, step: "review_requested" },
+            { at: AT, step: "approved" },
+            { at: AT, step: "submitted" },
+            { at: AT, step: "submit_unconfirmed" },
+            { at: AT, step: "captcha_blocked" },
+            { at: AT, step: "mystery_internal" }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText("Read the form: 5 questions")).toBeInTheDocument();
+    expect(screen.getByText("Read the form: 1 question")).toBeInTheDocument();
+    expect(screen.getAllByText("Read the application form").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Drafted your answers").length).toBeGreaterThan(0);
+    expect(screen.getByText(/What your arm submitted/)).toBeInTheDocument();
+    await screen.findByText(/Screenshots from the arm/);
+  });
+});
+
+describe("RunPanel polling", () => {
+  it("ignores a screenshots fetch that rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
+    render(<RunPanel run={run({ status: "failed", error: "x" })} applicationId="app-1" />);
+    expect(await screen.findByText("Retry with a fresh arm")).toBeInTheDocument();
+  });
+
+  it("polls for updates while the arm is working", async () => {
+    vi.useFakeTimers();
+    render(<RunPanel run={run({ status: "running" })} applicationId="app-1" />);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(router.refresh).toHaveBeenCalled();
+    expect(screen.getByText(/Your arm is working/)).toBeInTheDocument();
+  });
+});
