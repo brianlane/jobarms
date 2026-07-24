@@ -223,7 +223,10 @@ everything measured, never a soft average):
 - [x] `src/app/api/**` + `src/app/auth/**` route handlers (Supabase, Stripe,
       and the AI libs mocked; each handler's branches exercised via
       `tests/routes/` with the `tests/helpers/supabase.ts` fakes)
-- [ ] `src/components/**` + `src/app/**` pages (jsdom + Testing Library)
+- [x] `src/components/**` + all `src/app/**` pages, layouts, the middleware
+      (`proxy.ts`), and metadata routes (jsdom + Testing Library; async
+      server components are awaited and rendered, `next/font`, `next/og`, and
+      Speed Insights mocked). The entire `src` tree is now at 100%.
 - [ ] `workers/**` (Playwright + `fetch` mocked)
 
 The unit suite is hermetic: `tests/setup-env.ts` strips every live credential
