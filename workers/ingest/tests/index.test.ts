@@ -6,6 +6,9 @@ const SECRET = "cron-secret";
 const env: Env = { SUPABASE_URL: "https://db", SUPABASE_SECRET_KEY: "svc", INTERNAL_CRON_SECRET: SECRET };
 
 const jsonOk = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" });
+// Exact hostname comparison (not substring) so CodeQL doesn't read the test
+// router as URL sanitization.
+const host = (u: string) => new URL(u).hostname;
 
 /** Route fetch by URL so ingestAll's Supabase + ATS calls resolve. */
 function routedFetch(over: { companies?: unknown; greenhouse?: unknown; jobsOk?: boolean } = {}) {
@@ -13,7 +16,7 @@ function routedFetch(over: { companies?: unknown; greenhouse?: unknown; jobsOk?:
     if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
       return jsonOk(over.companies ?? []);
     }
-    if (url.includes("boards-api.greenhouse.io")) return jsonOk(over.greenhouse ?? { jobs: [{ id: 1, title: "Eng" }] });
+    if (host(url) === "boards-api.greenhouse.io") return jsonOk(over.greenhouse ?? { jobs: [{ id: 1, title: "Eng" }] });
     if (url.includes("/rest/v1/jobs")) {
       return over.jobsOk === false ? { ok: false, status: 500, text: async () => "err" } : jsonOk({});
     }
@@ -60,10 +63,10 @@ describe("ingest worker HTTP", () => {
             { id: "c4", name: "D", ats: "workable", board_token: "d" }
           ]);
         }
-        if (url.includes("boards-api.greenhouse.io")) return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
-        if (url.includes("api.lever.co")) return jsonOk([{ hostedUrl: "https://jobs.lever.co/b/1", text: "L" }]);
-        if (url.includes("api.ashbyhq.com")) return jsonOk({ jobs: [{ jobUrl: "https://ashby/1", title: "AsH" }] });
-        if (url.includes("apply.workable.com")) return jsonOk({ jobs: [{ url: "https://wk/1", title: "W" }] });
+        if (host(url) === "boards-api.greenhouse.io") return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
+        if (host(url) === "api.lever.co") return jsonOk([{ hostedUrl: "https://jobs.lever.co/b/1", text: "L" }]);
+        if (host(url) === "api.ashbyhq.com") return jsonOk({ jobs: [{ jobUrl: "https://ashby/1", title: "AsH" }] });
+        if (host(url) === "apply.workable.com") return jsonOk({ jobs: [{ url: "https://wk/1", title: "W" }] });
         return jsonOk({}); // jobs upsert + markIngested
       })
     );
@@ -81,7 +84,7 @@ describe("ingest worker HTTP", () => {
         if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
           return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
         }
-        if (url.includes("boards-api.greenhouse.io")) return { ok: false, status: 500 };
+        if (host(url) === "boards-api.greenhouse.io") return { ok: false, status: 500 };
         return jsonOk({});
       })
     );
@@ -106,7 +109,7 @@ describe("ingest worker HTTP", () => {
       if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
         return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
       }
-      if (url.includes("boards-api.greenhouse.io")) return jsonOk({ jobs: [] });
+      if (host(url) === "boards-api.greenhouse.io") return jsonOk({ jobs: [] });
       if (url.includes("/rest/v1/jobs")) throw new Error("upsert should not run for 0 jobs");
       return jsonOk({});
     }));
@@ -120,7 +123,7 @@ describe("ingest worker HTTP", () => {
       if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
         return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
       }
-      if (url.includes("boards-api.greenhouse.io")) return Promise.reject("string failure");
+      if (host(url) === "boards-api.greenhouse.io") return Promise.reject("string failure");
       return jsonOk({});
     }));
     const body = await (await worker.fetch(req("/ingest", { method: "POST", headers: auth }), env)).json();
@@ -133,7 +136,7 @@ describe("ingest worker HTTP", () => {
       if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
         return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
       }
-      if (url.includes("boards-api.greenhouse.io")) return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
+      if (host(url) === "boards-api.greenhouse.io") return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
       return jsonOk({});
     }));
     await worker.scheduled({} as ScheduledController, env);
@@ -143,7 +146,7 @@ describe("ingest worker HTTP", () => {
       if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
         return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
       }
-      if (url.includes("boards-api.greenhouse.io")) return { ok: false, status: 500 };
+      if (host(url) === "boards-api.greenhouse.io") return { ok: false, status: 500 };
       return jsonOk({});
     }));
     await worker.scheduled({} as ScheduledController, env);
@@ -155,7 +158,7 @@ describe("ingest worker HTTP", () => {
       if (url.includes("/rest/v1/companies") && (!init || init.method !== "PATCH")) {
         return jsonOk([{ id: "c1", name: "A", ats: "greenhouse", board_token: "a" }]);
       }
-      if (url.includes("boards-api.greenhouse.io")) return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
+      if (host(url) === "boards-api.greenhouse.io") return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
       if (url.includes("/rest/v1/jobs")) return { ok: false, status: 500, text: async () => "nope" };
       return jsonOk({});
     }));
