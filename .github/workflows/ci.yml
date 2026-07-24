@@ -175,6 +175,11 @@ jobs:
       - name: Typecheck + dry-run deploy
         run: npm run check
 
+      # Worker unit tests run with coverage thresholds pinned at 100% (see
+      # each worker's vitest.config.ts), same standard as the app suite.
+      - name: Test (100% coverage gate)
+        run: npm run test
+
   # Catches Supabase migration-ledger drift at REVIEW time instead of at
   # deploy time on main. No `needs` - it starts the moment the PR run does,
   # so drift shows up as a red check while the other jobs are still building.

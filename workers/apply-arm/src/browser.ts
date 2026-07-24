@@ -74,8 +74,6 @@ export interface ReachResult {
 }
 
 interface ReachOptions {
-  /** Run the Gemini vision rounds when the adapter/playbook path misses. */
-  vision: boolean;
   /** Throw FormNotFoundError when no form is reachable (extract wants this;
    *  fill/submit stays lenient and leans on fillField's page-wide fallback). */
   throwIfNotFound: boolean;
@@ -143,48 +141,46 @@ async function reachForm(
 
   // Rounds 1-2: vision. Look at the page, act on what we see.
   let lastReason = sanity.reason;
-  if (opts.vision) {
-    for (let round = 0; round < 2; round++) {
-      const shot = new Uint8Array(await page.screenshot({ fullPage: false }));
-      const diagnosis = await diagnosePage(env, shot, page.url(), lastReason).catch(() => null);
-      if (!diagnosis) break;
+  for (let round = 0; round < 2; round++) {
+    const shot = new Uint8Array(await page.screenshot({ fullPage: false }));
+    const diagnosis = await diagnosePage(env, shot, page.url(), lastReason).catch(() => null);
+    if (!diagnosis) break;
 
-      // Vision sees a real form but our adapter selector missed it (custom
-      // career-site markup). Widen extraction to every form on the page.
-      if (diagnosis.form_visible && diagnosis.action === "none") {
-        const wide = await acquire("body");
-        if (looksLikeApplicationForm(wide).ok) {
-          const strategy: RecoveryStrategy = { action: "scroll" }; // "extract page-wide"
-          return { recovery: { source: "vision", strategy, domain }, scope: "body", rawFields: wide };
-        }
+    // Vision sees a real form but our adapter selector missed it (custom
+    // career-site markup). Widen extraction to every form on the page.
+    if (diagnosis.form_visible && diagnosis.action === "none") {
+      const wide = await acquire("body");
+      if (looksLikeApplicationForm(wide).ok) {
+        const strategy: RecoveryStrategy = { action: "scroll" }; // "extract page-wide"
+        return { recovery: { source: "vision", strategy, domain }, scope: "body", rawFields: wide };
       }
-      if (diagnosis.action === "none") {
-        lastReason = diagnosis.reason || lastReason;
-        break;
-      }
-
-      const strategy: RecoveryStrategy = {
-        action: diagnosis.action,
-        click_text: diagnosis.click_text
-      };
-      await applyStrategy(page, adapter.formSelector, strategy, params.ats);
-      await adapter.openApplication(page);
-      fields = await acquire(adapter.formSelector);
-      let scope = adapter.formSelector;
-      sanity = looksLikeApplicationForm(fields);
-      if (!sanity.ok) {
-        // Selector still missed it; try a page-wide sweep before giving up.
-        const wide = await acquire("body");
-        if (looksLikeApplicationForm(wide).ok) {
-          fields = wide;
-          scope = "body";
-        }
-      }
-      if (looksLikeApplicationForm(fields).ok) {
-        return { recovery: { source: "vision", strategy, domain }, scope, rawFields: fields };
-      }
-      lastReason = sanity.reason;
     }
+    if (diagnosis.action === "none") {
+      lastReason = diagnosis.reason || lastReason;
+      break;
+    }
+
+    const strategy: RecoveryStrategy = {
+      action: diagnosis.action,
+      click_text: diagnosis.click_text
+    };
+    await applyStrategy(page, adapter.formSelector, strategy, params.ats);
+    await adapter.openApplication(page);
+    fields = await acquire(adapter.formSelector);
+    let scope = adapter.formSelector;
+    sanity = looksLikeApplicationForm(fields);
+    if (!sanity.ok) {
+      // Selector still missed it; try a page-wide sweep before giving up.
+      const wide = await acquire("body");
+      if (looksLikeApplicationForm(wide).ok) {
+        fields = wide;
+        scope = "body";
+      }
+    }
+    if (looksLikeApplicationForm(fields).ok) {
+      return { recovery: { source: "vision", strategy, domain }, scope, rawFields: fields };
+    }
+    lastReason = sanity.reason;
   }
 
   if (opts.throwIfNotFound) throw new FormNotFoundError(lastReason);
@@ -201,7 +197,6 @@ async function reachForm(
 export async function extractForm(env: Env, params: RunParams): Promise<FillResult> {
   return withBrowser(env, async (page) => {
     const { recovery, rawFields } = await reachForm(env, page, params, {
-      vision: true,
       throwIfNotFound: true
     });
     // Sanity ran on RAW fields inside reachForm (keeps the type==="file" resume
@@ -274,15 +269,12 @@ export async function fillAndMaybeSubmit(
     // a fresh session after the review gate. `scope` is where the form lives
     // (adapter selector or a page-wide sweep) so fillField targets the right DOM.
     const { scope } = await reachForm(env, page, params, {
-      vision: true,
       throwIfNotFound: false
     });
 
     // Attach the resume first - some ATSes autofill fields from it and we
-    // want typed answers to win.
-    if (params.resume.signedUrl) {
-      await attachResume(page, params);
-    }
+    // want typed answers to win. (attachResume no-ops without a signed URL.)
+    await attachResume(page, params);
 
     for (const answer of answers) {
       if (answer.skipped || answer.value === "") continue;
@@ -574,7 +566,7 @@ async function fillCombobox(
   el: ReturnType<Page["locator"]>,
   value: string
 ): Promise<void> {
-  if (!value) return;
+  if (!value.trim()) return;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     await el.click().catch(() => {}); // open the menu

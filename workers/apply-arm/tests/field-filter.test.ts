@@ -33,6 +33,12 @@ describe("isNonApplicationField", () => {
     expect(isNonApplicationField(f({ name: "bot-field" }))).toBe(true);
   });
 
+  it("tolerates missing name/label and drops a bare 'Search' label", () => {
+    // name/label undefined exercise the `?? ""` defaults.
+    expect(isNonApplicationField({ type: "text", required: false, options: [] } as unknown as FormField)).toBe(false);
+    expect(isNonApplicationField(f({ name: "help", label: "Search" }))).toBe(true);
+  });
+
   it("keeps real application questions", () => {
     expect(isNonApplicationField(f({ name: "email", label: "Email", type: "email" }))).toBe(false);
     expect(isNonApplicationField(f({ name: "first_name", label: "First Name" }))).toBe(false);

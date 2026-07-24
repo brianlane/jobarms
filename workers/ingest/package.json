@@ -8,12 +8,13 @@
     "dev": "wrangler dev",
     "check": "tsc --noEmit && wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
-    "test": "vitest run"
+    "test": "vitest run --coverage"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.1",
+    "vitest": "^4.1.10",
     "wrangler": "^4.113.0"
   },
   "overrides": {

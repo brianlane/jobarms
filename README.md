@@ -227,7 +227,16 @@ everything measured, never a soft average):
       (`proxy.ts`), and metadata routes (jsdom + Testing Library; async
       server components are awaited and rendered, `next/font`, `next/og`, and
       Speed Insights mocked). The entire `src` tree is now at 100%.
-- [ ] `workers/**` (Playwright + `fetch` mocked)
+- [x] `workers/**`: both workers carry their own vitest config with the same
+      100% thresholds, run by the Workers Check CI job. The ingest worker
+      mocks `fetch`; the apply-arm worker mocks the Cloudflare virtual
+      modules, Playwright (a fake Page/locator harness in
+      `workers/apply-arm/tests/helpers/fake-page.ts`), and runs the in-page
+      extraction callbacks against a crafted fake DOM. Real browser behavior
+      is still validated end-to-end by `debug/smoke-arm-run.ts`.
+
+Whole-repo coverage is complete: every phase above is at a literal 100% with
+no ignore pragmas.
 
 The unit suite is hermetic: `tests/setup-env.ts` strips every live credential
 so no test can reach a real service.

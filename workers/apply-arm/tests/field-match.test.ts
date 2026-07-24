@@ -35,6 +35,13 @@ describe("checkboxLabelMatches", () => {
     expect(checkboxLabelMatches("U.S. permanent resident (Green Card holder)", ["U.S. permanent resident"])).toBe(true);
   });
 
+  it("handles empty labels, empty wanted values, reverse containment, and non-matches", () => {
+    expect(checkboxLabelMatches("", ["x"])).toBe(false); // empty option label
+    expect(checkboxLabelMatches("Label", [""])).toBe(false); // empty wanted value
+    expect(checkboxLabelMatches("US citizen", ["US citizen or national"])).toBe(true); // label ⊂ wanted
+    expect(checkboxLabelMatches("abc", ["xyz"])).toBe(false); // no match at all
+  });
+
   it("supports multiple wanted values", () => {
     const wanted = splitAnswerValues("U.S. citizen; Individual granted asylum in the U.S.");
     expect(checkboxLabelMatches("U.S. citizen", wanted)).toBe(true);
