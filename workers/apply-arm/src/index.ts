@@ -31,9 +31,11 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 function authorized(request: Request, env: Env): boolean {
+  const secret = env.ARM_WORKER_SHARED_SECRET;
+  if (!secret) return false;
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  return Boolean(env.ARM_WORKER_SHARED_SECRET) && timingSafeEqual(token, env.ARM_WORKER_SHARED_SECRET ?? "");
+  return timingSafeEqual(token, secret);
 }
 
 export default {
