@@ -32,7 +32,10 @@ describe("subscriptionUpdateFromStripe", () => {
     expect(update.current_period_end).toBe(new Date(1_790_000_000 * 1000).toISOString());
   });
 
-  it("trialing and past_due keep premium access", () => {
+  it("trialing and past_due record the real tier (access is gated by effectivePlan)", () => {
+    // The row mirrors Stripe: past_due keeps its tier so access restores the
+    // instant Stripe flips back to active. effectivePlan (plans.ts) is what
+    // actually denies paid features while past_due.
     expect(subscriptionUpdateFromStripe(fakeSub({ status: "trialing" })).plan).toBe("premium");
     expect(subscriptionUpdateFromStripe(fakeSub({ status: "past_due" })).plan).toBe("premium");
   });

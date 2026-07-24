@@ -23,8 +23,14 @@ export interface SubscriptionRow {
   cancel_at_period_end: boolean;
 }
 
-/** Statuses that count as an active paid subscription. */
-const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
+/**
+ * Statuses that count as an active paid subscription. `past_due` is
+ * deliberately EXCLUDED: once a payment fails, access drops to free until the
+ * card is fixed (Stripe flips the subscription back to `active` on a
+ * successful retry, which restores the tier). This avoids granting paid
+ * features through the entire dunning window.
+ */
+const ACTIVE_STATUSES = new Set(["active", "trialing"]);
 
 export function effectivePlan(sub: Pick<SubscriptionRow, "plan" | "status"> | null): Plan {
   if (!sub) return "free";

@@ -22,7 +22,12 @@ describe("effectivePlan", () => {
     expect(effectivePlan({ plan: "premium", status: "active" })).toBe("premium");
     expect(effectivePlan({ plan: "premium", status: "trialing" })).toBe("premium");
     expect(effectivePlan({ plan: "max", status: "active" })).toBe("max");
-    expect(effectivePlan({ plan: "max", status: "past_due" })).toBe("max");
+    expect(effectivePlan({ plan: "max", status: "trialing" })).toBe("max");
+  });
+
+  it("past_due drops to free until payment is fixed (no dunning grace)", () => {
+    expect(effectivePlan({ plan: "premium", status: "past_due" })).toBe("free");
+    expect(effectivePlan({ plan: "max", status: "past_due" })).toBe("free");
   });
 
   it("canceled/incomplete paid rows fall back to free", () => {
