@@ -36,6 +36,11 @@ export function subscriptionUpdateFromStripe(
   const periodEnd = item?.current_period_end
     ? new Date(item.current_period_end * 1000).toISOString()
     : null;
+  // Record the true tier for any subscription Stripe still considers live,
+  // INCLUDING past_due, so the row keeps the real tier through dunning and
+  // access restores the instant Stripe flips back to active. Whether past_due
+  // actually grants access is decided solely by effectivePlan (plans.ts),
+  // which excludes past_due - this write path just mirrors Stripe's state.
   const live = sub.status === "active" || sub.status === "trialing" || sub.status === "past_due";
 
   return {
