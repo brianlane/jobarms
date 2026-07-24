@@ -160,7 +160,16 @@ async function solveHcaptcha(env: Env, page: Page, deadline: number): Promise<bo
     await challenge.locator(".button-submit").click().catch(() => {});
     await page.waitForTimeout(2500);
   }
-  // We cannot reliably read hCaptcha solved-state cross-frame; report optimistic
-  // only if the challenge iframe disappeared.
+  // Solved-state: the checkbox widget reports aria-checked once a token is
+  // minted, so trust that first in either direction. Only when the state is
+  // unreadable fall back to the (optimistic) challenge-iframe-gone signal;
+  // an explicit "false" must never be reported as solved just because the
+  // challenge popup closed.
+  const checked = await checkbox
+    .locator("#checkbox")
+    .getAttribute("aria-checked")
+    .catch(() => null);
+  if (checked === "true") return true;
+  if (checked === "false") return false;
   return (await page.locator('iframe[src*="hcaptcha.com"][title*="challenge" i]').count()) === 0;
 }

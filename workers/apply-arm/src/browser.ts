@@ -98,8 +98,16 @@ async function reachForm(
   opts: ReachOptions
 ): Promise<ReachResult> {
   const adapter = ADAPTERS[params.ats];
+  // The adapter's opener is best-effort: it can throw on hostile pages (the
+  // Lever opener waits on name/email inputs; the Greenhouse opener navigates
+  // into an embed). A throw here must fall through to the sanity check and
+  // the playbook/vision recovery rounds below, not abort the run before
+  // self-healing gets a chance.
+  const openApplication = async (): Promise<void> => {
+    await adapter.openApplication(page).catch(() => {});
+  };
   await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
-  await adapter.openApplication(page);
+  await openApplication();
   await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
 
   const acquire = async (scope: string): Promise<FormField[]> =>
@@ -117,7 +125,7 @@ async function reachForm(
   const playbook = await getPlaybook(env, domain, params.ats);
   if (playbook) {
     await applyStrategy(page, adapter.formSelector, playbook, params.ats);
-    await adapter.openApplication(page);
+    await openApplication();
     fields = await acquire(adapter.formSelector);
     sanity = looksLikeApplicationForm(fields);
     if (sanity.ok) {
@@ -165,7 +173,7 @@ async function reachForm(
       click_text: diagnosis.click_text
     };
     await applyStrategy(page, adapter.formSelector, strategy, params.ats);
-    await adapter.openApplication(page);
+    await openApplication();
     fields = await acquire(adapter.formSelector);
     let scope = adapter.formSelector;
     sanity = looksLikeApplicationForm(fields);

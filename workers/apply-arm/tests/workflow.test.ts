@@ -10,7 +10,7 @@ const db = vi.hoisted(() => ({
   updateRun: vi.fn(async () => {}),
   logStep: vi.fn(async () => {}),
   recordPlaybook: vi.fn(async () => {}),
-  uploadScreenshot: vi.fn(async () => "shot/path.png"),
+  uploadScreenshot: vi.fn(async (..._args: unknown[]) => "shot/path.png"),
   appendScreenshot: vi.fn(async () => {}),
   updateApplication: vi.fn(async () => {}),
   releaseArmRunSlot: vi.fn(async () => {})
@@ -61,6 +61,7 @@ beforeEach(() => {
   browser.extractForm.mockResolvedValue({ fields: [{ name: "email" }], screenshot: new Uint8Array(), recovery: null });
   gemini.generateAnswers.mockResolvedValue([{ name: "email", label: "Email", value: "a@b.com" }]);
   browser.fillAndMaybeSubmit.mockResolvedValue({ outcome: "submitted", screenshot: new Uint8Array() });
+  db.uploadScreenshot.mockResolvedValue("shot/path.png");
 });
 
 describe("ApplyRunWorkflow", () => {
@@ -145,5 +146,24 @@ describe("ApplyRunWorkflow", () => {
     browser.extractForm.mockRejectedValueOnce("string failure");
     await expect(run(params({ autonomy: "full_auto" }))).rejects.toBeDefined();
     expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "failed", error: "string failure" });
+  });
+
+  it("submit is non-retryable and a post-submit screenshot failure never re-submits", async () => {
+    // The application went through, then the proof-shot upload dies. That must
+    // NOT fail (and re-run) the submit step: the arm would apply twice.
+    db.uploadScreenshot.mockImplementation(async (...args: unknown[]) => {
+      if (args[3] === "submitted") throw new Error("storage down");
+      return "shot/path.png";
+    });
+    const step = makeStep(async () => ({ payload: {} }));
+    const wf = new ApplyRunWorkflow({} as never, env);
+    await wf.run({ payload: params({ autonomy: "full_auto" }) }, step as never);
+
+    const submitCall = step.do.mock.calls.find((c) => c[0] === "submit");
+    expect(submitCall?.[1]).toMatchObject({ retries: { limit: 0 } });
+    expect(browser.fillAndMaybeSubmit).toHaveBeenCalledTimes(1);
+    // Finalize still ran on the real outcome despite the lost screenshot.
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "submitted", error: null });
+    expect(db.releaseArmRunSlot).not.toHaveBeenCalled();
   });
 });
