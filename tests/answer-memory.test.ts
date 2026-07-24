@@ -64,6 +64,20 @@ describe("memoryFromApproval", () => {
     );
     expect(memory).toEqual([]);
   });
+
+  it("drops a falsy-label answer and treats an empty prior value as an edit", () => {
+    const memory = memoryFromApproval(
+      [{ name: "notice", label: "Notice period", value: "" }], // empty prior value
+      [
+        { name: "blank", label: "", value: "ignored" }, // falsy label -> dropped
+        { name: "notice", label: "Notice period", value: "Two weeks" }
+      ]
+    );
+    expect(memory).toHaveLength(1);
+    expect(memory[0].question_key).toBe("notice_period");
+    // prior "" differs from "Two weeks" -> user_edited (exercises `before.value || ""`)
+    expect(memory[0].source).toBe("user_edited");
+  });
 });
 
 describe("statsFromApproval", () => {
@@ -97,6 +111,59 @@ describe("statsFromApproval", () => {
       [{ name: "src", label: "How did you hear about us?", value: "Job board" }]
     );
     expect(stats[0].edited).toBe(true);
+  });
+
+  it("drops fields with a blank label and marks missing answers skipped", () => {
+    const stats = statsFromApproval(
+      [
+        { name: "blank", label: "   ", type: "text" },
+        { name: "phone", label: "Phone", type: "text" }
+      ],
+      [],
+      [] // no approved answer for phone -> skipped via missing `after`
+    );
+    expect(stats).toHaveLength(1);
+    expect(stats[0].question_key).toBe("phone");
+    expect(stats[0].skipped).toBe(true);
+  });
+
+  it("does not record an option choice when the value is not a listed option", () => {
+    const stats = statsFromApproval(
+      [{ name: "src", label: "How did you hear about us?", type: "select", options: ["LinkedIn"] }],
+      [],
+      [{ name: "src", label: "How did you hear about us?", value: "Carrier pigeon" }]
+    );
+    expect(stats[0].chosen_option).toBeNull();
+  });
+
+  it("handles falsy labels, empty prior values, and option fields with no options list", () => {
+    const stats = statsFromApproval(
+      [
+        { name: "empty", label: "", type: "text" }, // falsy label -> filtered out
+        { name: "src", label: "How did you hear about us?", type: "text" },
+        { name: "opt", label: "Pick one", type: "radio" } // no options array
+      ],
+      [{ name: "src", label: "How did you hear about us?", value: "" }], // prior value empty
+      [
+        { name: "src", label: "How did you hear about us?", value: "Job board" },
+        { name: "opt", label: "Pick one", value: "Whatever" }
+      ]
+    );
+    const byKey = Object.fromEntries(stats.map((s) => [s.question_key, s]));
+    expect(byKey["empty_"]).toBeUndefined();
+    // prior "" differs from "Job board" -> edited true (exercises `before.value || ""`)
+    expect(byKey["how_did_you_hear_about_us"].edited).toBe(true);
+    // option field with no options list -> no chosen option
+    expect(byKey["pick_one"].chosen_option).toBeNull();
+  });
+
+  it("treats an explicitly skipped answer as skipped", () => {
+    const stats = statsFromApproval(
+      [{ name: "q", label: "Q", type: "text" }],
+      [],
+      [{ name: "q", label: "Q", value: "something", skipped: true }]
+    );
+    expect(stats[0].skipped).toBe(true);
   });
 });
 
@@ -140,5 +207,45 @@ describe("lessonsFromStats", () => {
       }
     ]);
     expect(lessons).toEqual([]);
+  });
+
+  it("a strong majority wins and short-circuits the skip lesson (one lesson per row)", () => {
+    const lessons = lessonsFromStats([
+      {
+        question_key: "src",
+        label_example: "Source",
+        times_seen: 10,
+        times_skipped: 9, // also often-skipped, but the majority option wins first
+        option_counts: { "Job board": 8, LinkedIn: 1 }
+      }
+    ]);
+    expect(lessons).toHaveLength(1);
+    expect(lessons[0].guidance).toContain("most often answer");
+  });
+
+  it("emits nothing when there is enough data but no clear majority", () => {
+    // totalChoices >= 3 but the top option is under 60%, and skip rate is low:
+    // exercises the majority-threshold FALSE branch without a skip lesson.
+    const lessons = lessonsFromStats([
+      {
+        question_key: "src",
+        label_example: "Source",
+        times_seen: 3,
+        times_skipped: 0,
+        option_counts: { A: 1, B: 1, C: 1 }
+      }
+    ]);
+    expect(lessons).toEqual([]);
+  });
+
+  it("honors the lesson limit", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      question_key: `q${i}`,
+      label_example: `Q${i}`,
+      times_seen: 6,
+      times_skipped: 4,
+      option_counts: {}
+    }));
+    expect(lessonsFromStats(rows, 5)).toHaveLength(5);
   });
 });

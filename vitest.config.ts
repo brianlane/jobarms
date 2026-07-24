@@ -17,7 +17,15 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "text-summary", "html"],
-      include: ["src/lib/**/*.ts"]
+      // Coverage scope grows as each layer is fully tested (see README). CI
+      // gates on 100% for everything currently in scope.
+      include: ["src/lib/**/*.ts"],
+      thresholds: {
+        statements: 100,
+        branches: 100,
+        functions: 100,
+        lines: 100
+      }
     }
   }
 });

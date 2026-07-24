@@ -17,6 +17,12 @@ describe("hasMeaningfulAnswers", () => {
     expect(hasMeaningfulAnswers([])).toBe(false);
     expect(hasMeaningfulAnswers(null)).toBe(false);
   });
+
+  it("handles null/undefined value fields without throwing", () => {
+    expect(hasMeaningfulAnswers([{ value: null }])).toBe(false);
+    expect(hasMeaningfulAnswers([{}])).toBe(false);
+    expect(hasMeaningfulAnswers([{ value: "  " }])).toBe(false);
+  });
 });
 
 describe("cancelRefund: user behavior consumes, system failure refunds", () => {
