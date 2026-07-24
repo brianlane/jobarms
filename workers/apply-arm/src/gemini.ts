@@ -178,8 +178,10 @@ ${JSON.stringify(fields)}
 
 Rules:
 - Return a JSON array: [{"name": "<field name>", "label": "<label>", "value": "<answer>", "skipped": false}, ...] covering EVERY field.
-- For select/radio/checkbox fields the value MUST be copied EXACTLY from the field's options array.
-- For checkbox consent/acknowledgement fields use "true".
+- For select/radio/checkbox fields WITH a non-empty options array, the value MUST be copied EXACTLY from that options array (verbatim, including punctuation).
+- Checkbox fields with options are "select all that apply" groups: pick the option(s) that truthfully apply and join multiple with "; ". Always choose the explicit "None of the above" / "None of these apply" option when nothing else applies rather than skipping (these are required compliance questions).
+- For a select field with an EMPTY options array (a dynamic dropdown whose choices are not listed), infer the correct short value from the label: yes/no questions get "Yes" or "No"; a country dropdown gets the full country name; etc.
+- For a lone checkbox consent/acknowledgement field (no options) use "true".
 - For file fields return value "" and skipped true (files are attached separately).
 - Voluntary self-identification (EEO) fields: use the profile's eeo values if present; otherwise choose the "decline to answer" style option when available, else skip.
 - Open-ended questions ("Why do you want to work here?", cover letter): 2-5 sentences, first person, grounded ONLY in real profile facts, tailored to the job description.

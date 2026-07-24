@@ -13,6 +13,7 @@ import { filterApplicationFields } from "./field-filter";
 import { diagnosePage } from "./gemini";
 import { getPlaybook, recordPlaybookFailure } from "./db";
 import { detectInteractiveChallenge, solveInteractiveChallenge } from "./captcha-vision";
+import { checkboxLabelMatches, splitAnswerValues } from "./field-match";
 
 export interface RecoveryStrategy {
   action: "click" | "iframe" | "scroll";
@@ -350,11 +351,25 @@ async function collectFields(page: Page, formSelector: string): Promise<FormFiel
     const fields: FormField[] = [];
     const seen = new Set<string>();
 
+    const textFromIds = (ids: string): string =>
+      ids
+        .split(/\s+/)
+        .map((id) => doc.getElementById(id)?.textContent?.trim() ?? "")
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
     const labelFor = (el: any): string => {
       const id = el.getAttribute("id");
       if (id) {
         const label = doc.querySelector(`label[for="${cssEscape(id)}"]`);
         if (label?.textContent) return label.textContent.trim();
+      }
+      // react-select and other ARIA widgets point at a separate label node.
+      const labelledBy = el.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const txt = textFromIds(labelledBy);
+        if (txt) return txt;
       }
       const wrapping = el.closest("label");
       if (wrapping?.textContent) return wrapping.textContent.trim();
@@ -365,31 +380,75 @@ async function collectFields(page: Page, formSelector: string): Promise<FormFiel
       return el.getAttribute("name") ?? "";
     };
 
+    // The visible label for one option (radio/checkbox) within a group.
+    const optionLabel = (el: any): string => {
+      const oid = el.getAttribute("id");
+      const l = oid ? doc.querySelector(`label[for="${cssEscape(oid)}"]`) : null;
+      return ((l?.textContent ?? el.getAttribute("aria-label") ?? el.getAttribute("value")) ?? "").trim();
+    };
+
+    // The prompt for a radio/checkbox GROUP (not one option's label): a
+    // description attribute (Greenhouse), a fieldset legend, or aria-describedby.
+    const groupLabel = (el: any): string => {
+      const desc = el.getAttribute("description");
+      if (desc) return desc.replace(/\s+/g, " ").trim();
+      const fs = el.closest("fieldset");
+      const legend = fs?.querySelector("legend");
+      if (legend?.textContent) return legend.textContent.replace(/\s+/g, " ").trim();
+      const describedBy = el.getAttribute("aria-describedby");
+      if (describedBy) {
+        const txt = textFromIds(describedBy);
+        if (txt) return txt.replace(/\s+/g, " ").trim();
+      }
+      return "";
+    };
+
+    const isRequired = (el: any): boolean =>
+      el.hasAttribute("required") || el.getAttribute("aria-required") === "true";
+
+    // A text input that is really a dropdown (react-select, ARIA combobox).
+    const isCombobox = (el: any, tag: string): boolean => {
+      if (tag !== "input") return false;
+      const cls = (el.getAttribute("class") ?? "").split(/\s+/);
+      return (
+        cls.includes("select__input") ||
+        el.getAttribute("role") === "combobox" ||
+        el.getAttribute("aria-autocomplete") === "list"
+      );
+    };
+
     for (const el of elements) {
       const tag = el.tagName.toLowerCase();
-      const type = tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
-      if (["hidden", "submit", "button", "image"].includes(type)) continue;
+      let type = tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
+      if (["hidden", "submit", "button", "image", "reset"].includes(type)) continue;
+
+      // Custom dropdowns surface as text inputs; treat them as selects so the
+      // filler operates the widget instead of typing into an inert box.
+      if (isCombobox(el, tag)) type = "select";
 
       const name = el.getAttribute("name") ?? el.getAttribute("id") ?? "";
       if (!name) continue;
 
-      // Radio groups: one field per name, options aggregated.
-      if (type === "radio") {
+      // Radio and checkbox GROUPS: one field per name, options aggregated so
+      // the model picks a real option and the filler ticks the right box.
+      if (type === "radio" || type === "checkbox") {
         if (seen.has(name)) continue;
-        seen.add(name);
-        const radios: any[] = Array.from(
-          doc.querySelectorAll(`input[type="radio"][name="${cssEscape(name)}"]`)
+        const group: any[] = Array.from(
+          doc.querySelectorAll(`input[type="${type}"][name="${cssEscape(name)}"]`)
         );
+        // A lone checkbox is a boolean consent box, not a multi-option group.
+        if (type === "checkbox" && group.length <= 1) {
+          seen.add(name);
+          fields.push({ name, label: labelFor(el), type: "checkbox", required: isRequired(el), options: [] });
+          continue;
+        }
+        seen.add(name);
         fields.push({
           name,
-          label: labelFor(el),
-          type: "radio",
-          required: radios.some((r) => r.hasAttribute("required")),
-          options: radios.map((r) => {
-            const rid = r.getAttribute("id");
-            const rl = rid ? doc.querySelector(`label[for="${cssEscape(rid)}"]`) : null;
-            return ((rl?.textContent ?? r.getAttribute("value")) ?? "").trim();
-          })
+          label: (groupLabel(el) || labelFor(el)).replace(/\s+/g, " ").slice(0, 300),
+          type,
+          required: group.some(isRequired),
+          options: group.map(optionLabel).filter(Boolean)
         });
         continue;
       }
@@ -407,8 +466,8 @@ async function collectFields(page: Page, formSelector: string): Promise<FormFiel
       fields.push({
         name,
         label: labelFor(el).replace(/\s+/g, " ").slice(0, 300),
-        type: type === "select" ? "select" : type,
-        required: el.hasAttribute("required") || el.getAttribute("aria-required") === "true",
+        type,
+        required: isRequired(el),
         options
       });
     }
@@ -435,9 +494,20 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
   const count = await el.count();
   if (count === 0) return;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tag = await el.evaluate((node: any) => node.tagName.toLowerCase());
-  const type = tag === "input" ? await el.getAttribute("type") : tag;
+  // Inspect the real element: native controls report their tag/type, but a
+  // react-select dropdown is an <input> we must OPERATE, not type into.
+  const info = await el.evaluate((node: any) => ({
+    tag: node.tagName.toLowerCase(),
+    type: (node.getAttribute("type") ?? "").toLowerCase(),
+    cls: node.getAttribute("class") ?? "",
+    role: node.getAttribute("role") ?? "",
+    autocomplete: node.getAttribute("aria-autocomplete") ?? ""
+  }));
+  const isCombobox =
+    info.tag === "input" &&
+    (info.cls.split(/\s+/).includes("select__input") ||
+      info.role === "combobox" ||
+      info.autocomplete === "list");
 
   // Layer 1 realism: bring the field into view and move the mouse to it
   // before interacting, so behavior reads less like a bot.
@@ -445,46 +515,126 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
   await moveMouseTo(page, el).catch(() => {});
 
   try {
-    switch ((type ?? "text").toLowerCase()) {
-      case "select":
-        await el.selectOption({ label: answer.value });
-        break;
-      case "checkbox": {
-        if (answer.value === "true") await el.check();
-        break;
-      }
-      case "radio": {
-        const radios = page.locator(`${formSelector} input[type="radio"][name="${esc}"]`);
-        const n = await radios.count();
-        for (let i = 0; i < n; i++) {
-          const radio = radios.nth(i);
-          const id = await radio.getAttribute("id");
-          const label = id ? await page.locator(`label[for="${id}"]`).textContent() : null;
-          const value = await radio.getAttribute("value");
-          if ((label ?? "").trim() === answer.value || value === answer.value) {
-            await radio.check();
-            break;
-          }
+    if (info.tag === "select") {
+      await el.selectOption({ label: answer.value }).catch(async () => {
+        await el.selectOption(answer.value).catch(() => {});
+      });
+      return;
+    }
+    if (isCombobox) {
+      await fillCombobox(page, el, answer.value);
+      return;
+    }
+    if (info.type === "checkbox") {
+      await fillCheckboxGroup(page, esc, answer.value);
+      return;
+    }
+    if (info.type === "radio") {
+      const radios = page.locator(`input[type="radio"][name="${esc}"]`);
+      const n = await radios.count();
+      for (let i = 0; i < n; i++) {
+        const radio = radios.nth(i);
+        const id = await radio.getAttribute("id");
+        const label = id ? await page.locator(`label[for="${id}"]`).first().textContent().catch(() => null) : null;
+        const value = await radio.getAttribute("value");
+        if ((label ?? "").trim() === answer.value || value === answer.value) {
+          await radio.check().catch(() => {});
+          break;
         }
-        break;
       }
-      case "file":
-        break; // handled by attachResume
-      default:
-        await el.click().catch(() => {});
-        await el.fill("");
-        // Keystroke realism helps invisible-captcha scoring, but each character
-        // is a separate Browser Rendering command that burns Workflow CPU. Type
-        // char-by-char only for SHORT values (names, short answers) and fill the
-        // rest instantly, so a long cover letter can't blow the CPU budget.
-        if (answer.value.length <= REALISTIC_TYPING_MAX) {
-          await el.pressSequentially(answer.value, { delay: 30 + Math.floor(Math.random() * 40) });
-        } else {
-          await el.fill(answer.value);
-        }
+      return;
+    }
+    if (info.type === "file") return; // handled by attachResume
+
+    await el.click().catch(() => {});
+    await el.fill("");
+    // Keystroke realism helps invisible-captcha scoring, but each character
+    // is a separate Browser Rendering command that burns Workflow CPU. Type
+    // char-by-char only for SHORT values (names, short answers) and fill the
+    // rest instantly, so a long cover letter can't blow the CPU budget.
+    if (answer.value.length <= REALISTIC_TYPING_MAX) {
+      await el.pressSequentially(answer.value, { delay: 30 + Math.floor(Math.random() * 40) });
+    } else {
+      await el.fill(answer.value);
     }
   } catch {
     // Field visible in DOM but not interactable - leave for review.
+  }
+}
+
+/**
+ * Operate a react-select / ARIA combobox: open it, then click the option whose
+ * text matches the answer; fall back to typing + Enter (works for typeaheads
+ * like Country). The options only exist in the DOM once the menu is open.
+ */
+async function fillCombobox(
+  page: Page,
+  el: ReturnType<Page["locator"]>,
+  value: string
+): Promise<void> {
+  if (!value) return;
+  await el.click().catch(() => {});
+  await page.waitForTimeout(400);
+
+  const exact = page.getByRole("option", { name: value, exact: true }).first();
+  if ((await exact.count().catch(() => 0)) > 0) {
+    await exact.click().catch(() => {});
+    return;
+  }
+  // Type to filter, then take the exact match if it appeared, else the top hit.
+  await el.pressSequentially(value.slice(0, REALISTIC_TYPING_MAX), {
+    delay: 30 + Math.floor(Math.random() * 30)
+  }).catch(() => {});
+  await page.waitForTimeout(500);
+  const filtered = page.getByRole("option", { name: value, exact: true }).first();
+  if ((await filtered.count().catch(() => 0)) > 0) {
+    await filtered.click().catch(() => {});
+    return;
+  }
+  await page.keyboard.press("Enter").catch(() => {});
+}
+
+/**
+ * Tick the checkbox(es) in a group whose label matches the answer. A single
+ * boolean consent box is checked when the answer reads truthy. The answer for
+ * a multi-option group is the option label(s), "; "-joined for several.
+ */
+async function fillCheckboxGroup(page: Page, esc: string, value: string): Promise<void> {
+  const boxes = page.locator(`input[type="checkbox"][name="${esc}"]`);
+  const n = await boxes.count();
+  if (n === 0) return;
+  if (n === 1) {
+    if (/^(true|yes|checked|on|1)$/i.test(value.trim())) await boxes.first().check().catch(() => {});
+    return;
+  }
+  const wanted = splitAnswerValues(value);
+  if (wanted.length === 0) return;
+  for (let i = 0; i < n; i++) {
+    const box = boxes.nth(i);
+    // Resolve the option's visible label using the PAGE's real CSS.escape (the
+    // worker-side escaper would inject literal backslashes into the quoted
+    // [for="..."] selector and never match).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const label = await box
+      .evaluate((node: any) => {
+        const doc = node.ownerDocument;
+        const cssEscape = (globalThis as any).CSS?.escape ?? ((s: string) => s);
+        if (node.id) {
+          const l = doc.querySelector(`label[for="${cssEscape(node.id)}"]`);
+          if (l?.textContent) return l.textContent.trim();
+        }
+        const wrap = node.closest("label");
+        if (wrap?.textContent) return wrap.textContent.trim();
+        return node.getAttribute("aria-label") ?? "";
+      })
+      .catch(() => "");
+    // Drive the group to EXACTLY the wanted set: tick matches, clear the rest
+    // (corrects any stray or pre-checked box so the final state is truthful).
+    if (label && checkboxLabelMatches(label, wanted)) {
+      await box.check().catch(() => box.click().catch(() => {}));
+    } else {
+      await box.uncheck().catch(() => {});
+    }
   }
 }
 
