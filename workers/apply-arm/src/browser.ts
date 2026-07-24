@@ -63,57 +63,86 @@ async function withBrowser<T>(env: Env, fn: (page: Page) => Promise<T>): Promise
   }
 }
 
+/** Where the real form was found: the adapter's scope, or a page-wide sweep. */
+export interface ReachResult {
+  recovery: FillResult["recovery"];
+  /** Selector scope the fields live under - fillField/collectFields target it. */
+  scope: string;
+  /** Raw (unfiltered) fields collected at the winning scope. */
+  rawFields: FormField[];
+}
+
+interface ReachOptions {
+  /** Run the Gemini vision rounds when the adapter/playbook path misses. */
+  vision: boolean;
+  /** Throw FormNotFoundError when no form is reachable (extract wants this;
+   *  fill/submit stays lenient and leans on fillField's page-wide fallback). */
+  throwIfNotFound: boolean;
+}
+
 /**
- * Extract the application form, with self-healing when what we find fails
- * the "is this actually a job application?" sanity check (the arm's eyes):
- *   1. a stored per-domain playbook strategy from past successful recoveries,
- *   2. up to two vision rounds: Gemini looks at a screenshot and tells the
- *      arm what stands between it and the real form (click Apply, enter an
- *      embed, scroll).
- * Terminal failure throws FormNotFoundError so runs fail early and honestly
- * instead of parking a junk review.
+ * Reach the real application form on the live page - the SINGLE front door
+ * shared by extract, fill-for-review, and submit so every session lands on the
+ * identical form (the fix for submit sessions filling a blank page). Self-heals
+ * in the same order extractForm always has:
+ *   0. adapter selector straight away,
+ *   1. this domain's stored playbook from past successful recoveries,
+ *   2. up to two vision rounds (Gemini looks at a screenshot and says what
+ *      stands between the arm and the form: click Apply, enter an embed, scroll).
+ * Returns the winning scope + raw fields; extract screenshots/filters, fill
+ * uses the scope to target its locators.
  */
-export async function extractForm(env: Env, params: RunParams): Promise<FillResult> {
-  return withBrowser(env, async (page) => {
-    const adapter = ADAPTERS[params.ats];
-    await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
+async function reachForm(
+  env: Env,
+  page: Page,
+  params: RunParams,
+  opts: ReachOptions
+): Promise<ReachResult> {
+  const adapter = ADAPTERS[params.ats];
+  await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
+  await adapter.openApplication(page);
+  await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
+
+  const acquire = async (scope: string): Promise<FormField[]> =>
+    collectFields(page, scope).catch(() => [] as FormField[]);
+
+  let fields = await acquire(adapter.formSelector);
+  let sanity = looksLikeApplicationForm(fields);
+  if (sanity.ok) {
+    return { recovery: null, scope: adapter.formSelector, rawFields: fields };
+  }
+
+  const domain = new URL(page.url()).hostname;
+
+  // Round 0: known fix for this domain from previous successful recoveries.
+  const playbook = await getPlaybook(env, domain, params.ats);
+  if (playbook) {
+    await applyStrategy(page, adapter.formSelector, playbook, params.ats);
     await adapter.openApplication(page);
-    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
-
-    const acquire = async (): Promise<FormField[]> =>
-      collectFields(page, adapter.formSelector).catch(() => [] as FormField[]);
-
-    // Sanity always runs on RAW fields (keeps the type==="file" resume signal);
-    // the surfaced set is filtered to real questions only.
-    let fields = await acquire();
-    let sanity = looksLikeApplicationForm(fields);
+    fields = await acquire(adapter.formSelector);
+    sanity = looksLikeApplicationForm(fields);
     if (sanity.ok) {
-      const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-      return { fields: filterApplicationFields(fields), screenshot, recovery: null };
+      return {
+        recovery: { source: "playbook", strategy: playbook, domain },
+        scope: adapter.formSelector,
+        rawFields: fields
+      };
     }
-
-    const domain = new URL(page.url()).hostname;
-
-    // Round 0: known fix for this domain from previous successful recoveries.
-    const playbook = await getPlaybook(env, domain, params.ats);
-    if (playbook) {
-      await applyStrategy(page, adapter.formSelector, playbook, params.ats);
-      await adapter.openApplication(page);
-      fields = await acquire();
-      sanity = looksLikeApplicationForm(fields);
-      if (sanity.ok) {
-        const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-        return {
-          fields: filterApplicationFields(fields),
-          screenshot,
-          recovery: { source: "playbook", strategy: playbook, domain }
-        };
-      }
-      await recordPlaybookFailure(env, domain, params.ats);
+    // Playbook may have been a page-wide-extract recovery: retry the body sweep.
+    const wide = await acquire("body");
+    if (looksLikeApplicationForm(wide).ok) {
+      return {
+        recovery: { source: "playbook", strategy: playbook, domain },
+        scope: "body",
+        rawFields: wide
+      };
     }
+    await recordPlaybookFailure(env, domain, params.ats);
+  }
 
-    // Rounds 1-2: vision. Look at the page, act on what we see.
-    let lastReason = sanity.reason;
+  // Rounds 1-2: vision. Look at the page, act on what we see.
+  let lastReason = sanity.reason;
+  if (opts.vision) {
     for (let round = 0; round < 2; round++) {
       const shot = new Uint8Array(await page.screenshot({ fullPage: false }));
       const diagnosis = await diagnosePage(env, shot, page.url(), lastReason).catch(() => null);
@@ -122,15 +151,10 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
       // Vision sees a real form but our adapter selector missed it (custom
       // career-site markup). Widen extraction to every form on the page.
       if (diagnosis.form_visible && diagnosis.action === "none") {
-        const wide = await collectFields(page, "body").catch(() => [] as FormField[]);
+        const wide = await acquire("body");
         if (looksLikeApplicationForm(wide).ok) {
-          const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
           const strategy: RecoveryStrategy = { action: "scroll" }; // "extract page-wide"
-          return {
-            fields: filterApplicationFields(wide),
-            screenshot,
-            recovery: { source: "vision", strategy, domain }
-          };
+          return { recovery: { source: "vision", strategy, domain }, scope: "body", rawFields: wide };
         }
       }
       if (diagnosis.action === "none") {
@@ -144,25 +168,45 @@ export async function extractForm(env: Env, params: RunParams): Promise<FillResu
       };
       await applyStrategy(page, adapter.formSelector, strategy, params.ats);
       await adapter.openApplication(page);
-      fields = await acquire();
+      fields = await acquire(adapter.formSelector);
+      let scope = adapter.formSelector;
       sanity = looksLikeApplicationForm(fields);
       if (!sanity.ok) {
         // Selector still missed it; try a page-wide sweep before giving up.
-        const wide = await collectFields(page, "body").catch(() => [] as FormField[]);
-        if (looksLikeApplicationForm(wide).ok) fields = wide;
+        const wide = await acquire("body");
+        if (looksLikeApplicationForm(wide).ok) {
+          fields = wide;
+          scope = "body";
+        }
       }
       if (looksLikeApplicationForm(fields).ok) {
-        const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
-        return {
-          fields: filterApplicationFields(fields),
-          screenshot,
-          recovery: { source: "vision", strategy, domain }
-        };
+        return { recovery: { source: "vision", strategy, domain }, scope, rawFields: fields };
       }
       lastReason = sanity.reason;
     }
+  }
 
-    throw new FormNotFoundError(lastReason);
+  if (opts.throwIfNotFound) throw new FormNotFoundError(lastReason);
+  // Lenient (fill/submit): hand back the widest scope so fillField's page-wide
+  // fallback still gets a shot rather than filling nothing.
+  return { recovery: null, scope: "body", rawFields: await acquire("body") };
+}
+
+/**
+ * Extract the application form, self-healing via the shared reachForm door.
+ * Terminal failure throws FormNotFoundError so runs fail early and honestly
+ * instead of parking a junk review.
+ */
+export async function extractForm(env: Env, params: RunParams): Promise<FillResult> {
+  return withBrowser(env, async (page) => {
+    const { recovery, rawFields } = await reachForm(env, page, params, {
+      vision: true,
+      throwIfNotFound: true
+    });
+    // Sanity ran on RAW fields inside reachForm (keeps the type==="file" resume
+    // signal); the surfaced set is filtered to real questions only.
+    const screenshot = new Uint8Array(await page.screenshot({ fullPage: true }));
+    return { fields: filterApplicationFields(rawFields), screenshot, recovery };
   });
 }
 
@@ -215,36 +259,6 @@ async function applyStrategy(
   }
 }
 
-/**
- * Reach the application form for fill/submit. Mirrors extractForm's front
- * door WITHOUT the vision rounds: navigate, open the application, and if the
- * adapter selector never appears, replay this domain's stored playbook (the
- * recovery extractForm already recorded). Never throws on a missing selector -
- * fillField has a page-wide fallback locator, so a recovered custom-site form
- * (extracted page-wide) still fills after the playbook repositions the page.
- */
-async function reachApplicationForm(env: Env, page: Page, params: RunParams): Promise<void> {
-  const adapter = ADAPTERS[params.ats];
-  await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
-  await adapter.openApplication(page);
-  const found = await page
-    .waitForSelector(adapter.formSelector, { timeout: 20_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (found) return;
-
-  // Selector missing: this was almost certainly a run that only reached its
-  // form through self-healing. Replay the known fix so submit lands on the
-  // same page extraction did, instead of hard-failing here.
-  const domain = new URL(page.url()).hostname;
-  const playbook = await getPlaybook(env, domain, params.ats).catch(() => null);
-  if (playbook) {
-    await applyStrategy(page, adapter.formSelector, playbook, params.ats);
-    await adapter.openApplication(page);
-    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
-  }
-}
-
 /** Fill the form with approved answers and (optionally) submit. */
 export async function fillAndMaybeSubmit(
   env: Env,
@@ -254,7 +268,14 @@ export async function fillAndMaybeSubmit(
 ): Promise<SubmitResult> {
   return withBrowser(env, async (page) => {
     const adapter = ADAPTERS[params.ats];
-    await reachApplicationForm(env, page, params);
+    // Reach the SAME form extraction found. The playbook extract recorded makes
+    // this the fast path (no vision); we still allow vision as a safety net for
+    // a fresh session after the review gate. `scope` is where the form lives
+    // (adapter selector or a page-wide sweep) so fillField targets the right DOM.
+    const { scope } = await reachForm(env, page, params, {
+      vision: true,
+      throwIfNotFound: false
+    });
 
     // Attach the resume first - some ATSes autofill fields from it and we
     // want typed answers to win.
@@ -264,9 +285,10 @@ export async function fillAndMaybeSubmit(
 
     for (const answer of answers) {
       if (answer.skipped || answer.value === "") continue;
-      await fillField(page, adapter.formSelector, answer);
-      // Human-like dwell between fields (Layer 1 behavioral realism).
-      await page.waitForTimeout(300 + Math.floor(Math.random() * 900));
+      await fillField(page, scope, answer);
+      // Small human-like dwell between fields (Layer 1 behavioral realism),
+      // kept short so a 16-field form doesn't stretch the browser session.
+      await page.waitForTimeout(150 + Math.floor(Math.random() * 350));
     }
 
     if (!submit) {
@@ -449,15 +471,25 @@ async function fillField(page: Page, formSelector: string, answer: Answer): Prom
       case "file":
         break; // handled by attachResume
       default:
-        // Type character-by-character with jitter instead of instant fill.
         await el.click().catch(() => {});
         await el.fill("");
-        await el.pressSequentially(answer.value, { delay: 40 + Math.floor(Math.random() * 50) });
+        // Keystroke realism helps invisible-captcha scoring, but each character
+        // is a separate Browser Rendering command that burns Workflow CPU. Type
+        // char-by-char only for SHORT values (names, short answers) and fill the
+        // rest instantly, so a long cover letter can't blow the CPU budget.
+        if (answer.value.length <= REALISTIC_TYPING_MAX) {
+          await el.pressSequentially(answer.value, { delay: 30 + Math.floor(Math.random() * 40) });
+        } else {
+          await el.fill(answer.value);
+        }
     }
   } catch {
     // Field visible in DOM but not interactable - leave for review.
   }
 }
+
+/** Above this length, type instantly - per-char typing gets too CPU-expensive. */
+const REALISTIC_TYPING_MAX = 40;
 
 /** Move the mouse to an element's center in a couple of steps (human-like). */
 async function moveMouseTo(
@@ -468,7 +500,7 @@ async function moveMouseTo(
   if (!box) return;
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
-  await page.mouse.move(x, y, { steps: 6 });
+  await page.mouse.move(x, y, { steps: 3 });
 }
 
 function CSS_escape(value: string): string {
