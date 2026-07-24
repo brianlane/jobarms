@@ -169,7 +169,9 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       .from("application_runs")
       .update({ status: "failed", error: dispatch.reason })
       .eq("id", newRun.id);
-    await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+    // Refund by run id so slot_refunded is set: a subsequent retry of this
+    // failed run must not decrement the counter again (see the create route).
+    await service.rpc("refund_arm_run", { p_run_id: newRun.id });
     return NextResponse.json(
       { error: dispatch.reason, hint: "The arm couldn't start. Try again shortly." },
       { status: 503 }

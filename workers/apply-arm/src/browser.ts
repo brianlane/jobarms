@@ -215,6 +215,36 @@ async function applyStrategy(
   }
 }
 
+/**
+ * Reach the application form for fill/submit. Mirrors extractForm's front
+ * door WITHOUT the vision rounds: navigate, open the application, and if the
+ * adapter selector never appears, replay this domain's stored playbook (the
+ * recovery extractForm already recorded). Never throws on a missing selector -
+ * fillField has a page-wide fallback locator, so a recovered custom-site form
+ * (extracted page-wide) still fills after the playbook repositions the page.
+ */
+async function reachApplicationForm(env: Env, page: Page, params: RunParams): Promise<void> {
+  const adapter = ADAPTERS[params.ats];
+  await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
+  await adapter.openApplication(page);
+  const found = await page
+    .waitForSelector(adapter.formSelector, { timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (found) return;
+
+  // Selector missing: this was almost certainly a run that only reached its
+  // form through self-healing. Replay the known fix so submit lands on the
+  // same page extraction did, instead of hard-failing here.
+  const domain = new URL(page.url()).hostname;
+  const playbook = await getPlaybook(env, domain, params.ats).catch(() => null);
+  if (playbook) {
+    await applyStrategy(page, adapter.formSelector, playbook, params.ats);
+    await adapter.openApplication(page);
+    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 }).catch(() => {});
+  }
+}
+
 /** Fill the form with approved answers and (optionally) submit. */
 export async function fillAndMaybeSubmit(
   env: Env,
@@ -224,9 +254,7 @@ export async function fillAndMaybeSubmit(
 ): Promise<SubmitResult> {
   return withBrowser(env, async (page) => {
     const adapter = ADAPTERS[params.ats];
-    await page.goto(params.jobUrl, { waitUntil: "domcontentloaded" });
-    await adapter.openApplication(page);
-    await page.waitForSelector(adapter.formSelector, { timeout: 20_000 });
+    await reachApplicationForm(env, page, params);
 
     // Attach the resume first - some ATSes autofill fields from it and we
     // want typed answers to win.

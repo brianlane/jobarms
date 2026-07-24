@@ -15,10 +15,25 @@ import { updateRun } from "./db";
 
 export { ApplyRunWorkflow } from "./workflow";
 
+/** Length-independent, constant-time string compare (no early-exit leak). */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  // XOR the byte-length in so unequal lengths can't short-circuit; iterate the
+  // longer of the two so total work does not depend on the match position.
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 function authorized(request: Request, env: Env): boolean {
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  return Boolean(env.ARM_WORKER_SHARED_SECRET) && token === env.ARM_WORKER_SHARED_SECRET;
+  return Boolean(env.ARM_WORKER_SHARED_SECRET) && timingSafeEqual(token, env.ARM_WORKER_SHARED_SECRET ?? "");
 }
 
 export default {

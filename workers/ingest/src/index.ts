@@ -19,6 +19,19 @@ interface CompanyRow {
   board_token: string;
 }
 
+/** Length-independent, constant-time string compare (no early-exit leak). */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 function headers(env: Env): Record<string, string> {
   const key = env.SUPABASE_SECRET_KEY ?? "";
   return { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" };
@@ -85,7 +98,7 @@ export default {
     if (url.pathname === "/ingest" && request.method === "POST") {
       const header = request.headers.get("authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-      if (!env.INTERNAL_CRON_SECRET || token !== env.INTERNAL_CRON_SECRET) {
+      if (!env.INTERNAL_CRON_SECRET || !timingSafeEqual(token, env.INTERNAL_CRON_SECRET)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       return Response.json(await ingestAll(env));

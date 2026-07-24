@@ -48,25 +48,51 @@ export async function POST(request: Request) {
   const ats = detectAts(jobUrl);
   const service = createSupabaseServiceClient();
 
-  // --- upsert the job (shared catalog, keyed by URL) ---
+  // --- resolve the job (shared catalog, keyed by URL) ---
+  // Never overwrite an existing row: `jobs` is shared across users, so a
+  // re-paste (or an empty fetchJobMeta on a network hiccup) must not clobber
+  // another user's tracked metadata or flip an ingest-sourced row to manual
+  // (which would drop it from everyone's Discover feed).
   const meta = await fetchJobMeta(jobUrl);
-  const { data: job, error: jobError } = await service
+  let jobId: string | undefined;
+
+  const { data: existingJob } = await service
     .from("jobs")
-    .upsert(
-      {
-        url: jobUrl,
-        ats,
-        source: "manual",
-        company: meta.company,
-        title: meta.title,
-        location: meta.location,
-        description: meta.description
-      },
-      { onConflict: "url" }
-    )
     .select("id")
-    .single();
-  if (jobError || !job) return NextResponse.json({ error: "job_upsert_failed" }, { status: 500 });
+    .eq("url", jobUrl)
+    .maybeSingle();
+  jobId = existingJob?.id;
+
+  if (!jobId) {
+    const { data: inserted } = await service
+      .from("jobs")
+      .upsert(
+        {
+          url: jobUrl,
+          ats,
+          source: "manual",
+          company: meta.company,
+          title: meta.title,
+          location: meta.location,
+          description: meta.description
+        },
+        { onConflict: "url", ignoreDuplicates: true }
+      )
+      .select("id")
+      .maybeSingle();
+    jobId = inserted?.id;
+    if (!jobId) {
+      // A concurrent insert won the unique-url race; read the row it created.
+      const { data: raced } = await service
+        .from("jobs")
+        .select("id")
+        .eq("url", jobUrl)
+        .maybeSingle();
+      jobId = raced?.id;
+    }
+  }
+  if (!jobId) return NextResponse.json({ error: "job_upsert_failed" }, { status: 500 });
+  const job = { id: jobId };
 
   // --- create (or reuse) the application row ---
   const { data: existing } = await service
@@ -256,7 +282,10 @@ export async function POST(request: Request) {
       .from("application_runs")
       .update({ status: "failed", error: dispatch.reason })
       .eq("id", run.id);
-    await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+    // Refund by run id so slot_refunded is set: a later retry of this failed
+    // run must NOT decrement the counter a second time (release_arm_run is
+    // unkeyed and would leave slot_refunded false, enabling a phantom refund).
+    await service.rpc("refund_arm_run", { p_run_id: run.id });
     const hint =
       dispatch.reason === "arm_unconfigured" || dispatch.reason === "arm_offline"
         ? "The arm isn't deployed yet (Phase 3 Workers Paid upgrade). The job was saved to your tracker."
