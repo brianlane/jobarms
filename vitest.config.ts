@@ -19,7 +19,7 @@ export default defineConfig({
       reporter: ["text", "text-summary", "html"],
       // Coverage scope grows as each layer is fully tested (see README). CI
       // gates on 100% for everything currently in scope.
-      include: ["src/lib/**/*.ts"],
+      include: ["src/lib/**/*.ts", "src/app/api/**/*.ts", "src/app/auth/**/*.ts"],
       thresholds: {
         statements: 100,
         branches: 100,

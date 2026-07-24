@@ -220,7 +220,9 @@ everything measured, never a soft average):
 
 - [x] `src/lib/**` (pure logic + I/O wrappers; external SDKs and `fetch` are
       mocked at the transport seam, matching the hermetic `tests/setup-env.ts`)
-- [ ] `src/app/api/**` route handlers
+- [x] `src/app/api/**` + `src/app/auth/**` route handlers (Supabase, Stripe,
+      and the AI libs mocked; each handler's branches exercised via
+      `tests/routes/` with the `tests/helpers/supabase.ts` fakes)
 - [ ] `src/components/**` + `src/app/**` pages (jsdom + Testing Library)
 - [ ] `workers/**` (Playwright + `fetch` mocked)
 

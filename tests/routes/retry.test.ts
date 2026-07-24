@@ -1,0 +1,177 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fakeClient, fakeFrom, fakeRpc, type Result } from "../helpers/supabase";
+
+const holder = vi.hoisted(() => ({ server: null as unknown, service: null as unknown }));
+const cancelRun = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const buildAndDispatchRun = vi.hoisted(() =>
+  vi.fn(async (_service: unknown, _args: { autonomy: string }): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }))
+);
+vi.mock("@/lib/supabase/server", () => ({ createSupabaseServerClient: vi.fn(async () => holder.server) }));
+vi.mock("@/lib/supabase/service", () => ({ createSupabaseServiceClient: vi.fn(() => holder.service) }));
+vi.mock("@/lib/arm", () => ({ cancelRun }));
+vi.mock("@/lib/arm-dispatch", () => ({ buildAndDispatchRun }));
+
+import { POST } from "@/app/api/applications/[id]/retry/route";
+
+const ctx = { params: Promise.resolve({ id: "app-1" }) };
+const req = () => new Request("http://x", { method: "POST" });
+const JOB = { url: "https://jobs.lever.co/acme/1", ats: "lever", title: "Eng", company: "Acme", description: "d" };
+
+function server(app: Result, latest: Result) {
+  return fakeClient({ user: { id: "u1" }, from: fakeFrom({ applications: [app], application_runs: [latest] }) });
+}
+function service(over: {
+  application_runs?: Result[];
+  profiles?: Result[];
+  resumes?: Result[];
+  subscriptions?: Result[];
+  rpc?: ReturnType<typeof fakeRpc> | Record<string, unknown[]>;
+}) {
+  return fakeClient({
+    from: fakeFrom({
+      application_runs: over.application_runs ?? [{ data: { id: "run2" } }],
+      profiles: over.profiles ?? [{ data: { arm_autonomy: "review_gate" } }],
+      resumes: over.resumes ?? [{ data: null }],
+      subscriptions: over.subscriptions ?? [{ data: { plan: "free", status: "active" } }]
+    }),
+    rpc: typeof over.rpc === "function" ? over.rpc : fakeRpc(over.rpc ?? { try_reserve_arm_run: [true] })
+  });
+}
+
+beforeEach(() => {
+  holder.server = null;
+  holder.service = null;
+  cancelRun.mockClear();
+  buildAndDispatchRun.mockClear();
+  buildAndDispatchRun.mockResolvedValue({ ok: true });
+});
+
+describe("POST /api/applications/[id]/retry", () => {
+  it("401 without a user", async () => {
+    holder.server = fakeClient({ user: null });
+    expect((await POST(req(), ctx)).status).toBe(401);
+  });
+
+  it("404 when the application is missing", async () => {
+    holder.server = fakeClient({ user: { id: "u1" }, from: fakeFrom({ applications: [{ data: null }] }) });
+    expect((await POST(req(), ctx)).status).toBe(404);
+  });
+
+  it("422 when the job's ATS is unsupported", async () => {
+    holder.server = fakeClient({
+      user: { id: "u1" },
+      from: fakeFrom({ applications: [{ data: { id: "app-1", jobs: { ...JOB, ats: "workable" } } }] })
+    });
+    expect((await POST(req(), ctx)).status).toBe(422);
+  });
+
+  it("409 when the latest run is not retryable", async () => {
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: JOB } },
+      { data: { id: "r1", status: "needs_review", answers: [{ value: "real", skipped: false }], created_at: new Date().toISOString() } }
+    );
+    expect((await POST(req(), ctx)).status).toBe(409);
+  });
+
+  it("400 when the profile is missing", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: JOB } }, { data: null });
+    holder.service = service({ profiles: [{ data: null }] });
+    expect((await POST(req(), ctx)).status).toBe(400);
+  });
+
+  it("refunds a stale failed run and dispatches a fresh one", async () => {
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: JOB } },
+      { data: { id: "r1", status: "failed", answers: [{ value: "", skipped: true }], created_at: new Date().toISOString() } }
+    );
+    const rpc = fakeRpc({ refund_arm_run: [true], try_reserve_arm_run: [true] });
+    holder.service = service({ rpc });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).run_id).toBe("run2");
+    expect(rpc).toHaveBeenCalledWith("refund_arm_run", { p_run_id: "r1" });
+  });
+
+  it("cancels + refunds a run stuck >24h before retrying", async () => {
+    const old = new Date(Date.now() - 26 * 3600 * 1000).toISOString();
+    holder.server = server(
+      { data: { id: "app-1", resume_id: "res-1", jobs: JOB } },
+      { data: { id: "r1", status: "running", answers: null, created_at: old } }
+    );
+    const rpc = fakeRpc({ refund_arm_run: [true], try_reserve_arm_run: [true] });
+    holder.service = fakeClient({
+      from: fakeFrom({
+        application_runs: [{ error: null }, { data: { id: "run2" } }],
+        profiles: [{ data: { arm_autonomy: "review_gate" } }],
+        resumes: [{ data: { file_name: "cv.pdf", storage_path: "u1/cv.pdf", mime_type: "application/pdf" } }],
+        subscriptions: [{ data: { plan: "free", status: "active" } }]
+      }),
+      rpc
+    });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(cancelRun).toHaveBeenCalledWith("r1");
+  });
+
+  it("retries a canceled run without refunding (already settled)", async () => {
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: JOB } },
+      { data: { id: "r1", status: "canceled", answers: null, created_at: new Date().toISOString() } }
+    );
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = service({ rpc });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(cancelRun).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalledWith("refund_arm_run", expect.anything());
+  });
+
+  it("honors full-auto for a paid plan and defaults missing autonomy", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: JOB } }, { data: null });
+    holder.service = service({
+      profiles: [{ data: {} }], // no arm_autonomy -> defaults to review_gate
+      subscriptions: [{ data: { plan: "premium", status: "active" } }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(buildAndDispatchRun.mock.calls[0][1].autonomy).toBe("review_gate");
+  });
+
+  it("falls back to the base resume when the application resume is gone", async () => {
+    holder.server = server(
+      { data: { id: "app-1", resume_id: "res-1", jobs: JOB } },
+      { data: { id: "r1", status: "failed", answers: null, created_at: new Date().toISOString() } }
+    );
+    holder.service = service({
+      resumes: [{ data: null }, { data: { file_name: "base.pdf", storage_path: "u1/base.pdf", mime_type: "application/pdf" } }],
+      rpc: { refund_arm_run: [true], try_reserve_arm_run: [true] }
+    });
+    expect((await POST(req(), ctx)).status).toBe(200);
+  });
+
+  it("402 when the run quota is spent", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: JOB } }, { data: null });
+    holder.service = service({ rpc: { try_reserve_arm_run: [false] } });
+    expect((await POST(req(), ctx)).status).toBe(402);
+  });
+
+  it("500 + release when the new run insert fails", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: JOB } }, { data: null });
+    const rpc = fakeRpc({ try_reserve_arm_run: [true], release_arm_run: [null] });
+    holder.service = service({ application_runs: [{ data: null, error: { message: "x" } }], rpc });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(500);
+    expect(rpc).toHaveBeenCalledWith("release_arm_run", expect.any(Object));
+  });
+
+  it("503 + refund when dispatch fails", async () => {
+    buildAndDispatchRun.mockResolvedValueOnce({ ok: false, reason: "arm_error" });
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: JOB } }, { data: null });
+    const rpc = fakeRpc({ try_reserve_arm_run: [true], refund_arm_run: [true] });
+    holder.service = service({ application_runs: [{ data: { id: "run2" } }, { data: null }], rpc });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(503);
+    expect(rpc).toHaveBeenCalledWith("refund_arm_run", { p_run_id: "run2" });
+  });
+});
