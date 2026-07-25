@@ -26,5 +26,8 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "supabase/functions", "workers", "**/.next/dev/**"]
+  // `workers` and `vps` are separate package trees with their own tsconfigs and
+  // CI typecheck jobs; compiling them here would apply the app's DOM libs and
+  // bundler resolution to Node/Workers code.
+  "exclude": ["node_modules", "supabase/functions", "workers", "vps", "**/.next/dev/**"]
 }

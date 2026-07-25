@@ -180,6 +180,39 @@ jobs:
       - name: Test (100% coverage gate)
         run: npm run test
 
+  # The render sidecar is deployed to a VPS by hand (vps/render/scripts/
+  # deploy.sh), not by CI, so this job is the only automated gate on it:
+  # typecheck plus its own 100%-coverage vitest suite. Playwright is mocked in
+  # the suite, so no browser download is needed here.
+  render-check:
+    name: Render Sidecar Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vps/render
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: vps/render/package-lock.json
+
+      - name: Install dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Test (100% coverage gate)
+        run: npm test
+
   # Catches Supabase migration-ledger drift at REVIEW time instead of at
   # deploy time on main. No `needs` - it starts the moment the PR run does,
   # so drift shows up as a red check while the other jobs are still building.
@@ -222,7 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     # Budget: gate poll (up to 20m) + the deploy itself.
     timeout-minutes: 30
-    needs: [quality, typecheck, test, security, workers-check]
+    needs: [quality, typecheck, test, security, workers-check, render-check]
     permissions:
       contents: read
       pull-requests: write

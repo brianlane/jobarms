@@ -10,9 +10,11 @@ This repository includes:
 - Next.js dashboard + marketing app (deployed to Vercel by CI)
 - Supabase migrations (Postgres, deny-by-default RLS), auth, and resume storage
 - Cloudflare Workers automation edge (`workers/`):
-  - **apply-arm** - Browser Rendering (Playwright) + Workflows apply sessions
+  - **apply-arm** - Workflows orchestration for apply sessions
   - **ingest** - cron polling of public ATS boards into the jobs catalog
   - **email-inbound** - Email Routing catch-all for managed applicant mailboxes
+- **`vps/render`** - the arm's browser: a persistent Playwright sidecar that
+  holds logged-in sessions across multi-page applications
 - Stripe billing (every AI surface metered per plan; see src/lib/plans.ts)
 
 ## Stack
@@ -102,6 +104,40 @@ approve route, retrieval in the dispatch route):
 
 Capture is best-effort after the approval is already forwarded, so learning
 can never block or fail a submission.
+
+## The browser sidecar (why the arm can hold a session)
+
+The arm's browser lives in [vps/render](vps/render): a long-lived Express +
+Playwright service behind a Cloudflare Tunnel. It replaced Cloudflare Browser
+Rendering entirely, for capability reasons rather than cost:
+
+- **Sessions persist.** Browser Rendering opened a throwaway browser per phase,
+  so cookies never survived. The sidecar caches a Chromium context per
+  `userId:tenantHost` and writes its cookies to disk, so a login survives both a
+  restart and the seven-day review gate. That is the whole reason account-gated
+  ATSes (Workday) are reachable at all.
+- **No platform caps.** The free Browser Rendering allowance was about 10
+  browser-minutes/day, roughly 3-5 arm runs, with 3 concurrent browsers.
+- **A real fingerprint.** Datacenter IPs score as bot-like to invisible
+  reCAPTCHA. Owning the browser is the "Captcha Layer 3" item from
+  [todo.md](todo.md), and it now applies to every run rather than just Workday.
+
+The apply-arm Worker keeps everything durable: the review gate, the
+email-verification wait, step retries, and refund policy are Workflows features
+we would otherwise rebuild as a queue and state machine on the box. Each browser
+phase is one HTTPS call to the sidecar, so a crash costs a step, never a run. The
+sidecar holds no Supabase or Gemini credentials and makes no outbound requests of
+its own: the playbook to try, the vision diagnosis, and the resume bytes all
+arrive in the request, and the winning strategy comes back for the Worker to
+record. That last part is deliberate, not incidental: a service that never
+fetches a caller-supplied URL cannot be turned into a fetcher for an
+attacker-chosen one.
+
+One consequence worth stating plainly: **the Workers Paid upgrade is no longer a
+launch blocker.** It only ever bought Browser Rendering minutes. Workflows on the
+free plan covers us because WAITING instances do not count toward the concurrency
+limit; the real future ceiling is 3,000 workflow steps/day, roughly 300-400 arm
+runs/day.
 
 ## Managed applicant email
 

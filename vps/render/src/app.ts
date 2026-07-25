@@ -1,0 +1,377 @@
+/**
+ * jobarms-render HTTP surface.
+ *
+ * The apply-arm Workflow keeps owning orchestration (the review gate, the
+ * verification wait, retries, refunds) and calls this box for every browser
+ * phase. One request equals one phase, so a crash mid-run costs a step, never
+ * the run.
+ *
+ * IMPORTANT: application-level failures return HTTP **200** with an
+ * `{ error, detail }` body, NOT a 5xx. This service sits behind a Cloudflare
+ * Tunnel, and Cloudflare REPLACES the body of any origin 5xx with its own error
+ * page, which would erase the structured error and make the worker retry a
+ * permanent failure. The worker classifies on the `error` code and treats a
+ * genuine non-2xx as a transport failure worth retrying. Client errors (400/401)
+ * keep their status, since Cloudflare passes 4xx through.
+ *
+ * Endpoints (all bearer-authed except /health):
+ *   POST /session/ensure  - authenticate/create the candidate account
+ *   POST /verify          - finish an email verification in the held session
+ *   POST /extract         - reach the form and read its fields (walks wizards)
+ *   POST /fill            - fill approved answers, optionally submit
+ */
+import express, { type Express, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
+import type { BrowserContext, Page } from "playwright";
+import { CONFIG } from "./config.js";
+import { safeUrl } from "./ssrf.js";
+import {
+  acquireSession,
+  finishSession,
+  saveStorageState,
+  sessionCount,
+  sessionKey
+} from "./sessions.js";
+import { ADAPTERS } from "./adapters.js";
+import { FormNotFoundError, reachForm } from "./reach.js";
+import { filterApplicationFields } from "./field-filter.js";
+import { attachResume, fillAnswers } from "./fill.js";
+import { collectFields } from "./extract.js";
+import { completeVerification, ensureAccount } from "./account.js";
+import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
+
+const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
+
+function isAts(value: unknown): value is Ats {
+  return typeof value === "string" && (ATS_VALUES as readonly string[]).includes(value);
+}
+
+/** A structured, retry-safe application error (see the module doc). */
+function appError(res: Response, error: string, detail = ""): Response {
+  return res.status(200).json({ error, ...(detail ? { detail: detail.slice(0, 400) } : {}) });
+}
+
+/** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
+async function shot(page: Page): Promise<string | null> {
+  try {
+    const buffer = await page.screenshot({ fullPage: true, type: "jpeg", quality: 60 });
+    return buffer.toString("base64");
+  } catch {
+    // A failed screenshot must never fail the phase; the answers still flow.
+    return null;
+  }
+}
+
+/**
+ * Serialize browser work. Each phase drives a real Chromium context, and on the
+ * shared KVM1 box more than a couple at once thrashes. Requests queue rather
+ * than fail, since the caller is a durable workflow that is happy to wait.
+ */
+function createGate(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
+    active++;
+    try {
+      return await fn();
+    } finally {
+      active--;
+      queue.shift()?.();
+    }
+  };
+}
+
+interface PhaseContext {
+  page: Page;
+  context: BrowserContext;
+  key: string;
+}
+
+export interface AppDeps {
+  /** Injected so tests can drive phases without a real browser. */
+  runPhase?: <T>(
+    userId: string,
+    tenantHost: string,
+    fn: (ctx: PhaseContext) => Promise<T>
+  ) => Promise<T>;
+}
+
+export function createApp(deps: AppDeps = {}): Express {
+  const app = express();
+  app.use(express.json({ limit: "2mb" }));
+
+  // Rate-limit BEFORE auth so a leaked or guessed bearer cannot be brute-forced
+  // and one caller cannot exhaust the browser pool.
+  app.use(
+    rateLimit({
+      windowMs: CONFIG.rateWindowMs,
+      max: CONFIG.rateMax,
+      standardHeaders: true,
+      legacyHeaders: false
+    })
+  );
+
+  app.get("/health", (_req, res) => {
+    res.json({ ok: true, sessions: sessionCount() });
+  });
+
+  app.use((req, res, next) => {
+    if (!CONFIG.token) return next(); // unset only in local dev
+    if (req.headers.authorization === `Bearer ${CONFIG.token}`) return next();
+    return void res.status(401).json({ error: "unauthorized" });
+  });
+
+  const withSlot = createGate(CONFIG.maxConcurrency);
+
+  /**
+   * Open a page in the user's cached context for this tenant, run one phase, and
+   * always persist cookies + release the session. `poisoned` drops the cached
+   * context so a broken login is never reused.
+   */
+  const runPhase =
+    deps.runPhase ??
+    (async function runPhase<T>(
+      userId: string,
+      tenantHost: string,
+      fn: (ctx: PhaseContext) => Promise<T>
+    ): Promise<T> {
+      const key = sessionKey(userId, tenantHost);
+      const entry = await acquireSession(key);
+      // acquireSession resolves `context` or throws, so it is set here.
+      const context = entry.context!;
+      let page: Page | null = null;
+      let poisoned = false;
+      try {
+        const opened = await context.newPage();
+        page = opened;
+        opened.setDefaultTimeout(CONFIG.actionTimeoutMs);
+        return await fn({ page: opened, context, key });
+      } catch (err) {
+        poisoned = true;
+        throw err;
+      } finally {
+        // Save BEFORE closing the page so a just-completed login persists.
+        await saveStorageState(key, context);
+        if (page) await page.close().catch(() => {});
+        finishSession(key, entry, poisoned);
+      }
+    });
+
+  /** Shared request parsing for the phases that navigate to a posting. */
+  function parseJobRequest(req: Request):
+    | { ok: true; userId: string; jobUrl: string; ats: Ats; tenantHost: string }
+    | { ok: false; error: string } {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const rawUrl = typeof body.jobUrl === "string" ? body.jobUrl : "";
+    if (!userId || !isAts(body.ats)) return { ok: false, error: "invalid_body" };
+    const jobUrl = safeUrl(rawUrl);
+    if (!jobUrl) return { ok: false, error: "invalid_or_unsafe_url" };
+    return { ok: true, userId, jobUrl, ats: body.ats, tenantHost: new URL(jobUrl).hostname };
+  }
+
+  // ------------------------------------------------------------------ session
+  app.post("/session/ensure", async (req, res) => {
+    const parsed = parseJobRequest(req);
+    if (!parsed.ok) {
+      return parsed.error === "invalid_body"
+        ? void res.status(400).json({ error: parsed.error })
+        : void appError(res, parsed.error);
+    }
+    const account = req.body?.account ?? {};
+    const adapter = ADAPTERS[parsed.ats];
+
+    // ATSes that need no account are trivially "authenticated".
+    if (!adapter.requiresAccount) {
+      return void res.json({ status: "authenticated", accountRequired: false });
+    }
+    if (typeof account.email !== "string" || typeof account.password !== "string") {
+      return void res.status(400).json({ error: "invalid_body" });
+    }
+
+    try {
+      const result = await withSlot(() =>
+        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+          await page.goto(parsed.jobUrl, { waitUntil: "domcontentloaded" });
+          await adapter.openApplication(page);
+          const status = await ensureAccount(page, account);
+          return { status, screenshotBase64: await shot(page) };
+        })
+      );
+      return void res.json({ ...result, accountRequired: true });
+    } catch (err) {
+      return void appError(res, "render_failed", String(err));
+    }
+  });
+
+  app.post("/verify", async (req, res) => {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const tenantHost = typeof body.tenantHost === "string" ? body.tenantHost.trim() : "";
+    const link = typeof body.link === "string" ? safeUrl(body.link) : null;
+    const code = typeof body.code === "string" ? body.code : null;
+    if (!userId || !tenantHost || (!link && !code)) {
+      return void res.status(400).json({ error: "invalid_body" });
+    }
+
+    try {
+      const result = await withSlot(() =>
+        runPhase(userId, tenantHost, async ({ page }) => {
+          // A code has to be typed into the page the tenant left us on, so start
+          // from the tenant root when we only have a code.
+          if (!link) {
+            await page
+              .goto(`https://${tenantHost}/`, { waitUntil: "domcontentloaded" })
+              .catch(() => {});
+          }
+          const status = await completeVerification(page, { link, code });
+          return { status, screenshotBase64: await shot(page) };
+        })
+      );
+      return void res.json(result);
+    } catch (err) {
+      return void appError(res, "render_failed", String(err));
+    }
+  });
+
+  // ------------------------------------------------------------------ extract
+  app.post("/extract", async (req, res) => {
+    const parsed = parseJobRequest(req);
+    if (!parsed.ok) {
+      return parsed.error === "invalid_body"
+        ? void res.status(400).json({ error: parsed.error })
+        : void appError(res, parsed.error);
+    }
+    const playbook = req.body?.playbook ?? null;
+
+    try {
+      const result = await withSlot(() =>
+        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+          const reached = await reachForm(
+            page,
+            parsed.jobUrl,
+            parsed.ats,
+            { playbook },
+            { throwIfNotFound: true }
+          );
+
+          // Multi-page wizards (Workday): keep walking while the adapter can
+          // advance, accumulating every page's fields into ONE review payload so
+          // the user approves the whole application at once. Bounded so a
+          // never-advancing wizard cannot spin.
+          const adapter = ADAPTERS[parsed.ats];
+          const all: FormField[] = [...reached.rawFields];
+          let pages = 1;
+          if (adapter.nextPage) {
+            while (pages < CONFIG.maxWizardPages) {
+              if (await adapter.isLastPage?.(page)) break;
+              if (!(await adapter.nextPage(page))) break;
+              pages++;
+              const more = await collectFields(page, reached.scope);
+              // Later pages repeat nothing, but guard anyway: a wizard that
+              // re-renders the same page would otherwise duplicate questions.
+              const seen = new Set(all.map((f) => f.name));
+              for (const field of more) if (!seen.has(field.name)) all.push(field);
+            }
+          }
+
+          return {
+            fields: filterApplicationFields(all),
+            pages,
+            scope: reached.scope,
+            recovery: reached.recovery,
+            playbookFailed: reached.playbookFailed,
+            screenshotBase64: await shot(page)
+          };
+        })
+      );
+      return void res.json(result);
+    } catch (err) {
+      if (err instanceof FormNotFoundError) {
+        // Deterministic: retrying burns a browser slot for nothing.
+        return void appError(res, "form_not_found", err.message);
+      }
+      return void appError(res, "render_failed", String(err));
+    }
+  });
+
+  // --------------------------------------------------------------------- fill
+  app.post("/fill", async (req, res) => {
+    const parsed = parseJobRequest(req);
+    if (!parsed.ok) {
+      return parsed.error === "invalid_body"
+        ? void res.status(400).json({ error: parsed.error })
+        : void appError(res, parsed.error);
+    }
+    // parseJobRequest already proved the body exists and carries a userId + ats.
+    const body = req.body;
+    if (!Array.isArray(body.answers)) {
+      return void res.status(400).json({ error: "invalid_body" });
+    }
+    const answers = body.answers as Answer[];
+    const submit = body.submit === true;
+    const resume = body.resume ?? { contentBase64: null, fileName: "", mimeType: "" };
+    const playbook = body.playbook ?? null;
+
+    try {
+      const result = await withSlot(() =>
+        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+          // Reach the SAME form extraction found. Lenient: fillField's page-wide
+          // fallback beats filling nothing.
+          const reached = await reachForm(
+            page,
+            parsed.jobUrl,
+            parsed.ats,
+            { playbook },
+            { throwIfNotFound: false }
+          );
+          const adapter = ADAPTERS[parsed.ats];
+
+          // Resume first: some ATSes autofill from it and typed answers must win.
+          await attachResume(page, resume);
+          await fillAnswers(page, reached.scope, answers);
+
+          // Multi-page: fill each page, then advance. The same answer list is
+          // applied per page; fillField no-ops on names this page does not have.
+          let pages = 1;
+          if (adapter.nextPage) {
+            while (pages < CONFIG.maxWizardPages) {
+              if (await adapter.isLastPage?.(page)) break;
+              if (!(await adapter.nextPage(page))) break;
+              pages++;
+              await fillAnswers(page, reached.scope, answers);
+            }
+          }
+
+          if (!submit) {
+            return {
+              outcome: "filled" as SubmitOutcome,
+              pages,
+              screenshotBase64: await shot(page)
+            };
+          }
+
+          // A deliberate pause before the final click so behavioral scoring sees
+          // a human cadence, then click the REAL control (never a programmatic
+          // submit) so the site's captcha JS mints its token.
+          await page.waitForTimeout(1000 + Math.floor(Math.random() * 1000));
+          await adapter.submit(page);
+          await page.waitForTimeout(2500);
+
+          const confirmed = await adapter.confirmSubmitted(page).catch(() => false);
+          return {
+            outcome: (confirmed ? "submitted" : "unconfirmed") as SubmitOutcome,
+            pages,
+            screenshotBase64: await shot(page)
+          };
+        })
+      );
+      return void res.json(result);
+    } catch (err) {
+      return void appError(res, "render_failed", String(err));
+    }
+  });
+
+  return app;
+}
