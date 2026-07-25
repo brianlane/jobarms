@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { diagnosePage, generateAnswers } from "../src/gemini";
+import { diagnosePage, generateAnswers, parseTileResponse } from "../src/gemini";
 import type { Env, FormField, RunParams } from "../src/types";
 
 const env = { GEMINI_API_KEY: "k" } as Env;
@@ -11,6 +11,25 @@ function geminiText(text: string) {
 
 beforeEach(() => vi.restoreAllMocks());
 afterEach(() => vi.unstubAllGlobals());
+
+describe("parseTileResponse", () => {
+  it("accepts a {tiles:[...]} object, dedups, drops out-of-range, and sorts", () => {
+    expect(parseTileResponse({ tiles: [3, 0, 0, "1", 9, -1, "x"] }, 4)).toEqual([0, 1, 3]);
+  });
+
+  it("accepts a bare array", () => {
+    expect(parseTileResponse([2, 1], 4)).toEqual([1, 2]);
+  });
+
+  it("treats any other shape as no picks", () => {
+    // The indices come back to be clicked, so anything unparseable must yield
+    // nothing rather than a guess.
+    expect(parseTileResponse("nope", 4)).toEqual([]);
+    expect(parseTileResponse(null, 4)).toEqual([]);
+    expect(parseTileResponse({ tiles: "not-an-array" }, 4)).toEqual([]);
+    expect(parseTileResponse({}, 4)).toEqual([]);
+  });
+});
 
 describe("generateAnswers", () => {
   const params = {

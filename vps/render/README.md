@@ -27,9 +27,32 @@ Cloudflare Tunnel  ->  127.0.0.1:8085 (this service)
 ```
 
 The Worker keeps owning durable state; this box only drives a browser. It holds
-no Supabase or Gemini credentials and makes no outbound requests: the playbook to
-try, the vision diagnosis, and the resume BYTES all arrive in the request, and the
-winning strategy goes back in the response for the Worker to record.
+no Supabase or Gemini credentials: the playbook to try, the vision diagnosis, and
+the resume BYTES all arrive in the request, and the winning strategy goes back in
+the response for the Worker to record.
+
+## Captcha solving
+
+Solving a grid challenge needs two things that live in different places on
+purpose: the LIVE PAGE (only this service has it) and a VISION MODEL (only the
+worker has the credentials). So the model stays on the edge and this service
+calls out to it:
+
+```
+submit blocked by a grid challenge
+  -> screenshot the grid + read the instruction   (here)
+  -> POST /internal/solve-captcha                 (worker: runs Gemini)
+  -> click the returned tiles, verify, resubmit   (here)
+```
+
+Bounded by `RENDER_CHALLENGE_BUDGET_MS`, three grids for reCAPTCHA and two for
+hCaptcha. When it cannot be cleared the outcome is `captcha_blocked`, which is
+the honest answer: everything is filled and the employer's bot check stopped the
+send. Leave `RENDER_SOLVER_URL` unset to disable solving entirely.
+
+This only applies to VISIBLE grid challenges. Invisible reCAPTCHA v3/Enterprise
+has no image to look at; it scores the session by IP reputation and fingerprint,
+which is what owning this browser is for.
 
 ## Endpoints
 
@@ -72,10 +95,15 @@ seven-day review gate. Concurrency safety is deliberate and load-bearing:
   guessed token cannot be brute-forced and one caller cannot exhaust the pool.
 - SSRF guard on every navigation URL: http(s) only, no localhost, private,
   link-local, or CGNAT IPv4, no IPv6 literals, no metadata or `*.internal` hosts.
-- **The service makes no outbound requests of its own.** The resume arrives as
+- **The service never fetches a caller-supplied URL.** The resume arrives as
   bytes in the request rather than a URL to fetch, so there is no code path that
   can be pointed at an attacker-chosen address. The caller already holds the
-  signed Storage URL and the credentials to read it.
+  signed Storage URL and the credentials to read it. The one outbound call, the
+  captcha solve callback, goes to a FIXED endpoint from config, never to
+  anything in a request.
+- The solve callback carries **its own bearer**, not the app-to-worker shared
+  secret, so a compromise of this box can ask for captcha tile picks and nothing
+  else. It cannot start, approve, or cancel a run.
 - The state directory path is a **hash** of the session key, so a hostile tenant
   hostname cannot traverse out of it.
 - systemd runs it with `NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`, a
@@ -126,4 +154,8 @@ to a dedicated box and raise the caps when arm volume justifies it.
 | `RENDER_MAX_SESSIONS` | 8 | cached contexts |
 | `RENDER_MAX_CONCURRENCY` | 2 | in-flight browser phases; the rest queue |
 | `RENDER_MAX_WIZARD_PAGES` | 12 | bound on wizard pages per request |
+| `RENDER_SOLVER_URL` | "" | the worker's `/internal/solve-captcha`; unset disables solving |
+| `RENDER_SOLVER_TOKEN` | "" | bearer for it, scoped to that endpoint only |
+| `RENDER_SOLVER_TIMEOUT_MS` | 30000 | per solve request |
+| `RENDER_CHALLENGE_BUDGET_MS` | 90000 | wall clock to clear one challenge |
 | `RENDER_RATE_WINDOW_MS` / `RENDER_RATE_MAX` | 60000 / 60 | rate limit |

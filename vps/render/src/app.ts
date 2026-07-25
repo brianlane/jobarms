@@ -38,7 +38,7 @@ import { filterApplicationFields } from "./field-filter.js";
 import { attachResume, fillAnswers } from "./fill.js";
 import { collectFields } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
-import { detectChallenge } from "./captcha.js";
+import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
@@ -96,6 +96,12 @@ export interface AppDeps {
     tenantHost: string,
     fn: (ctx: PhaseContext) => Promise<T>
   ) => Promise<T>;
+  /**
+   * Injected so tests can decide tile picks without HTTP. In production this
+   * falls back to `httpSolver()`, which asks the worker (where the vision model
+   * and its credentials live).
+   */
+  askSolver?: AskSolver;
 }
 
 export function createApp(deps: AppDeps = {}): Express {
@@ -318,6 +324,8 @@ export function createApp(deps: AppDeps = {}): Express {
     }
     const answers = body.answers as Answer[];
     const submit = body.submit === true;
+    // Optional: only used to attribute captcha model spend to the run.
+    const runId = typeof body.runId === "string" ? body.runId : "";
     const resume = body.resume ?? { contentBase64: null, fileName: "", mimeType: "" };
     const playbook = body.playbook ?? null;
 
@@ -359,6 +367,17 @@ export function createApp(deps: AppDeps = {}): Express {
             };
           }
 
+          const askSolver =
+            deps.askSolver ?? httpSolver({ userId: parsed.userId, ...(runId ? { runId } : {}) });
+
+          // A challenge sitting on the form BEFORE we submit (a v2 checkbox next
+          // to the button) is worth clearing first: submitting into it just
+          // wastes the attempt.
+          const preKind = await detectChallenge(page);
+          if (preKind && askSolver) {
+            await solveChallenge(page, preKind, askSolver).catch(() => false);
+          }
+
           // A deliberate pause before the final click so behavioral scoring sees
           // a human cadence, then click the REAL control (never a programmatic
           // submit) so the site's captcha JS mints its token.
@@ -366,17 +385,48 @@ export function createApp(deps: AppDeps = {}): Express {
           await adapter.submit(page);
           await page.waitForTimeout(2500);
 
-          const confirmed = await adapter.confirmSubmitted(page).catch(() => false);
-          // No confirmation AND a challenge on screen is a specific, honest
-          // outcome rather than an ambiguous one: the application was filled but
-          // an anti-bot check stopped the send, so the user should finish on the
-          // employer's site. Metering treats it as work done.
-          const outcome: SubmitOutcome = confirmed
-            ? "submitted"
-            : (await detectChallenge(page))
-              ? "captcha_blocked"
-              : "unconfirmed";
-          return { outcome, pages, screenshotBase64: await shot(page) };
+          if (await adapter.confirmSubmitted(page).catch(() => false)) {
+            return {
+              outcome: "submitted" as SubmitOutcome,
+              pages,
+              screenshotBase64: await shot(page)
+            };
+          }
+
+          // No confirmation. A challenge on screen now means one escalated on
+          // submit (the invisible check failed and forced a visible puzzle, or
+          // the form re-rendered with one). Try to clear it and send again.
+          const postKind = await detectChallenge(page);
+          if (postKind) {
+            const solved = askSolver
+              ? await solveChallenge(page, postKind, askSolver).catch(() => false)
+              : false;
+            if (solved) {
+              await adapter.submit(page).catch(() => {});
+              await page.waitForTimeout(2500);
+              if (await adapter.confirmSubmitted(page).catch(() => false)) {
+                return {
+                  outcome: "submitted" as SubmitOutcome,
+                  pages,
+                  screenshotBase64: await shot(page)
+                };
+              }
+            }
+            // Everything is filled and the employer's bot check stopped the
+            // send. An honest, specific outcome: metering counts it as work
+            // done and the user is told to finish on the employer's site.
+            return {
+              outcome: "captcha_blocked" as SubmitOutcome,
+              pages,
+              screenshotBase64: await shot(page)
+            };
+          }
+
+          return {
+            outcome: "unconfirmed" as SubmitOutcome,
+            pages,
+            screenshotBase64: await shot(page)
+          };
         })
       );
       return void res.json(result);

@@ -40,6 +40,11 @@ export interface FakePageConfig {
   content?: string;
   /** selector -> locator; unmatched selectors get an empty (count 0) locator. */
   locators?: Record<string, ReturnType<typeof loc>>;
+  /**
+   * iframe selector -> that frame's own selector map. Captcha widgets live in
+   * cross-origin iframes, so their controls are only reachable this way.
+   */
+  frames?: Record<string, Record<string, ReturnType<typeof loc>>>;
   getByRole?: () => ReturnType<typeof loc>;
   /** Drives page.$$eval, i.e. field extraction. */
   eval$$?: (selector: string) => unknown;
@@ -77,6 +82,13 @@ export function fakePage(cfg: FakePageConfig = {}) {
       return cfg.screenshot?.() ?? Buffer.from([1]);
     }),
     locator: vi.fn((selector: string) => pick(cfg.locators, selector)),
+    frameLocator: vi.fn((selector: string) => {
+      // Find the frame whose key the requested iframe selector contains, and
+      // resolve locators inside it against that frame's own map.
+      const key = Object.keys(cfg.frames ?? {}).find((k) => selector.includes(k));
+      const inner = key ? cfg.frames![key] : undefined;
+      return { locator: vi.fn((sel: string) => pick(inner, sel)) };
+    }),
     getByRole: cfg.getByRole ?? vi.fn(() => loc()),
     getByPlaceholder: vi.fn(() => loc()),
     mouse: { wheel: vi.fn(async () => {}), move: vi.fn(async () => {}) },

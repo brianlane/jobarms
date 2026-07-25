@@ -68,6 +68,48 @@ describe("auth middleware with no bearer configured", () => {
   });
 });
 
+describe("with no captcha callback configured", () => {
+  it("does not attempt a solve and reports captcha_blocked", async () => {
+    vi.resetModules();
+    vi.doMock("../src/config", async () => {
+      const actual = await vi.importActual<typeof import("../src/config")>("../src/config");
+      return { ...actual, CONFIG: { ...actual.CONFIG, solverUrl: "", solverToken: "" } };
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createApp: create } = await import("../src/app");
+    const page = fakePage({
+      url: JOB_URL,
+      eval$$: () => goodFields(),
+      locators: {
+        "text=/": loc({
+          waitFor: vi.fn(async () => {
+            throw new Error("timeout");
+          })
+        }),
+        'iframe[src*="recaptcha/api2/anchor"]': loc({ count: vi.fn(async () => 1) })
+      }
+    });
+    const app = create({
+      runPhase: (async (_u: string, _h: string, fn: (c: never) => Promise<unknown>) =>
+        fn({ page, context: {}, key: "k" } as never)) as never
+    });
+
+    const res = await request(app)
+      .post("/fill")
+      .set("authorization", `Bearer ${CONFIG.token}`)
+      .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers: [], submit: true });
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+    // Nothing was asked of the edge, because there is nowhere to ask.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.doUnmock("../src/config");
+    vi.resetModules();
+  });
+});
+
 describe("request parsing edges", () => {
   const page = () => fakePage({ url: JOB_URL, eval$$: () => goodFields() });
 

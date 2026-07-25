@@ -7,6 +7,8 @@
  *   POST /runs/:id/account-verified     resume a run parked on its ATS account
  *                                       email being confirmed
  *   POST /runs/:id/cancel               terminate a run
+ *   POST /internal/solve-captcha        the render sidecar asking which captcha
+ *                                       grid cells to click (its own secret)
  *   GET  /health                        unauthenticated liveness
  *
  * Every mutating request must carry the ARM_WORKER_SHARED_SECRET bearer -
@@ -14,6 +16,7 @@
  */
 import type { Answer, Env, RunParams } from "./types";
 import { updateRun } from "./db";
+import { solveImageGrid } from "./gemini";
 
 export { ApplyRunWorkflow } from "./workflow";
 
@@ -32,12 +35,78 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+function bearer(request: Request): string {
+  const header = request.headers.get("authorization") ?? "";
+  return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+}
+
 function authorized(request: Request, env: Env): boolean {
   const secret = env.ARM_WORKER_SHARED_SECRET;
   if (!secret) return false;
-  const header = request.headers.get("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  return timingSafeEqual(token, secret);
+  return timingSafeEqual(bearer(request), secret);
+}
+
+/** Auth for the sidecar's captcha callback, on its own narrowly-scoped secret. */
+function solverAuthorized(request: Request, env: Env): boolean {
+  const secret = env.SOLVER_SHARED_SECRET;
+  if (!secret) return false;
+  return timingSafeEqual(bearer(request), secret);
+}
+
+/** Largest challenge screenshot we will decode, well past any real grid. */
+const MAX_CHALLENGE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Run the vision model over a captcha grid and answer with the cells to click.
+ *
+ * Returns an empty tile list rather than an error when the model is unavailable
+ * or the payload is unusable: the sidecar treats that as "reload and try another
+ * grid", and ultimately as an honest `captcha_blocked`.
+ */
+async function solveCaptcha(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => null)) as {
+    imageBase64?: unknown;
+    instruction?: unknown;
+    rows?: unknown;
+    cols?: unknown;
+    userId?: unknown;
+    runId?: unknown;
+  } | null;
+
+  const imageBase64 = typeof body?.imageBase64 === "string" ? body.imageBase64 : "";
+  const instruction = typeof body?.instruction === "string" ? body.instruction.slice(0, 300) : "";
+  const rows = typeof body?.rows === "number" ? body.rows : 0;
+  const cols = typeof body?.cols === "number" ? body.cols : 0;
+  // Bound the grid: these are 2x2 through 4x4 in the wild, and the tile indices
+  // come back to be clicked, so an absurd grid is a bad payload, not a puzzle.
+  if (!imageBase64 || !instruction || rows < 2 || cols < 2 || rows > 8 || cols > 8) {
+    return Response.json({ error: "invalid_body" }, { status: 400 });
+  }
+
+  let bytes: Uint8Array;
+  try {
+    // A non-empty base64 string always decodes to at least one byte, and the
+    // guard above already rejected empty input, so only the size cap matters.
+    const binary = atob(imageBase64);
+    if (binary.length > MAX_CHALLENGE_BYTES) {
+      return Response.json({ error: "invalid_body" }, { status: 400 });
+    }
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } catch {
+    return Response.json({ error: "invalid_body" }, { status: 400 });
+  }
+
+  try {
+    const tiles = await solveImageGrid(env, bytes, instruction, rows, cols, {
+      userId: typeof body?.userId === "string" ? body.userId : null,
+      runId: typeof body?.runId === "string" ? body.runId : null
+    });
+    return Response.json({ tiles });
+  } catch {
+    // A model outage must not fail the run; the sidecar falls back to blocked.
+    return Response.json({ tiles: [] });
+  }
 }
 
 export default {
@@ -51,6 +120,23 @@ export default {
         // Arms need the durable orchestrator AND a reachable browser sidecar.
         arms: Boolean(env.APPLY_RUN && env.RENDER_URL && env.RENDER_TOKEN)
       });
+    }
+
+    // POST /internal/solve-captcha
+    //
+    // The render sidecar owns the live page but holds no AI credentials, so it
+    // ships the challenge grid here and we run the vision model. Deliberately
+    // placed BEFORE the shared-secret gate and authed with its OWN secret: the
+    // sidecar should be able to ask for tile picks and nothing else, so a
+    // compromise of that box never becomes the ability to start or cancel runs.
+    if (url.pathname === "/internal/solve-captcha") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!solverAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      return solveCaptcha(request, env);
     }
 
     if (!authorized(request, env)) {

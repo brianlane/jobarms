@@ -85,10 +85,16 @@ which keeps the logged-in session alive between them.
    `captcha_blocked` / `submit_unconfirmed` error, never a silent maybe.
    Full-auto users skip step 3.
 
-Vision recovery spans the boundary: when the sidecar cannot reach a form it
-returns `form_not_found` **with a screenshot**, the worker asks Gemini what
-stands in the way, and calls back with that strategy as the playbook to apply.
-So the AI credentials stay on the edge and the box stays a pure browser.
+Two things span the boundary the same way, because the sidecar has the page and
+the worker has the AI credentials:
+
+- **Vision recovery**: when the sidecar cannot reach a form it returns
+  `form_not_found` with a screenshot, the worker asks Gemini what stands in the
+  way, and calls back with that strategy as the playbook to apply.
+- **Captcha solving**: when a visible grid challenge blocks the submit, the
+  sidecar ships the grid to the worker's `/internal/solve-captcha`, gets back the
+  cells to click, clicks them, and resubmits. That endpoint carries its OWN
+  bearer, so a compromise of the box can ask for tile picks and nothing else.
 
 Run state lives in `application_runs` (step log, answers, screenshots) -
 the worker writes it directly to Supabase; the dashboard polls and renders
@@ -673,6 +679,7 @@ After returning to main:
 
 The full phased build plan lives in [todo.md](todo.md). Phases 0-6, the tier
 system (pricing table above), and the ATS-agnostic expansion (browser sidecar,
-managed applicant email, account vault, Workday) are built. Open items: deploying
-the sidecar and running the live Workday smoke, re-homing the interactive-captcha
-solver, and the launch checklist (Stripe live keys + live webhook).
+managed applicant email, account vault, Workday, captcha solving) are built. Open
+items: deploying the sidecar and running the live Workday smoke, the
+residential-proxy work for invisible captchas, and the launch checklist (Stripe
+live keys + live webhook).

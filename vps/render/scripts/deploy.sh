@@ -25,6 +25,13 @@ if [ -z "${RENDER_TOKEN:-}" ]; then
   echo "error: RENDER_TOKEN must be set (generate: openssl rand -hex 32)" >&2
   exit 1
 fi
+# Optional: the captcha solve callback. Unset simply disables solving.
+RENDER_SOLVER_URL="${RENDER_SOLVER_URL:-}"
+RENDER_SOLVER_TOKEN="${RENDER_SOLVER_TOKEN:-}"
+if [ -n "$RENDER_SOLVER_URL" ] && [ -z "$RENDER_SOLVER_TOKEN" ]; then
+  echo "error: RENDER_SOLVER_URL is set but RENDER_SOLVER_TOKEN is not" >&2
+  exit 1
+fi
 
 APP_DIR=/opt/jobarms-render
 STATE_DIR=/var/lib/jobarms-render/state
@@ -82,6 +89,11 @@ Environment=RENDER_STATE_DIR=$STATE_DIR
 # shared. Raise only after moving to dedicated hardware.
 Environment=RENDER_MAX_SESSIONS=8
 Environment=RENDER_MAX_CONCURRENCY=2
+# Captcha solving: the box has no AI key, so it asks the worker which grid cells
+# to click. Leave these unset to disable solving entirely (a visible challenge
+# then just reports captcha_blocked).
+Environment=RENDER_SOLVER_URL=$RENDER_SOLVER_URL
+Environment=RENDER_SOLVER_TOKEN=$RENDER_SOLVER_TOKEN
 ExecStart=/usr/bin/node $APP_DIR/dist/index.js
 Restart=always
 RestartSec=5

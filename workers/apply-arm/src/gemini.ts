@@ -110,15 +110,57 @@ Return ONLY the JSON object.`
   };
 }
 
-// The image-grid captcha solver used to live here. It is gone with the browser:
-// solving needs to click on the live page, which now belongs to the sidecar, and
-// the sidecar deliberately holds no AI credentials. The sidecar DETECTS a
-// challenge so `captcha_blocked` stays an honest outcome; re-homing the solver is
-// tracked in todo.md, and owning the browser's fingerprint (Layer 3) is the
-// better answer for the invisible checks that actually block us.
-//
-// `captcha_vision` stays in the spend ledger's kind list so historical rows keep
-// rendering with a label, and so a re-homed solver has a bucket waiting.
+/**
+ * Parse the model's tile response into validated, in-range, unique indices.
+ * Pure: the model returns {"tiles": [0,3,5]} for a gridCount-cell challenge;
+ * anything out of range or non-numeric is dropped rather than clicked.
+ */
+export function parseTileResponse(raw: unknown, gridCount: number): number[] {
+  const arr =
+    raw && typeof raw === "object" && Array.isArray((raw as { tiles?: unknown }).tiles)
+      ? (raw as { tiles: unknown[] }).tiles
+      : Array.isArray(raw)
+        ? (raw as unknown[])
+        : [];
+  const seen = new Set<number>();
+  for (const v of arr) {
+    const n = typeof v === "number" ? v : parseInt(String(v), 10);
+    if (Number.isInteger(n) && n >= 0 && n < gridCount) seen.add(n);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Vision solve for an image-grid captcha (reCAPTCHA v2 / hCaptcha).
+ *
+ * Called BY THE SIDECAR over HTTP, because solving needs both a live page and a
+ * vision model and those deliberately live in different places: the sidecar has
+ * the page, this worker has the model and its credentials. Given a screenshot of
+ * the grid, the instruction ("select all squares with crosswalks"), and the grid
+ * size, return which cells match. Cells are numbered left to right, top to
+ * bottom from 0.
+ */
+export async function solveImageGrid(
+  env: Env,
+  screenshotPng: Uint8Array,
+  instruction: string,
+  rows: number,
+  cols: number,
+  attribution: { userId?: string | null; runId?: string | null } = {}
+): Promise<number[]> {
+  const gridCount = rows * cols;
+  const raw = await generateJsonFromParts(
+    env,
+    [
+      { inlineData: { mimeType: "image/png", data: base64FromBytes(screenshotPng) } },
+      {
+        text: `This image is a ${rows}x${cols} captcha grid. The instruction is: "${instruction}". Cells are numbered 0 to ${gridCount - 1}, left to right, top to bottom (row 0 is cells 0..${cols - 1}). Return JSON {"tiles": [<indices of every cell that clearly matches the instruction>]}. If a cell only partially contains the object, include it. Return ONLY the JSON.`
+      }
+    ],
+    { kind: "captcha_vision", userId: attribution.userId, runId: attribution.runId }
+  );
+  return parseTileResponse(raw, gridCount);
+}
 
 function base64FromBytes(bytes: Uint8Array): string {
   let binary = "";

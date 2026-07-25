@@ -400,6 +400,301 @@ describe("POST /fill", () => {
     expect(res.body.outcome).toBe("submitted");
   });
 
+  /**
+   * A page carrying a real-shaped reCAPTCHA v2 widget: the anchor iframe the
+   * detector looks for, plus the bframe grid the solver drives. `markSolved`
+   * flips the checkbox to checked, which is how the solver decides it worked.
+   */
+  function challengedPage(
+    opts: { confirmAfterSolve?: boolean; confirmOnAttempt?: number } = {}
+  ) {
+    let solved = false;
+    let confirmAttempts = 0;
+    const confirmation = loc({
+      waitFor: vi.fn(async () => {
+        confirmAttempts++;
+        // `confirmOnAttempt` models the real shape: the first submit shows
+        // nothing, and only the post-solve resubmit confirms.
+        if (opts.confirmOnAttempt && confirmAttempts >= opts.confirmOnAttempt) return;
+        if (!(solved && opts.confirmAfterSolve)) throw new Error("timeout");
+      })
+    });
+    const tiles = loc({ count: vi.fn(async () => 9) });
+    tiles.nth = vi.fn(() => loc());
+    const page = fakePage({
+      url: JOB_URL,
+      eval$$: () => goodFields(),
+      locators: {
+        "text=/": confirmation,
+        'iframe[src*="recaptcha/api2/anchor"]': loc({ count: vi.fn(async () => 1) })
+      },
+      frames: {
+        "recaptcha/api2/anchor": {
+          "#recaptcha-anchor": loc({
+            count: vi.fn(async () => 1),
+            getAttribute: vi.fn(async () => (solved ? "true" : "false"))
+          })
+        },
+        "recaptcha/api2/bframe": {
+          ".rc-imageselect-instructions": loc({
+            textContent: vi.fn(async () => "Select all crosswalks")
+          }),
+          "table td[role='button']": tiles,
+          ".rc-imageselect-payload": loc({
+            screenshot: vi.fn(async () => Buffer.from("grid"))
+          }),
+          "#recaptcha-reload-button": loc(),
+          "#recaptcha-verify-button": loc()
+        }
+      }
+    });
+    return { page, markSolved: () => (solved = true) };
+  }
+
+  it("clears a challenge and resubmits, reporting a real submission", async () => {
+    const { page, markSolved } = challengedPage({ confirmAfterSolve: true });
+    const askSolver = vi.fn(async () => {
+      markSolved();
+      return [0];
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    // The solver is injected here; in production it is httpSolver(), which asks
+    // the worker because the vision model lives there.
+    const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(askSolver).toHaveBeenCalled();
+    expect(res.body.outcome).toBe("submitted");
+  });
+
+  it("reports captcha_blocked when the challenge cannot be cleared", async () => {
+    const { page } = challengedPage({ confirmAfterSolve: false });
+    const askSolver = vi.fn(async () => []);
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+  });
+
+  it("clears a challenge that escalated ON submit, then resubmits and confirms", async () => {
+    // The realistic shape: the first submit shows nothing and forces a puzzle,
+    // we clear it, send again, and only then does the ATS confirm.
+    const { page, markSolved } = challengedPage({ confirmOnAttempt: 2 });
+    const askSolver = vi.fn(async () => {
+      markSolved();
+      return [0];
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("submitted");
+  });
+
+  it("falls back to the configured HTTP solver, attributing the spend to the run", async () => {
+    // No askSolver injected: the real httpSolver() is built and asks the edge.
+    // Here the edge is unreachable, so nothing is solved.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("edge unreachable"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { page } = challengedPage();
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+    expect(fetchMock.mock.calls[0][0]).toBe(CONFIG.solverUrl);
+    // The model spend lands on the run that caused it, not on platform cost.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      userId: "u1",
+      runId: "run-1"
+    });
+  });
+
+  it("omits the run attribution when the caller sent none", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("edge unreachable"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { page } = challengedPage();
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase } as unknown as AppDeps);
+
+    await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect("runId" in JSON.parse(fetchMock.mock.calls[0][1].body)).toBe(false);
+  });
+
+  it("tolerates the solve attempt itself exploding", async () => {
+    // frameLocator throwing makes solveChallenge reject outright, which both the
+    // pre-submit and post-submit attempts have to absorb.
+    const page = fakePage({
+      url: JOB_URL,
+      eval$$: () => goodFields(),
+      locators: {
+        "text=/": loc({
+          waitFor: vi.fn(async () => {
+            throw new Error("timeout");
+          })
+        }),
+        'iframe[src*="recaptcha/api2/anchor"]': loc({ count: vi.fn(async () => 1) })
+      }
+    });
+    page.frameLocator = vi.fn(() => {
+      throw new Error("frame gone");
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({
+      runPhase,
+      askSolver: vi.fn(async () => [0])
+    } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+  });
+
+  it("tolerates the resubmit and its confirmation throwing after a solve", async () => {
+    let submits = 0;
+    const submitBtn = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        // The first submit works; the post-solve resubmit is refused.
+        if (++submits > 1) throw new Error("detached");
+      })
+    });
+    const page = fakePage({
+      url: JOB_URL,
+      eval$$: () => goodFields(),
+      locators: {
+        "button[type=": submitBtn,
+        "text=/": loc({
+          waitFor: vi.fn(async () => {
+            throw new Error("timeout");
+          })
+        }),
+        'iframe[src*="recaptcha/api2/anchor"]': loc({ count: vi.fn(async () => 1) })
+      },
+      // Already checked, so the solve reports success without a grid.
+      frames: {
+        "recaptcha/api2/anchor": {
+          "#recaptcha-anchor": loc({
+            count: vi.fn(async () => 1),
+            getAttribute: vi.fn(async () => "true")
+          })
+        }
+      }
+    });
+    // After the resubmit, reading the page throws, so confirmSubmitted rejects.
+    page.url = vi.fn(() => {
+      if (submits > 1) throw new Error("page crashed");
+      return JOB_URL;
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({
+      runPhase,
+      askSolver: vi.fn(async () => [0])
+    } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+  });
+
+  it("reports captcha_blocked when the solve worked but the ATS still never confirms", async () => {
+    // Cleared the puzzle and resubmitted, and the employer still showed nothing.
+    // Honest outcome: everything is filled, finish it on their site.
+    const { page, markSolved } = challengedPage({ confirmAfterSolve: false });
+    const askSolver = vi.fn(async () => {
+      markSolved();
+      return [0];
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+  });
+
+  it("survives a solver that throws during the pre-submit attempt", async () => {
+    const { page } = challengedPage();
+    const askSolver = vi.fn(async () => {
+      throw new Error("edge down");
+    });
+    const runPhase = vi.fn(
+      async <T,>(_u: string, _h: string, fn: (c: never) => Promise<T>): Promise<T> =>
+        fn({ page: page as unknown as Page, context: {}, key: "k" } as never)
+    );
+    const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    expect(res.body.outcome).toBe("captcha_blocked");
+  });
+
   it("reports captcha_blocked when a challenge is on screen and nothing confirmed", async () => {
     const missing = loc({
       waitFor: vi.fn(async () => {
