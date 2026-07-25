@@ -356,6 +356,32 @@ no ignore pragmas.
 The unit suite is hermetic: `tests/setup-env.ts` strips every live credential
 so no test can reach a real service.
 
+## Workday (the first login-gated ATS)
+
+Workday is where "which ATS did we hand-code" stops being the constraint. Every
+employer runs its own tenant (`<tenant>.wdN.myworkdayjobs.com`) with its own
+candidate database, so a run has to create an account, confirm it by email, and
+then walk a multi-page wizard, all in one session.
+
+- **Detection** is dot-anchored suffix matching in
+  [src/lib/ats.ts](src/lib/ats.ts): `host === suffix || host.endsWith("." +
+  suffix)`. A bare `endsWith` would also match `notmyworkdayjobs.com`, which for
+  an account-gated ATS would mean creating an account on an attacker-chosen page.
+- **Metadata** comes from the Candidate Experience Service endpoint the career
+  site itself calls (`/wday/cxs/<tenant>/<site>/job<externalPath>`), parsed by
+  `parseWorkdayUrl`. Undocumented but public, and far better than scraping a
+  JS-rendered page for a tracker row.
+- **Account provisioning** happens at dispatch: `ACCOUNT_REQUIRED_ATS` gates it,
+  the managed alias is issued, and the tenant credentials are fetched (or
+  created) before the run row is written, with the reserved arm-run slot released
+  if either step fails so a user is never charged for a run that never started.
+- **The wizard** is walked by the sidecar: it extracts each page, accumulates
+  every field into ONE review payload deduplicated by name, and on submit replays
+  the answers page by page in the same logged-in session.
+- **Ingestion** pulls a tenant's postings via the CXS search endpoint. A Workday
+  company's `board_token` is `<tenant>.<cluster>/<site>` (e.g. `acme.wd1/Careers`)
+  because a posting URL needs all three parts.
+
 ## Adding an ATS adapter (required checklist)
 
 An ATS the arm can drive must be wired at EVERY layer, or jobs on it

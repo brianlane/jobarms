@@ -6,7 +6,22 @@ const mocks = vi.hoisted(() => ({
   fetchJobMeta: vi.fn(),
   tailorResume: vi.fn(),
   renderResumePdf: vi.fn(),
-  buildAndDispatchRun: vi.fn()
+  buildAndDispatchRun: vi.fn(),
+  ensureApplicantAlias: vi.fn(async () => "a-abcdefghjk@jobarms.com" as string | null),
+  ensureSiteAccount: vi.fn(
+    async () =>
+      ({
+        tenantHost: "acme.wd1.myworkdayjobs.com",
+        email: "a-abcdefghjk@jobarms.com",
+        password: ["fixture", "value"].join("-"),
+        status: "pending_verification"
+      }) as {
+        tenantHost: string;
+        email: string;
+        password: string;
+        status: string;
+      } | null
+  )
 }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServerClient: vi.fn(async () => holder.server) }));
 vi.mock("@/lib/supabase/service", () => ({ createSupabaseServiceClient: vi.fn(() => holder.service) }));
@@ -14,6 +29,8 @@ vi.mock("@/lib/job-fetch", () => ({ fetchJobMeta: mocks.fetchJobMeta }));
 vi.mock("@/lib/tailor", () => ({ tailorResume: mocks.tailorResume }));
 vi.mock("@/lib/resume-pdf", () => ({ renderResumePdf: mocks.renderResumePdf }));
 vi.mock("@/lib/arm-dispatch", () => ({ buildAndDispatchRun: mocks.buildAndDispatchRun }));
+vi.mock("@/lib/applicant-email", () => ({ ensureApplicantAlias: mocks.ensureApplicantAlias }));
+vi.mock("@/lib/site-accounts", () => ({ ensureSiteAccount: mocks.ensureSiteAccount }));
 
 import { POST } from "@/app/api/applications/route";
 
@@ -56,6 +73,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.fetchJobMeta.mockResolvedValue(META);
   mocks.buildAndDispatchRun.mockResolvedValue({ ok: true });
+  mocks.ensureApplicantAlias.mockResolvedValue("a-abcdefghjk@jobarms.com");
+  mocks.ensureSiteAccount.mockResolvedValue({
+    tenantHost: "acme.wd1.myworkdayjobs.com",
+    email: "a-abcdefghjk@jobarms.com",
+    password: ["fixture", "value"].join("-"),
+    status: "pending_verification"
+  });
   mocks.tailorResume.mockResolvedValue({ resume: VALID_RESUME, keywords: { incorporated: [], missing: [] } });
   mocks.renderResumePdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
 });
@@ -398,5 +422,117 @@ describe("POST /api/applications", () => {
     const res = await POST(post({ url: GH, tailor: true }));
     expect((await res.json()).tailored).toBe(false);
     expect(rpc).toHaveBeenCalledWith("release_ai_call", expect.objectContaining({ p_kind: "tailor_resume" }));
+  });
+});
+
+describe("POST /api/applications (account-gated ATS)", () => {
+  const WD =
+    "https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Remote/Engineer_JR1";
+
+  function workdayService(over: Parameters<typeof service>[0] = {}) {
+    return service({
+      applications: [{ data: null }, { data: { id: "app1" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] },
+      ...over
+    });
+  }
+
+  beforeEach(() => {
+    mocks.fetchJobMeta.mockResolvedValue({ ...META, ats: "workday" });
+    holder.server = fakeClient({ user: { id: "u1" } });
+  });
+
+  it("provisions the alias + tenant account and passes credentials to the arm", async () => {
+    holder.service = workdayService();
+
+    const res = await POST(post({ url: WD }));
+
+    expect(res.status).toBe(200);
+    expect(mocks.ensureApplicantAlias).toHaveBeenCalled();
+    expect(mocks.ensureSiteAccount).toHaveBeenCalledWith(expect.anything(), {
+      userId: "u1",
+      tenantHost: "acme.wd1.myworkdayjobs.com",
+      ats: "workday",
+      email: "a-abcdefghjk@jobarms.com"
+    });
+    const dispatched = mocks.buildAndDispatchRun.mock.calls[0][1];
+    expect(dispatched.account).toEqual({
+      email: "a-abcdefghjk@jobarms.com",
+      password: ["fixture", "value"].join("-")
+    });
+    // The run records its tenant so the inbound webhook can find it later.
+    expect(dispatched.ats).toBe("workday");
+  });
+
+  it("records the tenant host on the run row", async () => {
+    const client = workdayService();
+    holder.service = client;
+
+    await POST(post({ url: WD }));
+
+    const runInsert = client.from.mock.results
+      .map((r) => r.value)
+      .filter((q) => q.insert.mock.calls.length)
+      .map((q) => q.insert.mock.calls[0][0])
+      .find((a) => "month_key" in a);
+    expect(runInsert.tenant_host).toBe("acme.wd1.myworkdayjobs.com");
+  });
+
+  it("refunds the reserved slot and 503s when no managed email can be issued", async () => {
+    mocks.ensureApplicantAlias.mockResolvedValueOnce(null);
+    // Built by hand rather than via service() so the rpc stub can be asserted on.
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = fakeClient({
+      from: fakeFrom({
+        jobs: [{ data: { id: "job1" } }],
+        applications: [{ data: null }, { data: { id: "app1" } }, { data: null }],
+        profiles: [{ data: { arm_autonomy: "review_gate" } }],
+        resumes: [{ data: null }],
+        subscriptions: [{ data: { plan: "free", status: "active" } }],
+        application_runs: [{ data: { id: "run1" } }]
+      }),
+      rpc
+    });
+
+    const res = await POST(post({ url: WD }));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("applicant_email_unavailable");
+    expect(rpc).toHaveBeenCalledWith("release_arm_run", expect.anything());
+    expect(mocks.buildAndDispatchRun).not.toHaveBeenCalled();
+  });
+
+  it("422s without dispatching when the tenant account is locked", async () => {
+    mocks.ensureSiteAccount.mockResolvedValueOnce(null);
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = fakeClient({
+      from: fakeFrom({
+        jobs: [{ data: { id: "job1" } }],
+        applications: [{ data: null }, { data: { id: "app1" } }, { data: null }],
+        profiles: [{ data: { arm_autonomy: "review_gate" } }],
+        resumes: [{ data: null }],
+        subscriptions: [{ data: { plan: "free", status: "active" } }],
+        application_runs: [{ data: { id: "run1" } }]
+      }),
+      rpc
+    });
+
+    const res = await POST(post({ url: WD }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("ats_account_locked");
+    expect(rpc).toHaveBeenCalledWith("release_arm_run", expect.anything());
+    expect(mocks.buildAndDispatchRun).not.toHaveBeenCalled();
+  });
+
+  it("does NOT provision an account for an ATS that needs none", async () => {
+    mocks.fetchJobMeta.mockResolvedValue(META);
+    holder.service = workdayService();
+
+    await POST(post({ url: GH }));
+
+    expect(mocks.ensureApplicantAlias).not.toHaveBeenCalled();
+    expect(mocks.ensureSiteAccount).not.toHaveBeenCalled();
+    expect(mocks.buildAndDispatchRun.mock.calls[0][1].account).toBeNull();
   });
 });

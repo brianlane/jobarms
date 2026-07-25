@@ -1,4 +1,4 @@
-import { detectAts, type Ats } from "@/lib/ats";
+import { detectAts, parseWorkdayUrl, type Ats } from "@/lib/ats";
 
 /** Best-effort job metadata for the tracker, from public ATS APIs. */
 export interface JobMeta {
@@ -92,6 +92,42 @@ export async function fetchJobMeta(rawUrl: string): Promise<JobMeta> {
         title: job.text ?? "",
         location: job.categories?.location ?? "",
         description: (job.descriptionPlain ?? "").slice(0, 20_000),
+        ats
+      };
+    }
+
+    if (ats === "workday") {
+      const parsed = parseWorkdayUrl(url);
+      if (!parsed) return fallback;
+      // The Candidate Experience Service endpoint the career site itself calls.
+      // Undocumented but public (no auth on a public board), and far better than
+      // scraping a JS-rendered page for metadata we only need for the tracker.
+      const res = await fetch(
+        `https://${parsed.host}/wday/cxs/${parsed.tenant}/${parsed.site}/job${parsed.externalPath}`,
+        {
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(10_000)
+        }
+      );
+      if (!res.ok) return fallback;
+      const body = (await res.json()) as {
+        jobPostingInfo?: {
+          title?: string;
+          jobDescription?: string;
+          location?: string;
+          additionalLocations?: string[];
+        };
+        hiringOrganization?: { name?: string };
+      };
+      const info = body.jobPostingInfo ?? {};
+      return {
+        // Workday reports the legal entity, which is a better company name than
+        // the tenant slug; fall back to the slug when it is absent.
+        company: body.hiringOrganization?.name ?? parsed.tenant,
+        title: info.title ?? "",
+        location: info.location ?? info.additionalLocations?.[0] ?? "",
+        // jobDescription is HTML.
+        description: stripHtml(info.jobDescription ?? "").slice(0, 20_000),
         ats
       };
     }

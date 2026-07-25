@@ -60,20 +60,25 @@ describe("ingest worker HTTP", () => {
             { id: "c1", name: "A", ats: "greenhouse", board_token: "a" },
             { id: "c2", name: "B", ats: "lever", board_token: "b" },
             { id: "c3", name: "C", ats: "ashby", board_token: "c" },
-            { id: "c4", name: "D", ats: "workable", board_token: "d" }
+            { id: "c4", name: "D", ats: "workable", board_token: "d" },
+            // Workday's token carries tenant + cluster + site.
+            { id: "c5", name: "E", ats: "workday", board_token: "e.wd1/Careers" }
           ]);
         }
         if (host(url) === "boards-api.greenhouse.io") return jsonOk({ jobs: [{ id: 1, title: "Eng" }] });
         if (host(url) === "api.lever.co") return jsonOk([{ hostedUrl: "https://jobs.lever.co/b/1", text: "L" }]);
         if (host(url) === "api.ashbyhq.com") return jsonOk({ jobs: [{ jobUrl: "https://ashby/1", title: "AsH" }] });
         if (host(url) === "apply.workable.com") return jsonOk({ jobs: [{ url: "https://wk/1", title: "W" }] });
+        if (host(url) === "e.wd1.myworkdayjobs.com") {
+          return jsonOk({ jobPostings: [{ title: "WD", externalPath: "/Remote/WD_JR1" }] });
+        }
         return jsonOk({}); // jobs upsert + markIngested
       })
     );
     const res = await worker.fetch(req("/ingest", { method: "POST", headers: auth }), env);
     const body = await res.json();
-    expect(body.companies).toBe(4);
-    expect(body.jobs).toBe(4);
+    expect(body.companies).toBe(5);
+    expect(body.jobs).toBe(5);
     expect(body.errors).toEqual([]);
   });
 

@@ -8,8 +8,24 @@ const buildAndDispatchRun = vi.hoisted(() =>
 );
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServerClient: vi.fn(async () => holder.server) }));
 vi.mock("@/lib/supabase/service", () => ({ createSupabaseServiceClient: vi.fn(() => holder.service) }));
+const ensureApplicantAlias = vi.hoisted(() =>
+  vi.fn(async () => "a-abcdefghjk@jobarms.com" as string | null)
+);
+const ensureSiteAccount = vi.hoisted(() =>
+  vi.fn(
+    async () =>
+      ({
+        tenantHost: "acme.wd1.myworkdayjobs.com",
+        email: "a-abcdefghjk@jobarms.com",
+        password: ["fixture", "value"].join("-"),
+        status: "verified"
+      }) as { tenantHost: string; email: string; password: string; status: string } | null
+  )
+);
 vi.mock("@/lib/arm", () => ({ cancelRun }));
 vi.mock("@/lib/arm-dispatch", () => ({ buildAndDispatchRun }));
+vi.mock("@/lib/applicant-email", () => ({ ensureApplicantAlias }));
+vi.mock("@/lib/site-accounts", () => ({ ensureSiteAccount }));
 
 import { POST } from "@/app/api/applications/[id]/retry/route";
 
@@ -44,6 +60,15 @@ beforeEach(() => {
   cancelRun.mockClear();
   buildAndDispatchRun.mockClear();
   buildAndDispatchRun.mockResolvedValue({ ok: true });
+  ensureApplicantAlias.mockClear();
+  ensureApplicantAlias.mockResolvedValue("a-abcdefghjk@jobarms.com");
+  ensureSiteAccount.mockClear();
+  ensureSiteAccount.mockResolvedValue({
+    tenantHost: "acme.wd1.myworkdayjobs.com",
+    email: "a-abcdefghjk@jobarms.com",
+    password: ["fixture", "value"].join("-"),
+    status: "verified"
+  });
 });
 
 describe("POST /api/applications/[id]/retry", () => {
@@ -173,5 +198,69 @@ describe("POST /api/applications/[id]/retry", () => {
     const res = await POST(req(), ctx);
     expect(res.status).toBe(503);
     expect(rpc).toHaveBeenCalledWith("refund_arm_run", { p_run_id: "run2" });
+  });
+});
+
+describe("retrying an account-gated application", () => {
+  const WD_JOB = {
+    url: "https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Remote/Engineer_JR1",
+    ats: "workday",
+    title: "Eng",
+    company: "Acme",
+    description: "d"
+  };
+
+  it("reuses the SAME stored account rather than creating a second profile", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: WD_JOB } }, { data: null });
+    holder.service = service({
+      application_runs: [{ data: { id: "run2" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(200);
+    // ensureSiteAccount is idempotent, so this signs in instead of registering
+    // again, which is what avoids duplicate candidate profiles on the tenant.
+    expect(ensureSiteAccount).toHaveBeenCalledWith(expect.anything(), {
+      userId: "u1",
+      tenantHost: "acme.wd1.myworkdayjobs.com",
+      ats: "workday",
+      email: "a-abcdefghjk@jobarms.com"
+    });
+    const dispatched = buildAndDispatchRun.mock.calls[0][1] as { account?: unknown };
+    expect(dispatched.account).toEqual({
+      email: "a-abcdefghjk@jobarms.com",
+      password: ["fixture", "value"].join("-")
+    });
+  });
+
+  it("422s and releases the slot when the account is unavailable", async () => {
+    ensureSiteAccount.mockResolvedValueOnce(null);
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: WD_JOB } }, { data: null });
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = service({ application_runs: [{ data: { id: "run2" } }, { data: null }], rpc });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("ats_account_unavailable");
+    expect(rpc).toHaveBeenCalledWith("release_arm_run", expect.anything());
+    expect(buildAndDispatchRun).not.toHaveBeenCalled();
+  });
+
+  it("422s when no managed email can be issued", async () => {
+    ensureApplicantAlias.mockResolvedValueOnce(null);
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: WD_JOB } }, { data: null });
+    holder.service = service({
+      application_runs: [{ data: { id: "run2" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(422);
+    // Without an alias there is no account to look up at all.
+    expect(ensureSiteAccount).not.toHaveBeenCalled();
   });
 });

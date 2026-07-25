@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { SUPPORTED_ATS, type Ats } from "@/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, SUPPORTED_ATS, tenantHostOf, type Ats } from "@/lib/ats";
+import { ensureApplicantAlias } from "@/lib/applicant-email";
+import { ensureSiteAccount } from "@/lib/site-accounts";
 import {
   armRunQuota,
   canFullAuto,
@@ -11,7 +13,7 @@ import {
 } from "@/lib/plans";
 import { retryDecision } from "@/lib/run-outcome";
 import { cancelRun } from "@/lib/arm";
-import { buildAndDispatchRun } from "@/lib/arm-dispatch";
+import { buildAndDispatchRun, type SupportedAts } from "@/lib/arm-dispatch";
 
 export const maxDuration = 60;
 
@@ -140,9 +142,39 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   const requestedAutonomy = (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate";
   const autonomy = canFullAuto(plan) ? requestedAutonomy : "review_gate";
 
+  // Account-gated ATSes: reuse the stored tenant credentials (ensureSiteAccount
+  // is idempotent, so a retry signs in to the SAME account rather than creating
+  // a second candidate profile on the employer's tenant).
+  const ats = job.ats as SupportedAts;
+  const tenantHost = tenantHostOf(job.url);
+  let account: { email: string; password: string } | null = null;
+  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+    const alias = await ensureApplicantAlias(service, user.id);
+    const siteAccount = alias
+      ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats, email: alias })
+      : null;
+    if (!siteAccount) {
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: "ats_account_unavailable",
+          hint: "We couldn't reuse the account this employer requires. The job stays in your tracker."
+        },
+        { status: 422 }
+      );
+    }
+    account = { email: siteAccount.email, password: siteAccount.password };
+  }
+
   const { data: newRun, error: runError } = await service
     .from("application_runs")
-    .insert({ application_id: id, user_id: user.id, autonomy, month_key: mk })
+    .insert({
+      application_id: id,
+      user_id: user.id,
+      autonomy,
+      month_key: mk,
+      tenant_host: tenantHost
+    })
     .select("id")
     .single();
   if (runError || !newRun) {
@@ -155,13 +187,14 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     applicationId: id,
     userId: user.id,
     jobUrl: job.url,
-    ats: job.ats as "greenhouse" | "lever",
+    ats,
     autonomy,
     jobTitle: job.title,
     jobCompany: job.company,
     jobDescription: job.description,
     profile: profile as Record<string, unknown>,
-    resume
+    resume,
+    account
   });
 
   if (!dispatch.ok) {

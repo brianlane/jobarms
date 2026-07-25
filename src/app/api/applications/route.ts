@@ -2,7 +2,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { detectAts, normalizeJobUrl, SUPPORTED_ATS } from "@/lib/ats";
+import {
+  ACCOUNT_REQUIRED_ATS,
+  detectAts,
+  normalizeJobUrl,
+  SUPPORTED_ATS,
+  tenantHostOf
+} from "@/lib/ats";
+import { ensureApplicantAlias } from "@/lib/applicant-email";
+import { ensureSiteAccount } from "@/lib/site-accounts";
 import { fetchJobMeta } from "@/lib/job-fetch";
 import {
   aiCallQuota,
@@ -17,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import { tailorResume } from "@/lib/tailor";
 import { renderResumePdf } from "@/lib/resume-pdf";
 import { parsedResumeSchema } from "@/lib/resume-parse";
-import { buildAndDispatchRun } from "@/lib/arm-dispatch";
+import { buildAndDispatchRun, type SupportedAts } from "@/lib/arm-dispatch";
 
 export const maxDuration = 60;
 
@@ -126,7 +134,7 @@ export async function POST(request: Request) {
       {
         error: "ats_unsupported",
         application_id: applicationId,
-        hint: "The arm currently drives Greenhouse and Lever. The job was saved to your tracker."
+        hint: "The arm can't drive this job board yet. The job was saved to your tracker."
       },
       { status: 422 }
     );
@@ -246,6 +254,48 @@ export async function POST(request: Request) {
   const requestedAutonomy = (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate";
   const autonomy = canFullAuto(plan) ? requestedAutonomy : "review_gate";
 
+  // --- account-gated ATSes: provision the managed mailbox + tenant credentials ---
+  // Workday gives every employer its own tenant and its own candidate database,
+  // so the arm needs an account there before it can even see the form. Both the
+  // alias and the password are generated and stored; the user never sees either.
+  const tenantHost = tenantHostOf(jobUrl);
+  let account: { email: string; password: string } | null = null;
+  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+    const alias = await ensureApplicantAlias(service, user.id);
+    if (!alias) {
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: "applicant_email_unavailable",
+          application_id: applicationId,
+          hint: "We couldn't set up the email this employer requires. Try again shortly."
+        },
+        { status: 503 }
+      );
+    }
+
+    const siteAccount = await ensureSiteAccount(service, {
+      userId: user.id,
+      tenantHost,
+      ats,
+      email: alias
+    });
+    if (!siteAccount) {
+      // Locked: this tenant has rejected our credentials repeatedly, so a run
+      // would burn a browser slot to fail the same way again.
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: "ats_account_locked",
+          application_id: applicationId,
+          hint: "This employer's site is refusing the account we created. The job was saved to your tracker."
+        },
+        { status: 422 }
+      );
+    }
+    account = { email: siteAccount.email, password: siteAccount.password };
+  }
+
   // --- create the run row (month_key doubles as the meter key to refund) ---
   const { data: run, error: runError } = await service
     .from("application_runs")
@@ -253,7 +303,10 @@ export async function POST(request: Request) {
       application_id: applicationId,
       user_id: user.id,
       autonomy,
-      month_key: mk
+      month_key: mk,
+      // Lets the inbound-email webhook resolve which tenant a parked run is
+      // waiting on without re-deriving it from the job URL.
+      tenant_host: tenantHost
     })
     .select("id")
     .single();
@@ -268,13 +321,14 @@ export async function POST(request: Request) {
     applicationId,
     userId: user.id,
     jobUrl,
-    ats: ats as "greenhouse" | "lever",
+    ats: ats as SupportedAts,
     autonomy,
     jobTitle: meta.title,
     jobCompany: meta.company,
     jobDescription: meta.description,
     profile: profile as Record<string, unknown>,
-    resume
+    resume,
+    account
   });
 
   if (!dispatch.ok) {

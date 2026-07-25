@@ -26,6 +26,11 @@ export interface DispatchRunPayload {
     answers: Array<{ label: string; answer: string; source: string }>;
     lessons: string[];
   };
+  /**
+   * Credentials for the employer's own ATS tenant, sent only for account-gated
+   * ATSes. The worker forwards them to the sidecar and never persists them.
+   */
+  account?: { email: string; password: string };
 }
 
 export type ArmDispatchResult =

@@ -250,11 +250,24 @@ Phase C - account vault + verification loop:
 
 Phase D - Workday:
 
-- [ ] Detect `*.myworkdayjobs.com` / `wdN` hosts; job metadata via the public
-      `cxs` endpoint
-- [ ] Multi-page wizard support: per-page extract/answer/fill loop accumulating
-      one review payload; submit replays it in the held session
-- [ ] Live review-gated smoke on a real posting, end to end through verification
+- [x] Detect `*.myworkdayjobs.com` / `*.myworkdaysite.com` with DOT-ANCHORED
+      suffix matching (a bare endsWith also matches `notmyworkdayjobs.com`, which
+      for an account-gated ATS means creating an account on a hostile page)
+- [x] `parseWorkdayUrl` + job metadata from the public `cxs` endpoint
+      (locale / no-locale / `details` URL shapes)
+- [x] `SUPPORTED_ATS` + `ACCOUNT_REQUIRED_ATS`; dispatch AND retry provision the
+      alias + tenant account before writing the run row, releasing the reserved
+      arm-run slot if either step fails so a user is never charged for a run that
+      never started
+- [x] Multi-page wizard support in the sidecar (per-page extract/fill, one
+      deduplicated review payload, submit replays it in the held session)
+- [x] Ingest fetcher for a tenant career site (`board_token` is
+      `<tenant>.<cluster>/<site>`, e.g. `acme.wd1/Careers`)
+- [ ] **Live review-gated smoke on a real Workday posting**, end to end through
+      account creation and email verification. Blocked on the Phase B manual steps
+      (sidecar deployed, tunnel up, secrets set); `debug/smoke-arm-run.ts` is
+      review-gated so it can never submit
+- [ ] Seed a few Workday companies once that smoke passes
 
 Note: the Workers Paid upgrade is no longer a launch blocker (it only ever
 bought Browser Rendering minutes). Workflows on the free plan covers us since

@@ -95,4 +95,25 @@ describe("buildAndDispatchRun", () => {
     });
     expect(dispatchRun.mock.calls[0][0].resume.signedUrl).toBeNull();
   });
+
+  it("forwards tenant credentials for an account-gated ATS", async () => {
+    const account = { email: "a-abcdefghjk@jobarms.com", password: ["fixture", "v"].join("-") };
+    await buildAndDispatchRun(fakeService(null, null, null), {
+      ...baseArgs,
+      resume: null,
+      ats: "workday",
+      account
+    });
+    expect(dispatchRun.mock.calls[0][0].account).toEqual(account);
+  });
+
+  it("omits the account field entirely when none is needed", async () => {
+    await buildAndDispatchRun(fakeService(null, null, null), {
+      ...baseArgs,
+      resume: null,
+      account: null
+    });
+    // Absent rather than null: Greenhouse and Lever runs carry no credentials.
+    expect("account" in dispatchRun.mock.calls[0][0]).toBe(false);
+  });
 });
