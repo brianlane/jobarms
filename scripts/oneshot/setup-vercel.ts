@@ -90,6 +90,10 @@ async function addDomain(name: string) {
 async function main() {
   const webhookSecret = await ensureStripeWebhook();
 
+  // Every var the deployed app reads at runtime. Anything missing here is a
+  // silent production failure: it works locally off .env and is simply absent
+  // in Vercel, which is how the render sidecar sat "not configured" after its
+  // PR merged.
   const passthrough = [
     "NEXT_PUBLIC_SUPABASE_URL",
     "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
@@ -98,8 +102,18 @@ async function main() {
     "STRIPE_SECRET_KEY",
     "STRIPE_PUBLISHABLE_KEY",
     "STRIPE_PRICE_PREMIUM_MONTHLY",
+    "STRIPE_PRICE_MAX_MONTHLY",
     "INTERNAL_CRON_SECRET",
     "ARM_WORKER_SHARED_SECRET",
+    "ARM_WORKER_URL",
+    // Transactional + inbound mail.
+    "RESEND_API_KEY",
+    "EMAIL_INBOUND_SECRET",
+    // The render sidecar: the app calls it to finish ATS account verification.
+    "RENDER_URL",
+    "RENDER_TOKEN",
+    // Decrypts the ATS credential vault.
+    "SITE_ACCOUNT_ENC_KEY",
     // The admin console's entire allowlist. Without it in Vercel, /admin is
     // disabled in production even though it works locally.
     "ADMIN_EMAIL"
