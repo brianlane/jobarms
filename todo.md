@@ -313,9 +313,11 @@ section for the posture.
       read through the same `lessonsFromStats` the arm prompt uses. Operator
       cancel + force refund; retry stays in `debug/retry-application.ts` rather
       than duplicating the dispatch path
-- [ ] Money: `ai_spend_events` ledger + token instrumentation in the app and the
-      worker, `/admin/ai` unit economics, `/admin/revenue` (MRR trend, churn,
-      ARPU, conversion)
+- [x] Money: `ai_spend_events` ledger + `record_ai_spend` RPC, token
+      instrumentation in the app (one `generateMetered` seam) and the worker,
+      `/admin/ai` unit economics (cost per submitted application, per user,
+      margin, fallback rate), `/admin/revenue` (MRR trend, ARPU, conversion,
+      pending churn, billing problems)
 - [ ] Catalog + engagement: ingestion health (per-ATS mix, sweep freshness,
       companies, Discover attribution) and engagement (active users, onboarding
       funnel, signup cohort retention)

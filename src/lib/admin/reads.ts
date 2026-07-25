@@ -25,6 +25,7 @@ import {
 } from "@/lib/admin/overview";
 import type { AdminRunRow } from "@/lib/admin/run-stats";
 import type { FieldStatRow, PlaybookRow } from "@/lib/admin/ats-health";
+import type { SpendEventRow } from "@/lib/admin/spend";
 
 /** Row caps. Generous next to current scale, small enough to stay one page. */
 export const USER_ROW_CAP = 5000;
@@ -34,7 +35,7 @@ export const RUN_WINDOW_DAYS = 30;
 
 const PROFILE_COLUMNS = "id, email, created_at, onboarding_complete, arm_autonomy";
 const SUBSCRIPTION_COLUMNS =
-  "user_id, plan, status, current_period_end, cancel_at_period_end, stripe_subscription_id, updated_at";
+  "user_id, plan, status, current_period_end, cancel_at_period_end, stripe_subscription_id, created_at, updated_at";
 const RUN_COLUMNS =
   "id, user_id, application_id, status, autonomy, error, created_at, updated_at, slot_refunded, canceled_by";
 const APPLICATION_COLUMNS = "id, user_id, status, source, created_at, applied_at";
@@ -191,6 +192,30 @@ export async function loadRunsWithJobs(
     .order("created_at", { ascending: false })
     .limit(RUN_ROW_CAP);
   return (data ?? []) as unknown as AdminRunWithJob[];
+}
+
+export const SPEND_ROW_CAP = 20000;
+export const SPEND_WINDOW_DAYS = 30;
+
+/**
+ * AI ledger rows for a trailing window. The cap is high because this table gets
+ * one row per model call rather than one per user, so it is the fastest-growing
+ * thing the admin reads; the window is what keeps it bounded.
+ */
+export async function loadSpendEvents(
+  days = SPEND_WINDOW_DAYS,
+  now: Date = new Date()
+): Promise<SpendEventRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("ai_spend_events")
+    .select(
+      "user_id, run_id, kind, model, used_fallback, input_tokens, output_tokens, cost_micros, day, created_at"
+    )
+    .gte("day", windowStartIso(days, now).slice(0, 10))
+    .order("created_at", { ascending: false })
+    .limit(SPEND_ROW_CAP);
+  return (data ?? []) as SpendEventRow[];
 }
 
 export const PLAYBOOK_ROW_CAP = 500;

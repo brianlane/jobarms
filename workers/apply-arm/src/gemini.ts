@@ -2,6 +2,7 @@
  * Gemini REST calls (plain fetch - no SDK in the worker bundle).
  * Generates application answers from the user's profile + the extracted form.
  */
+import { recordAiSpend } from "./db";
 import type { Answer, Env, FormField, RunParams } from "./types";
 
 // gemini-3.6-flash: same input price as 3.5-flash, cheaper output, better
@@ -11,11 +12,21 @@ const DEFAULT_MODEL = "gemini-3.6-flash";
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+}
+
+/** Who to bill a model call to. Required, so a new AI surface in the worker
+ *  cannot land without declaring its cost. The ids are optional: a vision
+ *  recovery diagnosis is platform cost rather than one person's. */
+interface Bill {
+  kind: string;
+  userId?: string | null;
+  runId?: string | null;
 }
 
 type Part = { text: string } | { inlineData: { mimeType: string; data: string } };
 
-async function generateJsonFromParts(env: Env, parts: Part[]): Promise<unknown> {
+async function generateJsonFromParts(env: Env, parts: Part[], bill: Bill): Promise<unknown> {
   const model = env.GEMINI_TEXT_MODEL || DEFAULT_MODEL;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -35,6 +46,12 @@ async function generateJsonFromParts(env: Env, parts: Part[]): Promise<unknown> 
     throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }
   const body = (await res.json()) as GeminiResponse;
+  await recordAiSpend(env, {
+    ...bill,
+    model,
+    inputTokens: body.usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0
+  });
   const text = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   const unfenced = text.trim().startsWith("```")
     ? text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "")
@@ -42,8 +59,8 @@ async function generateJsonFromParts(env: Env, parts: Part[]): Promise<unknown> 
   return JSON.parse(unfenced);
 }
 
-async function generateJson(env: Env, prompt: string): Promise<unknown> {
-  return generateJsonFromParts(env, [{ text: prompt }]);
+async function generateJson(env: Env, prompt: string, bill: Bill): Promise<unknown> {
+  return generateJsonFromParts(env, [{ text: prompt }], bill);
 }
 
 export interface PageDiagnosis {
@@ -80,7 +97,7 @@ Look at the screenshot and answer as JSON:
 
 Return ONLY the JSON object.`
     }
-  ])) as Partial<PageDiagnosis>;
+  ], { kind: "vision_recovery" })) as Partial<PageDiagnosis>;
 
   const action = ["click", "iframe", "scroll", "none"].includes(raw.action ?? "")
     ? (raw.action as PageDiagnosis["action"])
@@ -99,6 +116,9 @@ Return ONLY the JSON object.`
 // challenge so `captcha_blocked` stays an honest outcome; re-homing the solver is
 // tracked in todo.md, and owning the browser's fingerprint (Layer 3) is the
 // better answer for the invisible checks that actually block us.
+//
+// `captcha_vision` stays in the spend ledger's kind list so historical rows keep
+// rendering with a label, and so a re-homed solver has a bucket waiting.
 
 function base64FromBytes(bytes: Uint8Array): string {
   let binary = "";
@@ -151,7 +171,11 @@ Rules:
 - Never use the em dash character anywhere in any answer; use a comma, colon, or hyphen instead.
 Return ONLY the JSON array.`;
 
-  const raw = await generateJson(env, prompt);
+  const raw = await generateJson(env, prompt, {
+    kind: "arm_answers",
+    userId: params.userId,
+    runId: params.runId
+  });
   if (!Array.isArray(raw)) throw new Error("gemini answers: not an array");
 
   const byName = new Map(fields.map((f) => [f.name, f]));

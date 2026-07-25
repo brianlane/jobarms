@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { generateWithRetry, extractJson } from "@/lib/gemini";
+import { extractJson } from "@/lib/gemini";
+import { generateMetered, type SpendMeter } from "@/lib/ai-cost";
 import { parsedResumeSchema, type ParsedResume } from "@/lib/resume-parse";
 
 export const tailorResultSchema = z.object({
@@ -21,9 +22,10 @@ export async function tailorResume(
   profile: Record<string, unknown>,
   jobTitle: string,
   jobCompany: string,
-  jobDescription: string
+  jobDescription: string,
+  meter?: SpendMeter
 ): Promise<TailorResult> {
-  const text = await generateWithRetry({
+  const text = await generateMetered("tailor_resume", {
     contents: [
       {
         role: "user",
@@ -50,7 +52,7 @@ Return JSON: {"resume": {full_name, email, phone, location, headline, summary, l
       }
     ],
     config: { responseMimeType: "application/json", temperature: 0.3 }
-  });
+  }, meter);
 
   return tailorResultSchema.parse(extractJson<unknown>(text));
 }
@@ -60,9 +62,10 @@ export async function generateCoverLetter(
   profile: Record<string, unknown>,
   jobTitle: string,
   jobCompany: string,
-  jobDescription: string
+  jobDescription: string,
+  meter?: SpendMeter
 ): Promise<string> {
-  const raw = await generateWithRetry({
+  const raw = await generateMetered("cover_letter", {
     contents: [
       {
         role: "user",
@@ -82,7 +85,7 @@ Rules: 250-350 words, first person, specific to this company and role, grounded 
       }
     ],
     config: { temperature: 0.5 }
-  });
+  }, meter);
 
   const text = raw.trim();
   if (!text) throw new Error("empty cover letter");

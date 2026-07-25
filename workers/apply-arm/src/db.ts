@@ -112,6 +112,59 @@ export async function releaseArmRunSlot(env: Env, runId: string): Promise<void> 
   }
 }
 
+// --- AI spend ledger --------------------------------------------------------
+
+/**
+ * Dollars per million tokens for the model that served a call. The worker cannot
+ * import the app's pricing table (separate bundle), so the primary model's rate
+ * is duplicated here and everything else is priced at it, which overestimates
+ * rather than flatters. Keep in step with src/lib/ai-cost.ts.
+ */
+const INPUT_USD_PER_MILLION = 1.5;
+const OUTPUT_USD_PER_MILLION = 7.5;
+
+export interface SpendUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Dollars per million tokens equals micros per token, so this is just tokens times rate. */
+export function spendCostMicros(usage: SpendUsage): number {
+  return Math.round(
+    Math.max(usage.inputTokens, 0) * INPUT_USD_PER_MILLION +
+      Math.max(usage.outputTokens, 0) * OUTPUT_USD_PER_MILLION
+  );
+}
+
+/**
+ * Append one row to the AI spend ledger. Best effort: a run that already
+ * produced answers must never fail because the bookkeeping did.
+ */
+export async function recordAiSpend(
+  env: Env,
+  entry: SpendUsage & { kind: string; userId?: string | null; runId?: string | null }
+): Promise<void> {
+  try {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_ai_spend`, {
+      method: "POST",
+      headers: headers(env),
+      body: JSON.stringify({
+        p_user_id: entry.userId ?? null,
+        p_run_id: entry.runId ?? null,
+        p_kind: entry.kind,
+        p_model: entry.model,
+        p_used_fallback: false,
+        p_input_tokens: entry.inputTokens,
+        p_output_tokens: entry.outputTokens,
+        p_cost_micros: spendCostMicros(entry)
+      })
+    });
+  } catch {
+    // advisory only
+  }
+}
+
 // --- Self-healing playbooks -------------------------------------------------
 
 export interface PlaybookStrategy {
