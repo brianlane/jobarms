@@ -65,4 +65,25 @@ describe("proxy (middleware)", () => {
     const res = await proxy(req("/onboarding"));
     expect(res.headers.get("location")).toContain("/login");
   });
+
+  it("sends an unauthenticated admin request to the admin sign in", async () => {
+    getClaims.mockResolvedValueOnce({ data: null });
+    const res = await proxy(req("/admin/dashboard"));
+    expect(res.status).toBe(307);
+    const loc = res.headers.get("location")!;
+    expect(loc).toContain("/admin/login");
+    expect(loc).toContain("next=%2Fadmin%2Fdashboard");
+  });
+
+  it("lets the admin sign-in page itself render when signed out", async () => {
+    getClaims.mockResolvedValueOnce({ data: null });
+    const res = await proxy(req("/admin/login"));
+    expect(res.status).toBe(200);
+  });
+
+  it("lets a signed-in request reach the admin area, where the layout checks the allowlist", async () => {
+    getClaims.mockResolvedValueOnce({ data: { claims: { sub: "u1" } } });
+    const res = await proxy(req("/admin/system"));
+    expect(res.status).toBe(200);
+  });
 });

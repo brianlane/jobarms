@@ -261,6 +261,29 @@ bought Browser Rendering minutes). Workflows on the free plan covers us since
 WAITING instances do not count toward concurrency; the real ceiling becomes
 3,000 workflow steps/day, roughly 300-400 arm runs/day.
 
+## Admin console (/admin)
+
+Operator surface for the whole platform, modeled on newCoworker's admin. Access
+is the `ADMIN_EMAIL` allowlist; every mutation is audited. See the README
+section for the posture.
+
+- [x] Foundation: `getAdminUser()` gate, `/admin/login`, protected route group
+      + nav shell, proxy + robots, `admin_audit_log` migration and
+      `logAdminAction`, platform overview, `/admin/system` (env matrix,
+      dependency probes, audit viewer), `create-admin.ts` one-shot
+- [ ] Users: fleet list + per-user 360 detail; operator actions (comp or revoke
+      a plan, resend welcome, delete a user with an impact preview, read-only
+      view-as impersonation)
+- [ ] Runs + ATS health: fleet run console (funnel, failure taxonomy, phase
+      durations, refund provenance), run forensics page, playbook decay and
+      field-stat guidance thresholds, admin refund/retry/cancel
+- [ ] Money: `ai_spend_events` ledger + token instrumentation in the app and the
+      worker, `/admin/ai` unit economics, `/admin/revenue` (MRR trend, churn,
+      ARPU, conversion)
+- [ ] Catalog + engagement: ingestion health (per-ATS mix, sweep freshness,
+      companies, Discover attribution) and engagement (active users, onboarding
+      funnel, signup cohort retention)
+
 ## Later / parked
 
 - [ ] Chrome extension (assisted apply in the user's own browser)

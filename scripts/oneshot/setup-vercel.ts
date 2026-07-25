@@ -99,7 +99,10 @@ async function main() {
     "STRIPE_PUBLISHABLE_KEY",
     "STRIPE_PRICE_PREMIUM_MONTHLY",
     "INTERNAL_CRON_SECRET",
-    "ARM_WORKER_SHARED_SECRET"
+    "ARM_WORKER_SHARED_SECRET",
+    // The admin console's entire allowlist. Without it in Vercel, /admin is
+    // disabled in production even though it works locally.
+    "ADMIN_EMAIL"
   ];
   for (const key of passthrough) {
     await upsertEnv(key, need(key));

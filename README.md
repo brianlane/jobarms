@@ -261,6 +261,35 @@ Arm-run metering counts SUCCESSFUL runs only, with outcome-based refunds:
   transient errors with backoff on the primary model, then falls back to
   `GEMINI_FALLBACK_MODEL` ([src/lib/gemini.ts](src/lib/gemini.ts)).
 
+## Admin console (/admin)
+
+An operator surface for the whole platform, dark where the product dashboard is
+light so it is never ambiguous which one you are looking at.
+
+- **Access is an env allowlist.** `ADMIN_EMAIL` (comma-separated for more than
+  one address) is the entire grant; nothing in the database confers admin, so
+  there is no row to compromise, and an unset `ADMIN_EMAIL` disables the console
+  outright. The admin is an ordinary Supabase account: sign in at `/admin/login`
+  with the password `scripts/oneshot/create-admin.ts` set from `ADMIN_PASSWORD`
+  (application code never reads that variable).
+- **Two gates, one authority.** `src/proxy.ts` keeps signed-out requests off
+  `/admin`, but the real check is `getAdminUser()`
+  ([src/lib/admin/guard.ts](src/lib/admin/guard.ts)) in the route group's
+  layout, which every page and admin API route re-runs server-side.
+- **Reads hold the service role** ([src/lib/admin/reads.ts](src/lib/admin/reads.ts)),
+  since every table is read-own or service-only. They are bounded: explicit row
+  caps, a 30-day window on runs, and head-count requests for the jobs catalog so
+  no page pulls a table that grows every half hour. All the arithmetic sits in
+  pure functions ([overview.ts](src/lib/admin/overview.ts),
+  [run-stats.ts](src/lib/admin/run-stats.ts)) that take rows and return numbers.
+- **Every operator mutation is audited** to `admin_audit_log` (RLS on, no
+  policies) before the route answers, and the write is fire-and-forget so
+  auditing can never take down the action it observes. The trail renders on
+  `/admin/system`.
+- **`/admin/system`** shows configuration as set or unset, never a value, plus
+  dependency reachability and when Stripe last wrote a subscription row.
+- Robots disallow `/admin`, and every admin page carries `noindex`.
+
 ## Security standards & posture
 
 The platform follows a **deny-by-default** model. New code is expected to
@@ -272,7 +301,7 @@ uphold these standards:
   `arm_run_usage`, `ai_usage`, `user_answer_memory`).
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.**
   Service-only tables (`platform_field_stats`, `arm_playbooks`,
-  `site_accounts`) and all
+  `site_accounts`, `admin_audit_log`) and all
   metering/billing writes go exclusively through the Next.js server or the
   worker (service role) after their own auth checks; anon/authenticated
   roles get an unconditional deny at the database layer.
@@ -396,7 +425,8 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
   keys + `STRIPE_WEBHOOK_SECRET` + `STRIPE_PRICE_PREMIUM_MONTHLY` +
   `STRIPE_PRICE_MAX_MONTHLY`, `GEMINI_API_KEY`, `INTERNAL_CRON_SECRET`,
   `ARM_WORKER_SHARED_SECRET`, `ARM_WORKER_URL`, `RESEND_API_KEY`,
-  `NEXT_PUBLIC_APP_URL`.
+  `NEXT_PUBLIC_APP_URL`, `ADMIN_EMAIL` (the admin console is disabled in any
+  environment where it is unset).
 - **GitHub Actions secrets**: `SUPABASE_ACCESS_TOKEN`,
   `SUPABASE_DB_PASSWORD`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
   `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN` (the scoped `jobarms-ci`
@@ -434,6 +464,8 @@ key, live Stripe, live Cloudflare): read before running.
   address is verified
 - `comp-premium.ts <email> [--revoke]` - comp an account to Premium without
   Stripe (owner/test accounts)
+- `create-admin.ts` - create (or reset the password of) the `ADMIN_EMAIL`
+  Supabase account from `ADMIN_PASSWORD`, so `/admin/login` works. Idempotent
 - `seed-companies.ts` - seed/extend the ingestion company list
 
 [debug/](debug/):

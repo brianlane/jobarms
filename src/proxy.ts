@@ -37,7 +37,18 @@ export default async function proxy(request: NextRequest) {
   const user = data?.claims?.sub ? data.claims : null;
 
   const path = request.nextUrl.pathname;
+  const isAdminArea = path.startsWith("/admin") && path !== "/admin/login";
   const needsAuth = path.startsWith("/dashboard") || path.startsWith("/onboarding");
+
+  // The admin area gets its own sign-in, and the allowlist check happens in the
+  // layout (which can read ADMIN_EMAIL server-side). Here we only keep signed-out
+  // requests from rendering an admin route at all.
+  if (isAdminArea && !user) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/admin/login";
+    url.searchParams.set("next", path);
+    return NextResponse.redirect(url);
+  }
 
   if (needsAuth && !user) {
     const url = request.nextUrl.clone();
@@ -61,5 +72,5 @@ export const config = {
   // (/, /pricing, sitemap, OG images) deliberately DON'T match: routing them
   // through the proxy forced every static page through a server-function
   // invocation (cold starts included) instead of the edge cache.
-  matcher: ["/dashboard/:path*", "/onboarding/:path*", "/login", "/signup"]
+  matcher: ["/dashboard/:path*", "/onboarding/:path*", "/admin/:path*", "/login", "/signup"]
 };
