@@ -231,6 +231,40 @@ sign up for anything themselves.
   reply goes straight back to the recruiter. A failed forward is a degraded
   notification, never lost mail, since the message is already stored.
 
+### Branded addresses and domain authentication
+
+Explicit routing rules are matched BEFORE the catch-all, so mail to these
+never touches the inbound Worker. All forward to `jobarmsteam@gmail.com`.
+
+| Address | Role |
+|---|---|
+| `hello@jobarms.com` | Sender for user-facing transactional mail, and a monitored inbox. |
+| `support@jobarms.com` | Customer support. Belongs in the footer of user-facing email. |
+| `dmarc@jobarms.com` | Receives DMARC aggregate reports. |
+| `a-<10 chars>@jobarms.com` | Managed applicant aliases, handled by the catch-all Worker (above). |
+
+Anything else hits the catch-all Worker, which forwards non-alias mail to the
+team inbox, so an unrouted address is never silently dropped.
+
+Domain authentication, all three of which must stay in place for transactional
+mail to land:
+
+- **SPF** `v=spf1 include:_spf.mx.cloudflare.net ~all` on the root, plus
+  `include:amazonses.com` on `send.jobarms.com`, which is the Return-Path
+  domain Resend uses.
+- **DKIM** published at `resend._domainkey`, signing as `d=jobarms.com`, which
+  is what makes DMARC align even though the envelope sender is a subdomain.
+- **DMARC** `v=DMARC1; p=none; rua=mailto:dmarc@jobarms.com; fo=1`.
+  Deliberately monitoring-only for now. Read a few weeks of aggregate reports
+  first, confirm every legitimate sender passes, and only then tighten to
+  `p=quarantine`. Skipping that step is how a policy change silently sends
+  real user mail to spam.
+
+Manage routing with `wrangler email routing rules list jobarms.com`. Wrangler
+auto-loads `.env`, and the `CLOUDFLARE_API_TOKEN` there lacks Email Routing
+scope, so prefix with `env -u CLOUDFLARE_API_TOKEN` and `--env-file /dev/null`
+to use the OAuth login instead.
+
 ## Self-healing arms
 
 Two more layers keep arms working on hostile pages and recovering from
