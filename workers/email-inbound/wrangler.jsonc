@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jobarms-email-inbound",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // No routes: this worker is invoked by Email Routing, not by HTTP. Wire it in
+  // the dashboard under Email Routing -> Routing rules -> Catch-all ->
+  // "Send to a Worker" -> jobarms-email-inbound.
+  "vars": {
+    "APP_INBOUND_URL": "https://jobarms.com/api/email/inbound",
+    "PLATFORM_EMAIL_DOMAIN": "jobarms.com",
+    "FALLBACK_FORWARD_TO": "jobarmsteam@gmail.com"
+  },
+  // Secrets (wrangler secret put): EMAIL_INBOUND_SECRET.
+  "observability": {
+    "enabled": true
+  }
+}
