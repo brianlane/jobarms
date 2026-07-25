@@ -1,17 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { generateWithRetry, extractJson } = vi.hoisted(() => ({
-  generateWithRetry: vi.fn(),
+const { generateWithUsage, extractJson } = vi.hoisted(() => ({
+  generateWithUsage: vi.fn(),
   extractJson: vi.fn()
 }));
-vi.mock("@/lib/gemini", () => ({ generateWithRetry, extractJson }));
+vi.mock("@/lib/gemini", () => ({
+  generateWithUsage,
+  extractJson,
+  GEMINI_TEXT_MODEL: "test-model",
+  GEMINI_FALLBACK_MODEL: "test-fallback"
+}));
 
 import { NotAResumeError, normalizeParsedResume, parseResume } from "@/lib/resume-parse";
 
+const usage = {
+  model: "test-model",
+  inputTokens: 100,
+  outputTokens: 40,
+  usedFallback: false
+};
+
 beforeEach(() => {
-  generateWithRetry.mockReset();
+  generateWithUsage.mockReset();
   extractJson.mockReset();
-  generateWithRetry.mockResolvedValue("<model text>");
+  generateWithUsage.mockResolvedValue({ text: "<model text>", usage });
 });
 
 describe("parseResume", () => {

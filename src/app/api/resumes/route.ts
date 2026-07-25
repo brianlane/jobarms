@@ -94,7 +94,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const parsed = await parseResume(bytes, file.type);
+    const parsed = await parseResume(bytes, file.type, { client: service, userId: user.id });
 
     await service
       .from("resumes")

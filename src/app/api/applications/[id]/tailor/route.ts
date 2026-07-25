@@ -90,7 +90,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         profile as Record<string, unknown>,
         job?.title ?? "",
         job?.company ?? "",
-        job?.description ?? ""
+        job?.description ?? "",
+        { client: service, userId: user.id }
       );
       await service.from("applications").update({ cover_letter: letter }).eq("id", id);
       return NextResponse.json({ cover_letter: letter });
@@ -101,7 +102,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       profile as Record<string, unknown>,
       job?.title ?? "",
       job?.company ?? "",
-      job?.description ?? ""
+      job?.description ?? "",
+      { client: service, userId: user.id }
     );
     const pdf = await renderResumePdf(parsedResumeSchema.parse(result.resume));
 

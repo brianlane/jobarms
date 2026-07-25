@@ -311,6 +311,12 @@ light so it is never ambiguous which one you are looking at.
   they are now), median and p95 time per phase, the failure taxonomy parsed out
   of `application_runs.error`, and refund provenance. `/admin/runs/[id]` is
   forensics: the step log, every answer the arm drafted, and signed screenshots.
+- **`/admin/ai` and `/admin/revenue`** are the money pages. Every model call is
+  written to `ai_spend_events` with the tokens it consumed, by both the app
+  (through the single `generateMetered` seam) and the worker, so cost per
+  successful application, cost per user, and margin per paying user are actual
+  rather than estimated. Unknown models are priced at the primary model's rate,
+  which overestimates rather than flatters, and the page says so.
 - **`/admin/ats`** is arm health per platform, the self-healing playbooks with
   the decaying ones (failing more than they work) surfaced first, and what the
   platform has learned. The "guiding" flag there is computed by
@@ -339,13 +345,14 @@ uphold these standards:
   `arm_run_usage`, `ai_usage`, `user_answer_memory`).
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.**
   Service-only tables (`platform_field_stats`, `arm_playbooks`,
-  `site_accounts`, `admin_audit_log`) and all
+  `site_accounts`, `admin_audit_log`, `ai_spend_events`) and all
   metering/billing writes go exclusively through the Next.js server or the
   worker (service role) after their own auth checks; anon/authenticated
   roles get an unconditional deny at the database layer.
 - **DB functions are locked down.** Every RPC (`try_reserve_arm_run`,
   `release_arm_run`, `refund_arm_run`, `try_reserve_ai_call`,
-  `release_ai_call`, `record_answer_memory`, `record_field_stats`, trigger
+  `release_ai_call`, `record_answer_memory`, `record_field_stats`,
+  `record_ai_spend`, trigger
   helpers) revokes EXECUTE from `public`/`anon`/`authenticated` and pins
   `search_path = pg_catalog, public`.
 - **Storage is private**: `resumes` and `run-artifacts` buckets use

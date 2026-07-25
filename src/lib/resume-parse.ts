@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { generateWithRetry, extractJson } from "@/lib/gemini";
+import { extractJson } from "@/lib/gemini";
+import { generateMetered, type SpendMeter } from "@/lib/ai-cost";
 import {
   fixShoutyField,
   fixShoutyProse,
@@ -78,9 +79,10 @@ export class NotAResumeError extends Error {
  */
 export async function parseResume(
   fileBytes: Uint8Array,
-  mimeType: string
+  mimeType: string,
+  meter?: SpendMeter
 ): Promise<ParsedResume> {
-  const text = await generateWithRetry({
+  const text = await generateMetered("resume_parse", {
     contents: [
       {
         role: "user",
@@ -91,7 +93,7 @@ export async function parseResume(
       }
     ],
     config: { responseMimeType: "application/json", temperature: 0 }
-  });
+  }, meter);
 
   const raw = extractJson<Record<string, unknown>>(text);
   if (raw && typeof raw === "object" && raw.not_a_resume === true) {

@@ -12,6 +12,8 @@ const navItems = [
   { href: "/admin/users", label: "Users" },
   { href: "/admin/runs", label: "Runs" },
   { href: "/admin/ats", label: "ATS health" },
+  { href: "/admin/revenue", label: "Revenue" },
+  { href: "/admin/ai", label: "AI spend" },
   { href: "/admin/system", label: "System" }
 ];
 

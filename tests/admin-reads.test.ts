@@ -17,6 +17,7 @@ import {
   loadFieldStats,
   loadPlaybooks,
   loadRunsWithJobs,
+  loadSpendEvents,
   loadCatalogSummary,
   loadFleetSnapshot,
   loadProfiles,
@@ -151,6 +152,21 @@ describe("loadRunsWithJobs", () => {
   it("defaults the window and treats a null payload as empty", async () => {
     holder.service = client({});
     expect(await loadRunsWithJobs()).toEqual([]);
+  });
+});
+
+describe("loadSpendEvents", () => {
+  it("windows the ledger on the day column", async () => {
+    const from = fakeFrom({ ai_spend_events: [{ data: [{ kind: "arm_answers" }] }] });
+    holder.service = fakeClient({ from });
+    expect(await loadSpendEvents(30, NOW)).toEqual([{ kind: "arm_answers" }]);
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.gte).toHaveBeenCalledWith("day", "2026-06-15");
+  });
+
+  it("defaults the window and treats a null payload as empty", async () => {
+    holder.service = client({});
+    expect(await loadSpendEvents()).toEqual([]);
   });
 });
 

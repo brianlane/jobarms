@@ -188,7 +188,8 @@ export async function POST(request: Request) {
             profile as Record<string, unknown>,
             meta.title,
             meta.company,
-            meta.description
+            meta.description,
+            { client: service, userId: user.id }
           );
           const pdf = await renderResumePdf(parsedResumeSchema.parse(result.resume));
           const storagePath = `${user.id}/${randomUUID()}.pdf`;

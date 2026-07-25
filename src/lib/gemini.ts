@@ -28,6 +28,23 @@ interface GenerateArgs {
   config?: Record<string, unknown>;
 }
 
+/**
+ * What a call actually consumed, and which model served it. Returned alongside
+ * the text so the caller can price the call: the fallback model is a different
+ * rate, and the fallback rate itself is a capacity signal worth recording.
+ */
+export interface GenerateUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  usedFallback: boolean;
+}
+
+interface UsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+}
+
 function isTransient(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
   if (status === 429 || status === 500 || status === 503) return true;
@@ -43,7 +60,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * the same policy. Non-transient errors (bad request, auth) throw
  * immediately.
  */
-export async function generateWithRetry(args: GenerateArgs): Promise<string> {
+export async function generateWithUsage(
+  args: GenerateArgs
+): Promise<{ text: string; usage: GenerateUsage }> {
   const ai = geminiClient();
   const models = [GEMINI_TEXT_MODEL, GEMINI_FALLBACK_MODEL];
   const delays = [0, 1500, 4000];
@@ -58,7 +77,16 @@ export async function generateWithRetry(args: GenerateArgs): Promise<string> {
           contents: args.contents,
           config: args.config
         });
-        return response.text ?? "";
+        const meta = (response as { usageMetadata?: UsageMetadata }).usageMetadata;
+        return {
+          text: response.text ?? "",
+          usage: {
+            model,
+            inputTokens: meta?.promptTokenCount ?? 0,
+            outputTokens: meta?.candidatesTokenCount ?? 0,
+            usedFallback: model !== GEMINI_TEXT_MODEL
+          }
+        };
       } catch (err) {
         lastError = err;
         if (!isTransient(err)) throw err;
@@ -66,6 +94,11 @@ export async function generateWithRetry(args: GenerateArgs): Promise<string> {
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/** Text only, for callers that do not price the call. */
+export async function generateWithRetry(args: GenerateArgs): Promise<string> {
+  return (await generateWithUsage(args)).text;
 }
 
 /**
