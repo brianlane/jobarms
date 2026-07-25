@@ -300,6 +300,16 @@ light so it is never ambiguous which one you are looking at.
   policies) before the route answers, and the write is fire-and-forget so
   auditing can never take down the action it observes. The trail renders on
   `/admin/system`.
+- **`/admin/catalog`** is ingestion health: catalog size, jobs added per day,
+  platform mix, per-source freshness, per-board staleness against
+  `companies.last_ingested_at`, and whether applications actually come from
+  Discover or from pasted links (thousands of ingested jobs nobody applies to
+  are a cost, not an asset).
+- **`/admin/engagement`** is activation: active users by day, week, and month,
+  the signup-to-first-submitted-application funnel, weekly signup cohorts, and
+  the engagement segments. Note that "quiet" is ambiguous for this product: the
+  best outcome (they got hired) and the worst (they bounced) both look like an
+  account that stopped signing in.
 - **`/admin/system`** shows configuration as set or unset, never a value, plus
   dependency reachability and when Stripe last wrote a subscription row.
 - **`/admin/users`** is the fleet roster (plan, engagement, quota pressure, run
