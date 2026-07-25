@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchAshby, fetchGreenhouse, fetchLever, fetchWorkable } from "../src/fetchers";
+import {
+  fetchAshby,
+  fetchGreenhouse,
+  fetchLever,
+  fetchWorkable,
+  fetchWorkday
+} from "../src/fetchers";
 
 function jsonOk(body: unknown) {
   return { ok: true, status: 200, json: async () => body, text: async () => "" };
@@ -104,5 +110,68 @@ describe("fetchWorkable", () => {
     expect(job).toMatchObject({ title: "", location: "", description: "" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({})));
     expect(await fetchWorkable("Acme", "acme")).toEqual([]);
+  });
+});
+
+describe("fetchWorkday", () => {
+  it("POSTs the CXS search and builds canonical posting URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        jobPostings: [
+          {
+            title: "Senior Engineer",
+            externalPath: "/US-CA-Santa-Clara/Senior-Engineer_JR123",
+            locationsText: "Santa Clara, CA"
+          },
+          { title: "No path" }
+        ]
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const jobs = await fetchWorkday("Acme", "acme.wd1/Careers");
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      url: "https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/US-CA-Santa-Clara/Senior-Engineer_JR123",
+      ats: "workday",
+      source: "ingest:workday",
+      company: "Acme",
+      title: "Senior Engineer",
+      location: "Santa Clara, CA",
+      // The listing endpoint carries no description; fetchJobMeta fills it in
+      // when a user actually tracks the job.
+      description: ""
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://acme.wd1.myworkdayjobs.com/wday/cxs/acme/Careers/jobs");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toMatchObject({ limit: 20, offset: 0, searchText: "" });
+  });
+
+  it("returns nothing for a board token missing the tenant or site", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await fetchWorkday("Acme", "acme.wd1")).toEqual([]);
+    expect(await fetchWorkday("Acme", "")).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("defaults optional fields and an absent postings array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ jobPostings: [{ externalPath: "/x_JR1" }] }))
+    );
+    const [job] = await fetchWorkday("Acme", "acme.wd1/Careers");
+    expect(job).toMatchObject({ title: "", location: "" });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk({})));
+    expect(await fetchWorkday("Acme", "acme.wd1/Careers")).toEqual([]);
+  });
+
+  it("throws on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+    await expect(fetchWorkday("Acme", "acme.wd1/Careers")).rejects.toThrow(/-> 403/);
   });
 });

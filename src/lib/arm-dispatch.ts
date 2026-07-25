@@ -2,6 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { dispatchRun, type ArmDispatchResult } from "@/lib/arm";
 import { lessonsFromStats } from "@/lib/answer-memory";
 
+/** ATSes the arm can drive, i.e. the members of SUPPORTED_ATS. */
+export type SupportedAts = "greenhouse" | "lever" | "workday";
+
 export interface ResumeRow {
   file_name: string;
   storage_path: string;
@@ -13,13 +16,18 @@ export interface DispatchArgs {
   applicationId: string;
   userId: string;
   jobUrl: string;
-  ats: "greenhouse" | "lever";
+  ats: SupportedAts;
   autonomy: "review_gate" | "full_auto";
   jobTitle: string;
   jobCompany: string;
   jobDescription: string;
   profile: Record<string, unknown>;
   resume: ResumeRow | null;
+  /**
+   * Credentials for the employer's own ATS tenant, for account-gated ATSes only
+   * (Workday). Absent for Greenhouse and Lever, which need no account.
+   */
+  account?: { email: string; password: string } | null;
 }
 
 /**
@@ -90,6 +98,7 @@ export async function buildAndDispatchRun(
       fileName: args.resume?.file_name ?? "resume.pdf",
       mimeType: args.resume?.mime_type ?? "application/pdf"
     },
-    memory
+    memory,
+    ...(args.account ? { account: args.account } : {})
   });
 }

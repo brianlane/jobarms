@@ -4,7 +4,14 @@
  * (conflict key: url). Runs on the half hour; a manual POST /ingest with the
  * cron secret does the same for testing.
  */
-import { fetchAshby, fetchGreenhouse, fetchLever, fetchWorkable, type NormalizedJob } from "./fetchers";
+import {
+  fetchAshby,
+  fetchGreenhouse,
+  fetchLever,
+  fetchWorkable,
+  fetchWorkday,
+  type NormalizedJob
+} from "./fetchers";
 
 export interface Env {
   SUPABASE_URL?: string;
@@ -77,6 +84,9 @@ async function ingestAll(env: Env): Promise<{ companies: number; jobs: number; e
       else if (company.ats === "lever") jobs = await fetchLever(company.name, company.board_token);
       else if (company.ats === "ashby") jobs = await fetchAshby(company.name, company.board_token);
       else if (company.ats === "workable") jobs = await fetchWorkable(company.name, company.board_token);
+      // Workday's board_token carries tenant + cluster + site (`acme.wd1/Careers`)
+      // because a posting URL needs all three.
+      else if (company.ats === "workday") jobs = await fetchWorkday(company.name, company.board_token);
 
       await upsertJobs(env, jobs);
       await markIngested(env, company.id);

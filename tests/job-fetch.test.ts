@@ -118,3 +118,92 @@ describe("fetchJobMeta", () => {
     expect(meta).toMatchObject({ company: "acme", title: "", location: "", description: "" });
   });
 });
+
+describe("fetchJobMeta (Workday)", () => {
+  const JOB_URL =
+    "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Engineer_JR123";
+
+  it("reads jobPostingInfo from the candidate-experience endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        jobPostingInfo: {
+          title: "Senior Engineer",
+          location: "Santa Clara, CA",
+          jobDescription: "<p>Build&nbsp;things &amp; ship</p>"
+        },
+        hiringOrganization: { name: "NVIDIA Corporation" }
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const meta = await fetchJobMeta(JOB_URL);
+
+    expect(meta).toMatchObject({
+      company: "NVIDIA Corporation",
+      title: "Senior Engineer",
+      location: "Santa Clara, CA",
+      description: "Build things & ship",
+      ats: "workday"
+    });
+    // The CXS path is built from the tenant, site, and external path.
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Engineer_JR123"
+    );
+  });
+
+  it("falls back to the tenant slug when no legal entity is reported", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ jobPostingInfo: { title: "Eng" } })
+      })
+    );
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ company: "nvidia", title: "Eng", location: "" });
+  });
+
+  it("falls back to the first additional location", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          jobPostingInfo: { title: "Eng", additionalLocations: ["Remote, US", "Austin"] }
+        })
+      })
+    );
+    expect((await fetchJobMeta(JOB_URL)).location).toBe("Remote, US");
+  });
+
+  it("tolerates a response with no jobPostingInfo at all", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ company: "nvidia", title: "", description: "" });
+  });
+
+  it("returns fallback for a Workday URL that is not a posting", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const meta = await fetchJobMeta("https://nvidia.wd5.myworkdayjobs.com/en-US/Careers");
+    expect(meta).toMatchObject({ title: "", ats: "workday" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns fallback when the endpoint responds non-2xx", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+    expect((await fetchJobMeta(JOB_URL)).title).toBe("");
+  });
+
+  it("caps a pathologically long description", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ jobPostingInfo: { jobDescription: "x".repeat(25_000) } })
+      })
+    );
+    expect((await fetchJobMeta(JOB_URL)).description).toHaveLength(20_000);
+  });
+});
