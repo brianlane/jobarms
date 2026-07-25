@@ -1,9 +1,10 @@
 import { vi } from "vitest";
 
-/** PostgREST-shaped result. */
+/** PostgREST-shaped result. `count` is set by head+count queries. */
 export interface Result {
   data?: unknown;
   error?: unknown;
+  count?: number | null;
 }
 
 /**

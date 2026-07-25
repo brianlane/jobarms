@@ -1,0 +1,182 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fakeClient, fakeFrom, type Result } from "./helpers/supabase";
+
+const holder = vi.hoisted(() => ({ service: null as unknown }));
+vi.mock("@/lib/supabase/service", () => ({
+  createSupabaseServiceClient: vi.fn(() => holder.service)
+}));
+
+import {
+  loadAiUsage,
+  loadApplications,
+  loadCatalogSummary,
+  loadFleetSnapshot,
+  loadProfiles,
+  loadQuotaUsage,
+  loadRecentRuns,
+  loadSubscriptions,
+  windowStartIso
+} from "@/lib/admin/reads";
+
+const NOW = new Date("2026-07-15T12:00:00Z");
+
+function client(tables: Record<string, Result[]>) {
+  return fakeClient({ from: fakeFrom(tables) });
+}
+
+beforeEach(() => {
+  holder.service = null;
+});
+
+describe("windowStartIso", () => {
+  it("walks back whole days", () => {
+    expect(windowStartIso(1, NOW)).toBe("2026-07-14T12:00:00.000Z");
+  });
+});
+
+describe("row reads", () => {
+  it("returns profile rows", async () => {
+    holder.service = client({ profiles: [{ data: [{ id: "u1" }] }] });
+    expect(await loadProfiles()).toEqual([{ id: "u1" }]);
+  });
+
+  it("returns subscription rows", async () => {
+    holder.service = client({ subscriptions: [{ data: [{ user_id: "u1" }] }] });
+    expect(await loadSubscriptions()).toEqual([{ user_id: "u1" }]);
+  });
+
+  it("windows the run read and passes the cutoff", async () => {
+    const from = fakeFrom({ application_runs: [{ data: [{ id: "r1" }] }] });
+    holder.service = fakeClient({ from });
+    expect(await loadRecentRuns(30, NOW)).toEqual([{ id: "r1" }]);
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.gte).toHaveBeenCalledWith("created_at", windowStartIso(30, NOW));
+  });
+
+  it("returns application rows", async () => {
+    holder.service = client({ applications: [{ data: [{ id: "a1" }] }] });
+    expect(await loadApplications()).toEqual([{ id: "a1" }]);
+  });
+
+  it("scopes AI usage to one month key", async () => {
+    const from = fakeFrom({ ai_usage: [{ data: [{ user_id: "u1" }] }] });
+    holder.service = fakeClient({ from });
+    expect(await loadAiUsage("2026-07")).toEqual([{ user_id: "u1" }]);
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.eq).toHaveBeenCalledWith("month_key", "2026-07");
+  });
+
+  it("treats every null payload as empty", async () => {
+    holder.service = client({});
+    expect(await loadProfiles()).toEqual([]);
+    expect(await loadSubscriptions()).toEqual([]);
+    expect(await loadRecentRuns(30, NOW)).toEqual([]);
+    expect(await loadApplications()).toEqual([]);
+    expect(await loadAiUsage("2026-07")).toEqual([]);
+  });
+
+  it("defaults the AI usage month to the current key", async () => {
+    const from = fakeFrom({ ai_usage: [{ data: [] }] });
+    holder.service = fakeClient({ from });
+    await loadAiUsage();
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.eq).toHaveBeenCalledWith("month_key", expect.stringMatching(/^\d{4}-\d{2}$/));
+  });
+
+  it("defaults the run window", async () => {
+    holder.service = client({ application_runs: [{ data: [] }] });
+    expect(await loadRecentRuns()).toEqual([]);
+  });
+});
+
+describe("loadQuotaUsage", () => {
+  const profiles = [
+    { id: "monthly", email: "m@x.com", created_at: "x", onboarding_complete: true, arm_autonomy: "review_gate" },
+    { id: "daily", email: "d@x.com", created_at: "x", onboarding_complete: true, arm_autonomy: "review_gate" },
+    { id: "nothing", email: "n@x.com", created_at: "x", onboarding_complete: true, arm_autonomy: "review_gate" }
+  ];
+  const subscriptions = [
+    {
+      user_id: "daily",
+      plan: "max",
+      status: "active",
+      current_period_end: null,
+      cancel_at_period_end: false
+    }
+  ];
+
+  it("reads each user against their own quota window", async () => {
+    holder.service = client({
+      arm_run_usage: [
+        { data: [{ user_id: "monthly", runs_used: 2 }] },
+        { data: [{ user_id: "daily", runs_used: 40 }] }
+      ]
+    });
+    const usage = await loadQuotaUsage(profiles, subscriptions, NOW);
+    expect(usage.get("monthly")).toBe(2);
+    expect(usage.get("daily")).toBe(40);
+    expect(usage.get("nothing")).toBe(0);
+  });
+
+  it("treats missing meter rows as zero", async () => {
+    holder.service = client({ arm_run_usage: [{ data: null }, { data: null }] });
+    const usage = await loadQuotaUsage(profiles, subscriptions, NOW);
+    expect([...usage.values()]).toEqual([0, 0, 0]);
+  });
+});
+
+describe("loadCatalogSummary", () => {
+  it("counts with head requests and reports the newest job", async () => {
+    holder.service = client({
+      jobs: [{ count: 4200 }, { count: 130 }, { data: [{ created_at: "2026-07-15T11:00:00Z" }] }],
+      companies: [{ count: 10 }]
+    });
+    const catalog = await loadCatalogSummary(NOW);
+    expect(catalog).toEqual({
+      jobs: 4200,
+      jobsAdded24h: 130,
+      companies: 10,
+      byAts: {},
+      newestJobAt: "2026-07-15T11:00:00Z"
+    });
+  });
+
+  it("degrades to zeros on an empty catalog", async () => {
+    holder.service = client({ jobs: [{ count: null }, {}, { data: null }], companies: [{}] });
+    const catalog = await loadCatalogSummary(NOW);
+    expect(catalog.jobs).toBe(0);
+    expect(catalog.jobsAdded24h).toBe(0);
+    expect(catalog.companies).toBe(0);
+    expect(catalog.newestJobAt).toBeNull();
+  });
+});
+
+describe("loadFleetSnapshot", () => {
+  it("composes every read into one snapshot", async () => {
+    holder.service = client({
+      profiles: [{ data: [{ id: "u1", email: "u1@x.com" }] }],
+      subscriptions: [{ data: [{ user_id: "u1", plan: "premium", status: "active" }] }],
+      application_runs: [{ data: [{ id: "r1" }] }],
+      applications: [{ data: [{ id: "a1" }] }],
+      ai_usage: [{ data: [{ user_id: "u1", kind: "resume_parse", used: 1 }] }],
+      jobs: [{ count: 1 }, { count: 1 }, { data: [] }],
+      companies: [{ count: 1 }],
+      arm_run_usage: [{ data: [{ user_id: "u1", runs_used: 5 }] }, { data: [] }]
+    });
+
+    const snapshot = await loadFleetSnapshot(NOW);
+    expect(snapshot.profiles).toHaveLength(1);
+    expect(snapshot.subscriptions).toHaveLength(1);
+    expect(snapshot.runs).toHaveLength(1);
+    expect(snapshot.applications).toHaveLength(1);
+    expect(snapshot.aiUsage).toHaveLength(1);
+    expect(snapshot.catalog.jobs).toBe(1);
+    expect(snapshot.quotaUsage.get("u1")).toBe(5);
+  });
+
+  it("defaults to the current instant", async () => {
+    holder.service = client({ jobs: [{ count: 0 }, { count: 0 }, { data: [] }], companies: [{ count: 0 }] });
+    const snapshot = await loadFleetSnapshot();
+    expect(snapshot.profiles).toEqual([]);
+  });
+});
