@@ -22,20 +22,36 @@ const ALIAS_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 const ALIAS_LENGTH = 10;
 
 /**
+ * A uniformly random index in [0, max) drawn from the CSPRNG.
+ *
+ * Rejection sampling, not modulo: 31 does not divide 256, so `byte % 31` would
+ * make the first nine letters measurably likelier than the rest. Bytes at or
+ * above the largest multiple of `max` are discarded and redrawn, which costs a
+ * few extra bytes and makes the distribution exactly flat.
+ */
+function randomIndex(max: number): number {
+  const limit = Math.floor(256 / max) * max;
+  for (;;) {
+    const byte = randomBytes(1)[0];
+    if (byte < limit) return byte % max;
+  }
+}
+
+/**
  * A fresh candidate alias, e.g. `a-7f3k9d2pqr@jobarms.com`. The `a-` prefix
  * marks it as an applicant mailbox so the inbound worker can tell managed
  * aliases from platform addresses (hello@, team@) at a glance.
  *
- * ~31^10 (about 8e14) possibilities: collisions are vanishingly unlikely, and
- * the DB's unique constraint is the real guarantee anyway.
+ * ~31^10 (about 8e14) possibilities. Aliases are effectively public once we mail
+ * from them, but they must stay UNGUESSABLE: anyone who can predict one could
+ * send mail an arm might act on. The DB's unique index is what prevents
+ * duplicates; the entropy here is what prevents targeting.
  */
 export function generateApplicantAlias(): string {
-  // rejection-free: 31 does not divide 256 evenly, but the modulo bias here is
-  // ~1% per character on a non-secret identifier, which is immaterial. The
-  // unique index, not entropy, is what prevents duplicates.
-  const bytes = randomBytes(ALIAS_LENGTH);
   let local = "a-";
-  for (const byte of bytes) local += ALIAS_ALPHABET[byte % ALIAS_ALPHABET.length];
+  for (let i = 0; i < ALIAS_LENGTH; i++) {
+    local += ALIAS_ALPHABET[randomIndex(ALIAS_ALPHABET.length)];
+  }
   return `${local}@${APPLICANT_EMAIL_DOMAIN}`;
 }
 

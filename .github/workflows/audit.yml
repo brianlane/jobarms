@@ -32,6 +32,7 @@ jobs:
           - { dir: ".", flags: "--omit=dev" }
           - { dir: "workers/apply-arm", flags: "" }
           - { dir: "workers/ingest", flags: "" }
+          - { dir: "workers/email-inbound", flags: "" }
     steps:
       - name: Checkout
         uses: actions/checkout@v7

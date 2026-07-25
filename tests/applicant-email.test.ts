@@ -33,6 +33,24 @@ describe("generateApplicantAlias", () => {
   it("round-trips through the recognizer", () => {
     expect(isApplicantAlias(generateApplicantAlias())).toBe(true);
   });
+
+  it("rejects out-of-range bytes instead of taking a biased modulo", async () => {
+    // 31 letters, so the unbiased ceiling is 248: a byte at or above it must be
+    // discarded and redrawn rather than folded in with %, which would make the
+    // early letters likelier. Feed 255 (rejected) then 0 (accepted, 'a').
+    const bytes = [255, 0, 255, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let i = 0;
+    vi.doMock("node:crypto", () => ({
+      randomBytes: () => Uint8Array.of(bytes[i++] ?? 0)
+    }));
+    vi.resetModules();
+    const { generateApplicantAlias: gen } = await import("@/lib/applicant-email");
+
+    // Both 255s were skipped, so the alias starts at byte 0 -> 'a', then 1 -> 'b'.
+    expect(gen()).toBe("a-abcdefghjk@jobarms.com");
+    vi.doUnmock("node:crypto");
+    vi.resetModules();
+  });
 });
 
 describe("isApplicantAlias", () => {
