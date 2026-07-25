@@ -155,6 +155,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
         await step.do("fill for review", async () => {
           const result = await fillForm(env, {
             userId: params.userId,
+            runId: params.runId,
             jobUrl: params.jobUrl,
             ats: params.ats,
             answers,
@@ -214,6 +215,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           await updateRun(env, params.runId, { status: "submitting" });
           const result = await fillForm(env, {
             userId: params.userId,
+            runId: params.runId,
             jobUrl: params.jobUrl,
             ats: params.ats,
             answers: approvedAnswers,

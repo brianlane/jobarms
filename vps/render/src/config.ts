@@ -44,5 +44,21 @@ export const CONFIG = {
   rateWindowMs: num("RENDER_RATE_WINDOW_MS", 60_000),
   rateMax: num("RENDER_RATE_MAX", 60),
   /** Cap on wizard pages walked in one request, so a loop can never spin. */
-  maxWizardPages: num("RENDER_MAX_WIZARD_PAGES", 12)
+  maxWizardPages: num("RENDER_MAX_WIZARD_PAGES", 12),
+  /**
+   * Where to ask which captcha grid cells to click (the apply-arm worker's
+   * solve endpoint). A FIXED endpoint from config, never a URL from a request,
+   * so it adds no SSRF surface. Unset means "do not attempt to solve", and a
+   * visible challenge simply reports captcha_blocked.
+   */
+  solverUrl: str("RENDER_SOLVER_URL", ""),
+  /**
+   * Bearer for that endpoint. Deliberately NOT the app-to-worker shared secret:
+   * this box should only be able to ask for tile picks, never to start or cancel
+   * runs, so a compromise here does not become control of the arm.
+   */
+  solverToken: str("RENDER_SOLVER_TOKEN", ""),
+  solverTimeoutMs: num("RENDER_SOLVER_TIMEOUT_MS", 30_000),
+  /** Wall-clock budget for clearing one challenge before giving up honestly. */
+  challengeBudgetMs: num("RENDER_CHALLENGE_BUDGET_MS", 90_000)
 } as const;

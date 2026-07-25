@@ -18,6 +18,12 @@ export interface Env {
    */
   RENDER_URL?: string;
   RENDER_TOKEN?: string;
+  /**
+   * Bearer the sidecar uses to call POST /internal/solve-captcha. Separate from
+   * ARM_WORKER_SHARED_SECRET on purpose: the box should be able to ask for
+   * captcha tile picks and nothing else.
+   */
+  SOLVER_SHARED_SECRET?: string;
 }
 
 /** ATSes the arm can drive. */

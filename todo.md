@@ -236,12 +236,15 @@ Phase B - `vps/render` sidecar (the controllable browser):
       WITH a screenshot, the worker asks Gemini what to try, and calls back with
       that strategy, so AI credentials stay on the edge
 - [ ] Residential/mobile proxy per run, once a hard invisible block is observed
-- [ ] **Re-home the interactive-captcha solver.** It was deleted with the old
-      browser: solving needs to click the live page (now the sidecar's) and the
-      sidecar deliberately holds no AI key. The sidecar DETECTS a challenge so
-      `captcha_blocked` stays an honest outcome, but nothing tries to solve one
-      right now. Owning the fingerprint (above) matters more for the invisible
-      checks that actually block us.
+- [x] **Re-homed the interactive-captcha solver.** Solving needs the live page
+      (the sidecar's) and a vision model (the worker's), so the sidecar ships the
+      grid to `POST /internal/solve-captcha` and clicks what comes back. That
+      endpoint has its OWN bearer, so a compromised box can ask for tile picks
+      and nothing else. Bounded by a 90s budget; unsolved stays `captcha_blocked`,
+      and leaving `RENDER_SOLVER_URL` unset disables solving entirely.
+- [ ] **Manual**: generate `SOLVER_SHARED_SECRET`, put it on the apply-arm worker,
+      and pass it to the sidecar deploy as `RENDER_SOLVER_TOKEN` along with
+      `RENDER_SOLVER_URL=https://arm.jobarms.com/internal/solve-captcha`
 
 Phase C - account vault + verification loop:
 
