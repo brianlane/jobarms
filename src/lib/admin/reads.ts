@@ -24,6 +24,7 @@ import {
   type CatalogSummary
 } from "@/lib/admin/overview";
 import type { AdminRunRow } from "@/lib/admin/run-stats";
+import type { FieldStatRow, PlaybookRow } from "@/lib/admin/ats-health";
 
 /** Row caps. Generous next to current scale, small enough to stay one page. */
 export const USER_ROW_CAP = 5000;
@@ -158,6 +159,63 @@ export async function loadCatalogSummary(now: Date = new Date()): Promise<Catalo
     byAts: {},
     newestJobAt: newestRows[0]?.created_at ?? null
   };
+}
+
+/**
+ * Runs with their step log and the job they were applying to. Separate from
+ * `loadRecentRuns` because the steps array and the nested job are only worth
+ * carrying on the pages that read them (the run console and ATS health), not on
+ * every overview render.
+ */
+export interface AdminRunWithJob extends AdminRunRow {
+  steps: unknown;
+  tenant_host?: string | null;
+  applications: {
+    id: string;
+    status: string;
+    jobs: { company: string; title: string; ats: string; url: string } | null;
+  } | null;
+}
+
+export async function loadRunsWithJobs(
+  days = RUN_WINDOW_DAYS,
+  now: Date = new Date()
+): Promise<AdminRunWithJob[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("application_runs")
+    .select(
+      `${RUN_COLUMNS}, steps, tenant_host, applications(id, status, jobs(company, title, ats, url))`
+    )
+    .gte("created_at", windowStartIso(days, now))
+    .order("created_at", { ascending: false })
+    .limit(RUN_ROW_CAP);
+  return (data ?? []) as unknown as AdminRunWithJob[];
+}
+
+export const PLAYBOOK_ROW_CAP = 500;
+export const FIELD_STAT_ROW_CAP = 500;
+
+export async function loadPlaybooks(): Promise<PlaybookRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("arm_playbooks")
+    .select("domain, ats, strategy, success_count, failure_count, last_success_at, updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(PLAYBOOK_ROW_CAP);
+  return (data ?? []) as PlaybookRow[];
+}
+
+export async function loadFieldStats(): Promise<FieldStatRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("platform_field_stats")
+    .select(
+      "ats, question_key, label_example, field_type, times_seen, times_skipped, times_edited, option_counts, updated_at"
+    )
+    .order("times_seen", { ascending: false })
+    .limit(FIELD_STAT_ROW_CAP);
+  return (data ?? []) as FieldStatRow[];
 }
 
 /** Pagination bounds for the auth-directory scan, far above current scale. */

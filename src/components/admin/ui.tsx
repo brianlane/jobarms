@@ -192,6 +192,18 @@ export function Table({
   );
 }
 
+/**
+ * Badge tone for an arm-run status. Submitted is the only outcome that means the
+ * application actually landed; needs_review is waiting on a human rather than
+ * broken, so it reads warm instead of red.
+ */
+export function runStatusTone(status: string): BadgeTone {
+  if (status === "submitted") return "good";
+  if (status === "failed") return "bad";
+  if (status === "needs_review") return "warn";
+  return "neutral";
+}
+
 /** A user reference that goes to their admin detail page. */
 export function UserLink({ id, email }: { id: string; email: string }) {
   return (

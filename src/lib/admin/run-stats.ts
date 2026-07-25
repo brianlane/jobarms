@@ -195,6 +195,146 @@ export function summarizeRuns(runs: AdminRunRow[], now: Date = new Date()): RunS
   };
 }
 
+// ─── funnel ─────────────────────────────────────────────────────────────────
+
+/**
+ * The step names the workflow logs, in order (workers/apply-arm/src/workflow.ts).
+ * These are what the funnel measures, rather than run STATUS, because status
+ * only tells you where a run is now: the step log tells you how far it got
+ * before it died.
+ */
+export const FUNNEL_STEPS = [
+  { step: "navigate", label: "Reached the page" },
+  { step: "form_extracted", label: "Found the form" },
+  { step: "answers_generated", label: "Drafted answers" },
+  { step: "review_requested", label: "Parked for review" },
+  { step: "approved", label: "Approved" },
+  { step: "submitted", label: "Submitted" }
+] as const;
+
+export interface RunStep {
+  at?: string;
+  step?: string;
+  detail?: string;
+}
+
+export function runSteps(steps: unknown): RunStep[] {
+  return Array.isArray(steps) ? (steps as RunStep[]) : [];
+}
+
+export interface FunnelStage {
+  step: string;
+  label: string;
+  reached: number;
+  /** Share of runs that reached this stage, as a percentage of all runs. */
+  reachedPct: number;
+  /** Runs that reached the PREVIOUS stage and stopped before this one. */
+  droppedHere: number;
+}
+
+/**
+ * How far runs get. Full-auto runs never log `review_requested` or `approved`,
+ * so those two stages count only the review-gate runs that could reach them,
+ * which keeps a full-auto fleet from reading as a 100% review drop-off.
+ */
+export function runFunnel(runs: { steps?: unknown; autonomy?: string }[]): FunnelStage[] {
+  const total = runs.length;
+  const reviewGateTotal = runs.filter((run) => run.autonomy !== "full_auto").length;
+
+  const stages: FunnelStage[] = [];
+  let previousReached = total;
+
+  for (const stage of FUNNEL_STEPS) {
+    const gateOnly = stage.step === "review_requested" || stage.step === "approved";
+    const population = gateOnly ? reviewGateTotal : total;
+    const eligible = gateOnly
+      ? runs.filter((run) => run.autonomy !== "full_auto")
+      : runs;
+    const reached = eligible.filter((run) =>
+      runSteps(run.steps).some((entry) => entry.step === stage.step)
+    ).length;
+
+    stages.push({
+      step: stage.step,
+      label: stage.label,
+      reached,
+      reachedPct: population > 0 ? Math.round((reached / population) * 100) : 0,
+      droppedHere: Math.max(previousReached - reached, 0)
+    });
+    previousReached = reached;
+  }
+
+  return stages;
+}
+
+// ─── durations ──────────────────────────────────────────────────────────────
+
+export interface PhaseDuration {
+  label: string;
+  /** Median seconds between the two steps, across runs that logged both. */
+  medianSeconds: number | null;
+  p95Seconds: number | null;
+  samples: number;
+}
+
+const PHASES: { label: string; from: string; to: string }[] = [
+  { label: "Navigate to form found", from: "navigate", to: "form_extracted" },
+  { label: "Form to drafted answers", from: "form_extracted", to: "answers_generated" },
+  { label: "Answers to review gate", from: "answers_generated", to: "review_requested" },
+  { label: "Review gate to approval", from: "review_requested", to: "approved" },
+  { label: "Approval to submitted", from: "approved", to: "submitted" }
+];
+
+function percentile(sorted: number[], fraction: number): number {
+  const index = Math.min(sorted.length - 1, Math.floor(fraction * sorted.length));
+  return sorted[index];
+}
+
+function stepTime(steps: RunStep[], name: string): number | null {
+  for (const entry of steps) {
+    if (entry.step !== name || !entry.at) continue;
+    const at = Date.parse(entry.at);
+    if (Number.isFinite(at)) return at;
+  }
+  return null;
+}
+
+/**
+ * Wall-clock time per workflow phase. "Review gate to approval" is dominated by
+ * how long the human took, which is the point: it is the phase an operator can
+ * actually act on (a nudge), and the rest is machine time.
+ */
+export function phaseDurations(runs: { steps?: unknown }[]): PhaseDuration[] {
+  return PHASES.map((phase) => {
+    const samples: number[] = [];
+    for (const run of runs) {
+      const steps = runSteps(run.steps);
+      const from = stepTime(steps, phase.from);
+      const to = stepTime(steps, phase.to);
+      if (from === null || to === null || to < from) continue;
+      samples.push((to - from) / 1000);
+    }
+    if (samples.length === 0) {
+      return { label: phase.label, medianSeconds: null, p95Seconds: null, samples: 0 };
+    }
+    samples.sort((a, b) => a - b);
+    return {
+      label: phase.label,
+      medianSeconds: Math.round(percentile(samples, 0.5)),
+      p95Seconds: Math.round(percentile(samples, 0.95)),
+      samples: samples.length
+    };
+  });
+}
+
+/** Compact duration: seconds under a minute, then minutes, then hours. */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "-";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 360) / 10}h`;
+}
+
 /**
  * Runs the operator should look at right now: a review gate that has been
  * parked long enough to be heading for its 7-day timeout, or an active run
