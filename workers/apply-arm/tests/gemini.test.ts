@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { diagnosePage, generateAnswers, parseTileResponse, solveImageGrid } from "../src/gemini";
+import { diagnosePage, generateAnswers } from "../src/gemini";
 import type { Env, FormField, RunParams } from "../src/types";
 
 const env = { GEMINI_API_KEY: "k" } as Env;
@@ -11,16 +11,6 @@ function geminiText(text: string) {
 
 beforeEach(() => vi.restoreAllMocks());
 afterEach(() => vi.unstubAllGlobals());
-
-describe("parseTileResponse", () => {
-  it("accepts a {tiles:[...]} object, dedups, drops out-of-range/non-numeric, sorts", () => {
-    expect(parseTileResponse({ tiles: [3, 0, 0, "1", 9, -1, "x"] }, 4)).toEqual([0, 1, 3]);
-  });
-  it("accepts a bare array and defaults to empty otherwise", () => {
-    expect(parseTileResponse([2, 1], 4)).toEqual([1, 2]);
-    expect(parseTileResponse("nope", 4)).toEqual([]);
-  });
-});
 
 describe("generateAnswers", () => {
   const params = {
@@ -101,9 +91,3 @@ describe("diagnosePage", () => {
   });
 });
 
-describe("solveImageGrid", () => {
-  it("returns validated tile indices", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(geminiText(JSON.stringify({ tiles: [0, 8, 3] }))));
-    expect(await solveImageGrid(env, new Uint8Array([1]), "crosswalks", 3, 3)).toEqual([0, 3, 8]);
-  });
-});

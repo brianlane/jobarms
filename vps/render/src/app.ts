@@ -38,6 +38,7 @@ import { filterApplicationFields } from "./field-filter.js";
 import { attachResume, fillAnswers } from "./fill.js";
 import { collectFields } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
+import { detectChallenge } from "./captcha.js";
 import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
@@ -289,8 +290,14 @@ export function createApp(deps: AppDeps = {}): Express {
       return void res.json(result);
     } catch (err) {
       if (err instanceof FormNotFoundError) {
-        // Deterministic: retrying burns a browser slot for nothing.
-        return void appError(res, "form_not_found", err.message);
+        // Not retryable as-is, but the caller can look at the screenshot, pick a
+        // recovery strategy with its vision model, and call back with it as the
+        // `playbook`. So the shot and the reason both ride along.
+        return void res.status(200).json({
+          error: "form_not_found",
+          detail: err.reason.slice(0, 400),
+          ...(err.screenshot ? { screenshotBase64: err.screenshot.toString("base64") } : {})
+        });
       }
       return void appError(res, "render_failed", String(err));
     }
@@ -360,11 +367,16 @@ export function createApp(deps: AppDeps = {}): Express {
           await page.waitForTimeout(2500);
 
           const confirmed = await adapter.confirmSubmitted(page).catch(() => false);
-          return {
-            outcome: (confirmed ? "submitted" : "unconfirmed") as SubmitOutcome,
-            pages,
-            screenshotBase64: await shot(page)
-          };
+          // No confirmation AND a challenge on screen is a specific, honest
+          // outcome rather than an ambiguous one: the application was filled but
+          // an anti-bot check stopped the send, so the user should finish on the
+          // employer's site. Metering treats it as work done.
+          const outcome: SubmitOutcome = confirmed
+            ? "submitted"
+            : (await detectChallenge(page))
+              ? "captcha_blocked"
+              : "unconfirmed";
+          return { outcome, pages, screenshotBase64: await shot(page) };
         })
       );
       return void res.json(result);

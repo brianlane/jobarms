@@ -2,8 +2,7 @@
 // @cloudflare/workers-types; `WorkflowEntrypoint` is imported from
 // "cloudflare:workers" where it's used.
 export interface Env {
-  // Bindings (require Workers Paid - configured in wrangler.jsonc Phase 3)
-  BROWSER?: Fetcher;
+  // Bindings
   APPLY_RUN?: Workflow;
 
   // Secrets (wrangler secret put)
@@ -12,7 +11,17 @@ export interface Env {
   SUPABASE_SECRET_KEY?: string;
   GEMINI_API_KEY?: string;
   GEMINI_TEXT_MODEL?: string;
+  /**
+   * The render sidecar (vps/render), which owns the browser. There is no
+   * Browser Rendering binding: it could not hold a session across phases, which
+   * is what account-gated and multi-page ATSes require.
+   */
+  RENDER_URL?: string;
+  RENDER_TOKEN?: string;
 }
+
+/** ATSes the arm can drive. */
+export type Ats = "greenhouse" | "lever" | "workday";
 
 /** Everything a run needs, snapshotted at dispatch time by the app. */
 export interface RunParams {
@@ -20,7 +29,7 @@ export interface RunParams {
   applicationId: string;
   userId: string;
   jobUrl: string;
-  ats: "greenhouse" | "lever";
+  ats: Ats;
   autonomy: "review_gate" | "full_auto";
   jobTitle: string;
   jobCompany: string;
@@ -36,6 +45,12 @@ export interface RunParams {
     answers: Array<{ label: string; answer: string; source: string }>;
     lessons: string[];
   };
+  /**
+   * Credentials for the employer's own ATS tenant, present only for
+   * account-gated ATSes (Workday). Forwarded to the sidecar, never persisted
+   * here: the app's `site_accounts` vault is the system of record.
+   */
+  account?: { email: string; password: string };
 }
 
 export interface FormField {
@@ -51,4 +66,10 @@ export interface Answer {
   label: string;
   value: string;       // for checkbox: "true"/"false"; for select/radio: the option text
   skipped?: boolean;   // arm couldn't answer (left for review)
+}
+
+/** A recovery strategy for reaching a form, recorded per domain as a playbook. */
+export interface RecoveryStrategy {
+  action: "click" | "iframe" | "scroll";
+  click_text?: string;
 }

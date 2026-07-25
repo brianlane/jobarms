@@ -10,9 +10,6 @@
     "deploy": "wrangler deploy",
     "test": "vitest run --coverage"
   },
-  "dependencies": {
-    "@cloudflare/playwright": "^1.3.0"
-  },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.0",
     "@types/node": "^26.1.1",

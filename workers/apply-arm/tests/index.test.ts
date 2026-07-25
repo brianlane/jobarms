@@ -16,7 +16,9 @@ function makeEnv(over: Partial<Env> = {}): Env {
       create: vi.fn(async () => ({ id: "inst-1" })),
       get: vi.fn(async () => ({ sendEvent: vi.fn(async () => {}), terminate: vi.fn(async () => {}) }))
     },
-    BROWSER: {},
+    // Arms need the orchestrator AND a reachable browser sidecar.
+    RENDER_URL: "https://browser.jobarms.com",
+    RENDER_TOKEN: "render-token",
     SUPABASE_URL: "https://db",
     SUPABASE_SECRET_KEY: "svc",
     ...over
@@ -87,6 +89,23 @@ describe("apply-arm HTTP surface", () => {
     );
     expect(res.status).toBe(200);
     expect(sendEvent).toHaveBeenCalledWith({ type: "approval", payload: { answers: [] } });
+  });
+
+  it("POST /runs/:id/account-verified releases a run parked on its account email", async () => {
+    const sendEvent = vi.fn(async () => {});
+    const env = makeEnv();
+    (env.APPLY_RUN!.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      sendEvent,
+      terminate: vi.fn()
+    });
+
+    const res = await worker.fetch(
+      req(`/runs/${RUN_ID}/account-verified`, { method: "POST", headers: auth }),
+      env
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendEvent).toHaveBeenCalledWith({ type: "account-verified", payload: {} });
   });
 
   it("POST /runs/:id/cancel terminates and marks canceled", async () => {

@@ -16,11 +16,23 @@ import { collectFields } from "./extract.js";
 import { looksLikeApplicationForm } from "./form-sanity.js";
 import type { Ats, FormField, Recovery, RecoveryStrategy } from "./types.js";
 
-/** Terminal: no application form is reachable here. Not worth retrying. */
+/**
+ * No application form is reachable at the scope we tried.
+ *
+ * Carries a screenshot because the caller owns the vision model: it looks at this
+ * shot, decides what stands between us and the form (click Apply, enter an embed,
+ * scroll), and calls back with that strategy. So this is only terminal once the
+ * caller has spent its vision budget.
+ */
 export class FormNotFoundError extends Error {
-  constructor(reason: string) {
+  readonly screenshot: Buffer | null;
+  readonly reason: string;
+
+  constructor(reason: string, screenshot: Buffer | null = null) {
     super(`form_not_found: ${reason}`);
     this.name = "FormNotFoundError";
+    this.reason = reason;
+    this.screenshot = screenshot;
   }
 }
 
@@ -235,6 +247,8 @@ export async function reachForm(
       playbookFailed
     };
   }
-  // Extract: fail early and honestly instead of parking a junk review.
-  throw new FormNotFoundError(lastReason);
+  // Extract: fail early and honestly instead of parking a junk review. The
+  // screenshot rides along so the caller's vision model can decide what to try.
+  const shot = await page.screenshot({ fullPage: false }).catch(() => null);
+  throw new FormNotFoundError(lastReason, shot);
 }

@@ -226,13 +226,27 @@ describe("POST /extract", () => {
     expect(res.body.screenshotBase64).toBeTruthy();
   });
 
-  it("reports form_not_found as a permanent, non-retryable error", async () => {
+  it("reports form_not_found with a screenshot so the caller can run vision", async () => {
     const { app } = appWith(fakePage({ url: JOB_URL, eval$$: () => [] }));
     const res = await auth(
       request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
     );
     expect(res.status).toBe(200);
     expect(res.body.error).toBe("form_not_found");
+    expect(res.body.detail).toContain("no fields extracted");
+    // The caller owns the vision model, so it needs the picture.
+    expect(res.body.screenshotBase64).toBe(Buffer.from([1]).toString("base64"));
+  });
+
+  it("omits the screenshot when the page could not be captured", async () => {
+    const { app } = appWith(
+      fakePage({ url: JOB_URL, eval$$: () => [], screenshotThrows: true })
+    );
+    const res = await auth(
+      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
+    );
+    expect(res.body.error).toBe("form_not_found");
+    expect(res.body.screenshotBase64).toBeUndefined();
   });
 
   it("passes a stored playbook through and reports whether it still works", async () => {
@@ -384,6 +398,34 @@ describe("POST /fill", () => {
         .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
     );
     expect(res.body.outcome).toBe("submitted");
+  });
+
+  it("reports captcha_blocked when a challenge is on screen and nothing confirmed", async () => {
+    const missing = loc({
+      waitFor: vi.fn(async () => {
+        throw new Error("timeout");
+      })
+    });
+    const page = fakePage({
+      url: JOB_URL,
+      eval$$: () => goodFields(),
+      locators: {
+        "text=/": missing,
+        // The anti-bot widget the employer put in front of the submit.
+        'iframe[src*="recaptcha/api2/anchor"]': loc({ count: vi.fn(async () => 1) })
+      }
+    });
+    const { app } = appWith(page);
+
+    const res = await auth(
+      request(app)
+        .post("/fill")
+        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
+    );
+
+    // A specific, honest outcome: the application was filled, an anti-bot check
+    // stopped the send, and metering treats that as work done.
+    expect(res.body.outcome).toBe("captcha_blocked");
   });
 
   it("reports unconfirmed rather than claiming success", async () => {

@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: {
-      // The virtual Cloudflare modules + the Playwright package can't load
-      // under node; point them at test stubs (tests mock behavior per-case).
+      // The virtual Cloudflare modules can't load under node; point them at test
+      // stubs (tests mock behavior per-case). No Playwright stub any more: the
+      // browser lives in the sidecar, and this worker only speaks HTTP to it.
       "cloudflare:workers": fileURLToPath(new URL("./tests/stubs/cloudflare-workers.ts", import.meta.url)),
-      "cloudflare:workflows": fileURLToPath(new URL("./tests/stubs/cloudflare-workflows.ts", import.meta.url)),
-      "@cloudflare/playwright": fileURLToPath(new URL("./tests/stubs/playwright.ts", import.meta.url))
+      "cloudflare:workflows": fileURLToPath(new URL("./tests/stubs/cloudflare-workflows.ts", import.meta.url))
     }
   },
   test: {
