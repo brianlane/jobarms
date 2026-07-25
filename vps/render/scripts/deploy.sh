@@ -25,6 +25,12 @@ if [ -z "${RENDER_TOKEN:-}" ]; then
   echo "error: RENDER_TOKEN must be set (generate: openssl rand -hex 32)" >&2
   exit 1
 fi
+# Resource caps. Overridable because the first home for this service is a box
+# SHARED with other production workloads, where the defaults are too generous.
+RENDER_MAX_SESSIONS="${RENDER_MAX_SESSIONS:-8}"
+RENDER_MAX_CONCURRENCY="${RENDER_MAX_CONCURRENCY:-2}"
+RENDER_MEMORY_MAX="${RENDER_MEMORY_MAX:-2G}"
+
 # Optional: the captcha solve callback. Unset simply disables solving.
 RENDER_SOLVER_URL="${RENDER_SOLVER_URL:-}"
 RENDER_SOLVER_TOKEN="${RENDER_SOLVER_TOKEN:-}"
@@ -38,16 +44,24 @@ STATE_DIR=/var/lib/jobarms-render/state
 PORT="${RENDER_PORT:-8085}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Optional explicit identity. Without it we rely on whatever the agent offers,
+# which is fine interactively but not when the key is fetched just-in-time.
+SSH_OPTS=()
+if [ -n "${SSH_KEY:-}" ]; then
+  SSH_OPTS=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+fi
+ssh_run() { ssh "${SSH_OPTS[@]}" "$@"; }
+
 echo "==> syncing source to $TARGET:$APP_DIR"
-ssh "$TARGET" "mkdir -p $APP_DIR $STATE_DIR"
+ssh_run "$TARGET" "mkdir -p $APP_DIR $STATE_DIR"
 # Source only: node_modules and build output are produced on the box.
-rsync -az --delete \
+rsync -az --delete -e "ssh ${SSH_KEY:+-i $SSH_KEY -o IdentitiesOnly=yes}" \
   --exclude node_modules --exclude dist --exclude coverage --exclude cov \
   "$HERE/src" "$HERE/package.json" "$HERE/package-lock.json" "$HERE/tsconfig.json" \
   "$TARGET:$APP_DIR/"
 
 echo "==> installing runtime prerequisites"
-ssh "$TARGET" bash -s <<'REMOTE'
+ssh_run "$TARGET" bash -s <<'REMOTE'
 set -euo pipefail
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -c2- | cut -d. -f1)" -lt 22 ]; then
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
@@ -56,7 +70,7 @@ fi
 REMOTE
 
 echo "==> building and installing Chromium"
-ssh "$TARGET" bash -s <<REMOTE
+ssh_run "$TARGET" bash -s <<REMOTE
 set -euo pipefail
 cd $APP_DIR
 npm ci --omit=dev --ignore-scripts
@@ -71,7 +85,7 @@ npx --yes playwright@\$(node -p "require('$APP_DIR/package.json').dependencies.p
 REMOTE
 
 echo "==> writing systemd unit"
-ssh "$TARGET" bash -s <<REMOTE
+ssh_run "$TARGET" bash -s <<REMOTE
 set -euo pipefail
 cat >/etc/systemd/system/jobarms-render.service <<UNIT
 [Unit]
@@ -87,8 +101,8 @@ Environment=RENDER_TOKEN=$RENDER_TOKEN
 Environment=RENDER_STATE_DIR=$STATE_DIR
 # Deliberately small: each session is a real Chromium context, and this box is
 # shared. Raise only after moving to dedicated hardware.
-Environment=RENDER_MAX_SESSIONS=8
-Environment=RENDER_MAX_CONCURRENCY=2
+Environment=RENDER_MAX_SESSIONS=$RENDER_MAX_SESSIONS
+Environment=RENDER_MAX_CONCURRENCY=$RENDER_MAX_CONCURRENCY
 # Captcha solving: the box has no AI key, so it asks the worker which grid cells
 # to click. Leave these unset to disable solving entirely (a visible challenge
 # then just reports captcha_blocked).
@@ -98,7 +112,7 @@ ExecStart=/usr/bin/node $APP_DIR/dist/index.js
 Restart=always
 RestartSec=5
 # Chromium is memory-hungry; cap it so a runaway page cannot take the box down.
-MemoryMax=2G
+MemoryMax=$RENDER_MEMORY_MAX
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -115,7 +129,7 @@ systemctl is-active jobarms-render
 REMOTE
 
 echo "==> health check"
-ssh "$TARGET" "curl -fsS http://127.0.0.1:$PORT/health"
+ssh_run "$TARGET" "curl -fsS http://127.0.0.1:$PORT/health"
 echo
 echo "Deployed. Remaining manual step: point a Cloudflare Tunnel hostname"
 echo "(browser.jobarms.com) at http://127.0.0.1:$PORT on this box, then set"
