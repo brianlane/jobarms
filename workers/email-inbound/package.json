@@ -1,0 +1,26 @@
+{
+  "name": "jobarms-email-inbound",
+  "version": "0.1.0",
+  "description": "JobArms inbound email worker - Email Routing catch-all that posts managed applicant mail to the app webhook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.113.0"
+  },
+  "overrides": {
+    "sharp": "^0.35.3"
+  }
+}

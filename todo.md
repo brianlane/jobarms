@@ -19,10 +19,10 @@ Manual account setup (done unless unchecked):
 - [x] Vercel project + token
 - [x] Cloudflare zone `jobarms.com` (existing account)
 - [x] Local `.env` populated (gitignored)
-- [ ] Cloudflare **Workers Paid** upgrade ($5/mo, dashboard → Workers & Pages
-      → Plans). Everything is deployed and working on the free allowance;
-      the binding limit that matters is Browser Rendering (~10 browser-
-      minutes/day = roughly 3-5 arm runs). Upgrade before real usage.
+- [ ] ~~Cloudflare **Workers Paid** upgrade~~ - DROPPED as a launch item. Its
+      only driver was Browser Rendering minutes (~10/day), and the sidecar
+      (see "ATS-agnostic expansion") replaces Browser Rendering entirely.
+      Revisit when run volume nears 3,000 workflow steps/day.
 - [x] `CLOUDFLARE_API_TOKEN` for CI worker deploys: the `jobarms-ci` token
       (scoped: Workers Scripts + jobarms.com zone Workers Routes / DNS /
       Email Routing / Zone Settings) is in .env + GitHub secrets; CI
@@ -161,6 +161,83 @@ The README pricing table is fully enforced in code:
       20260723220000_run_refunds.sql); worker refunds system failures only
 - [x] Pricing page + PLAN_COPY for three tiers
 - [x] Run retry endpoint + run console + retry-application.ts debug mirror
+
+## Captcha Layer 3 - trustworthy IP + fingerprint (infrastructure)
+
+The real ceiling for invisible reCAPTCHA v3/Enterprise. It is NOT a vision
+problem (no puzzle to see); Google scores the session by IP reputation and
+browser fingerprint. Cloudflare Browser Rendering runs from datacenter IPs
+that score as bot-like, so hard Enterprise sites will block even a perfectly
+filled application. Layers 1 (behavioral realism) and 2 (Gemini-vision solver
+for interactive image challenges) do NOT address this. No third-party solver.
+
+- [ ] Move the arm's browser off Cloudflare Browser Rendering to a
+      controllable browser (VPS / browser-farm) where we own the fingerprint
+      and can attach a residential/mobile proxy per run
+- [ ] Residential/mobile proxy integration (per-run rotating egress IP so the
+      reCAPTCHA session scores as a real user)
+- [ ] Realistic, stable browser fingerprint (real Chromium profile, not
+      headless-flagged) + stealth hardening
+- [ ] Fall back to this browser only when Layers 1-2 detect a hard invisible
+      block, to keep cost/latency low on the common path
+- [ ] Re-run the live submit test on the Enterprise sites that blocked under
+      Layers 1-2; measure the pass-rate lift
+
+## ATS-agnostic expansion (sidecar browser + managed email + Workday)
+
+The wedge is no longer "which ATS did we hand-code" but "can the arm hold a
+session". Login-gated sites (Workday runs a separate tenant, and a separate
+candidate ACCOUNT, per employer) need a browser that keeps cookies across a
+multi-page wizard and a mailbox that can receive the verification mail.
+
+Phase A - managed applicant email:
+
+- [x] `profiles.applicant_alias` + atomic `claim_applicant_alias` RPC +
+      `inbound_emails` log (migration 20260724020000_applicant_email.sql)
+- [x] `workers/email-inbound`: Email Routing catch-all -> app webhook for
+      managed aliases, plain forward for everything else (explicit hello@ rules
+      still take precedence)
+- [x] `POST /api/email/inbound`: bearer-auth, Message-ID dedupe, ATS-sender-gated
+      verification link/code extraction
+- [x] Auto-forward every alias message to the user's real inbox via Resend
+      (From the alias, Reply-To the original sender)
+- [x] Settings surfaces the managed address read-only (never something to manage)
+- [ ] **Manual**: `wrangler secret put EMAIL_INBOUND_SECRET` on email-inbound,
+      add `EMAIL_INBOUND_SECRET` to Vercel env, then flip Email Routing
+      catch-all to "Send to a Worker" -> jobarms-email-inbound
+
+Phase B - `vps/render` sidecar (the controllable browser):
+
+- [ ] Express + Playwright service, bearer auth, SSRF guard, rate limit,
+      HTTP-200 structured errors (a Tunnel replaces origin 5xx bodies)
+- [ ] Persistent per-user-per-tenant contexts with `storageState` on disk so a
+      logged-in session survives restarts and the review gate
+- [ ] Host on newCoworker's internal KVM1 to start (bind 127.0.0.1, its OWN
+      tunnel hostname + bearer, ~2 contexts); dedicated box when volume needs it
+- [ ] Migrate browser.ts (reachForm, playbooks, vision recovery, combobox and
+      checkbox filling) into the sidecar and point ALL browser steps at it
+- [ ] Retire the Browser Rendering binding; the apply-arm Worker keeps only its
+      durable-orchestration role (review gate, verification wait, retries)
+
+Phase C - account vault + verification loop:
+
+- [ ] `site_accounts` (service-only, deny-all RLS): per user + tenant host,
+      alias email, encrypted generated password, status
+- [ ] Workflow `waitForEvent("email-verified")` fed by the inbound route, which
+      hands the link/code to the sidecar to finish in the held session
+
+Phase D - Workday:
+
+- [ ] Detect `*.myworkdayjobs.com` / `wdN` hosts; job metadata via the public
+      `cxs` endpoint
+- [ ] Multi-page wizard support: per-page extract/answer/fill loop accumulating
+      one review payload; submit replays it in the held session
+- [ ] Live review-gated smoke on a real posting, end to end through verification
+
+Note: the Workers Paid upgrade is no longer a launch blocker (it only ever
+bought Browser Rendering minutes). Workflows on the free plan covers us since
+WAITING instances do not count toward concurrency; the real ceiling becomes
+3,000 workflow steps/day, roughly 300-400 arm runs/day.
 
 ## Later / parked
 

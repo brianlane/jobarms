@@ -154,7 +154,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        worker: [apply-arm, ingest]
+        worker: [apply-arm, ingest, email-inbound]
     defaults:
       run:
         working-directory: workers/${{ matrix.worker }}
@@ -319,7 +319,7 @@ jobs:
     needs: [vercel-deploy]
     strategy:
       matrix:
-        worker: [apply-arm, ingest]
+        worker: [apply-arm, ingest, email-inbound]
     defaults:
       run:
         working-directory: workers/${{ matrix.worker }}

@@ -12,6 +12,7 @@ This repository includes:
 - Cloudflare Workers automation edge (`workers/`):
   - **apply-arm** - Browser Rendering (Playwright) + Workflows apply sessions
   - **ingest** - cron polling of public ATS boards into the jobs catalog
+  - **email-inbound** - Email Routing catch-all for managed applicant mailboxes
 - Stripe billing (every AI surface metered per plan; see src/lib/plans.ts)
 
 ## Stack
@@ -102,6 +103,36 @@ approve route, retrieval in the dispatch route):
 Capture is best-effort after the approval is already forwarded, so learning
 can never block or fail a submission.
 
+## Managed applicant email
+
+Login-gated ATSes (Workday and friends) require a candidate **account per
+employer tenant**, and creating one means receiving a verification mail. So
+each user gets a managed mailbox JobArms controls end to end, and never has to
+sign up for anything themselves.
+
+- **The alias** (`profiles.applicant_alias`, e.g. `a-7f3k9d2pqr@jobarms.com`)
+  is assigned lazily the first time a run needs an account
+  ([src/lib/applicant-email.ts](src/lib/applicant-email.ts)); the
+  `claim_applicant_alias` RPC makes the assignment atomic and idempotent, and
+  a colliding candidate is simply retried.
+- **Inbound** flows Cloudflare Email Routing catch-all ->
+  [workers/email-inbound](workers/email-inbound) -> `POST /api/email/inbound`
+  (shared `EMAIL_INBOUND_SECRET` bearer). Explicit routing rules (hello@) match
+  before the catch-all, and non-alias mail keeps forwarding to the team inbox
+  exactly as before. Every message is logged to `inbound_emails`, deduped on
+  Message-ID so a retried delivery cannot double-store or double-forward.
+- **Verification extraction** pulls an account-confirmation link or one-time
+  code out of the message, but ONLY when the sender is a known ATS domain
+  (`ATS_ACCOUNT_DOMAINS`, subdomain-aware). A lookalike "verify your account"
+  mail from anywhere else is stored and forwarded but never becomes something
+  an arm will act on.
+- **Auto-forwarding**: every message reaching an alias is relayed to the user's
+  real inbox. Email Routing can only deliver to *verified* destinations, so the
+  relay goes through Resend instead, From the alias with `Reply-To` set to the
+  original sender: a recruiter's mail lands in the user's inbox and hitting
+  reply goes straight back to the recruiter. A failed forward is a degraded
+  notification, never lost mail, since the message is already stored.
+
 ## Self-healing arms
 
 Two more layers keep arms working on hostile pages and recovering from
@@ -177,6 +208,11 @@ uphold these standards:
 - **App and worker authenticate each other** with
   `ARM_WORKER_SHARED_SECRET` bearer on both directions; the ingest worker's
   manual trigger requires `INTERNAL_CRON_SECRET`.
+- **Inbound mail is authenticated too**: `/api/email/inbound` requires the
+  `EMAIL_INBOUND_SECRET` bearer, and a missing secret throws rather than
+  accepting anything. Managed aliases are unguessable (about 8e14 shapes) and
+  extraction is gated on the sender domain, so inbound mail can never steer an
+  arm on its own.
 - **Auth email posture**: Site URL pinned to https://jobarms.com with a
   redirect allowlist; all auth emails (confirm, magic link, reset) send from
   hello@jobarms.com via Resend SMTP with branded templates, configured as
@@ -272,7 +308,8 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 `scripts/oneshot/setup-vercel.ts`; GitHub Actions secrets are set via
 `gh secret set`. Workers get production secrets via `wrangler secret put`
 (`ARM_WORKER_SHARED_SECRET`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
-`GEMINI_API_KEY` for apply-arm; plus `INTERNAL_CRON_SECRET` for ingest).
+`GEMINI_API_KEY` for apply-arm; `INTERNAL_CRON_SECRET` for ingest;
+`EMAIL_INBOUND_SECRET` for email-inbound).
 
 ## Production checklist (high level)
 
@@ -421,11 +458,19 @@ After returning to main:
    especially. Check with `ps aux | grep jobarms-wt-` (or
    `lsof +D /Users/brianlane/jobarms-wt-<name>`) and kill any PIDs found
    (`kill`, then `kill -9` if they do not die).
-2. **Remove the worktree** from the main repo:
+2. **Re-anchor every shell OUT of the worktree BEFORE removing it** -
+   `cd /Users/brianlane/jobarms` in the session shell (agents: run the next
+   command with an explicit `working_directory` on the main checkout). A
+   persistent shell left cd'd inside a deleted worktree fails every subsequent
+   command - silently no-status, or `spawn /bin/bash ENOENT` - which presents
+   as "Execution backend unavailable" and looks like a dead terminal backend
+   needing a Cursor restart. It is not the backend; it is the stale cwd. Fix it
+   by pointing the next command at the main checkout, not by restarting.
+3. **Remove the worktree** from the main repo:
    `git worktree remove /Users/brianlane/jobarms-wt-<name>` then
    `git worktree prune`. Worktrees live at `/Users/brianlane/jobarms-wt-*`.
-3. **Delete the merged local branch**: `git branch -d <branch>`.
-4. **Verify**: `git worktree list` shows only the main checkout, and
+4. **Delete the merged local branch**: `git branch -d <branch>`.
+5. **Verify**: `git worktree list` shows only the main checkout, and
    `ps aux | grep jobarms-wt-` finds nothing.
 
 ## Roadmap

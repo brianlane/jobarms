@@ -215,6 +215,22 @@ describe("SettingsPage", () => {
     render(await SettingsPage());
     expect(screen.getByText("Arm autonomy")).toBeInTheDocument();
   });
+
+  it("shows the managed application address once one is assigned", async () => {
+    holder.client = client({
+      profiles: [{ data: { arm_autonomy: "review_gate", applicant_alias: "a-abcdefghjk@jobarms.com" } }]
+    });
+    render(await SettingsPage());
+    expect(screen.getByText("a-abcdefghjk@jobarms.com")).toBeInTheDocument();
+    // The user's real inbox is named as the forwarding destination.
+    expect(screen.getByText(/a@b\.com/)).toBeInTheDocument();
+  });
+
+  it("explains the address is created on demand before one exists", async () => {
+    holder.client = client({ profiles: [{ data: { arm_autonomy: "review_gate" } }] });
+    render(await SettingsPage());
+    expect(screen.getByText(/created automatically/)).toBeInTheDocument();
+  });
 });
 
 describe("ApplicationDetailPage", () => {
