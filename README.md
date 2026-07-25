@@ -139,6 +139,48 @@ free plan covers us because WAITING instances do not count toward the concurrenc
 limit; the real future ceiling is 3,000 workflow steps/day, roughly 300-400 arm
 runs/day.
 
+## ATS accounts the arm holds for you
+
+Workday and its kin require a candidate account **per employer tenant**, so the
+arm creates one on the user's behalf and never asks them to.
+
+- **The vault** (`site_accounts`, one row per user + tenant host) stores the
+  managed alias and a generated 20-character password. It is the most sensitive
+  table in the schema, so it is service-role only with **RLS on and no policies**:
+  even the owning user cannot read their own row. Passwords are encrypted with
+  AES-256-GCM in [src/lib/site-accounts.ts](src/lib/site-accounts.ts) before they
+  reach Postgres (`SITE_ACCOUNT_ENC_KEY`), so a database compromise alone yields
+  no usable credentials, and GCM's auth tag means a tampered value fails loudly
+  instead of being typed into a login form.
+- **One account per tenant, deliberately.** Workday creates duplicate candidate
+  profiles when identity fields disagree between attempts, so the arm reuses the
+  stored credentials and prefers signing in over creating. A unique
+  `(user_id, tenant_host)` constraint plus a read-the-winner path makes a
+  concurrent dispatch reuse the account rather than register a second one.
+- **Locking**: repeated rejected logins (changed password policy, MFA, a captcha
+  at sign-in) lock the account after three failures, so future runs fail fast
+  instead of burning a browser slot on a doomed login every time.
+
+### The verification loop
+
+Creating an account means the tenant emails a confirmation, so a run has a second
+waiting state beside the review gate:
+
+1. The sidecar reports `needs_email_verification`; the run parks at
+   `needs_account_verification` (`tenant_host` recorded on the run).
+2. The confirmation arrives at the user's managed alias, and the inbound webhook
+   extracts the link or one-time code (ATS senders only).
+3. The webhook hands it to the sidecar, which completes the confirmation **inside
+   the session that created the account**, then marks the vault row verified and
+   releases the workflow.
+
+Ordering is deliberate: the mail is stored and forwarded to the user **before**
+the browser is touched, so a sidecar outage can never cost them their mail; the
+parked run simply times out honestly. The lookup is scoped to a run of that user
+actually waiting on a verification, so an old or unsolicited mail cannot drive the
+browser. All of it is invisible to the user, whose review gate still shows only
+answers and screenshots.
+
 ## Managed applicant email
 
 Login-gated ATSes (Workday and friends) require a candidate **account per
@@ -229,7 +271,8 @@ uphold these standards:
   `applications`; read-own on `subscriptions`, `application_runs`,
   `arm_run_usage`, `ai_usage`, `user_answer_memory`).
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.**
-  Service-only tables (`platform_field_stats`, `arm_playbooks`) and all
+  Service-only tables (`platform_field_stats`, `arm_playbooks`,
+  `site_accounts`) and all
   metering/billing writes go exclusively through the Next.js server or the
   worker (service role) after their own auth checks; anon/authenticated
   roles get an unconditional deny at the database layer.

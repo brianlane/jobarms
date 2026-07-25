@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { approveRun, armWorkerUrl, cancelRun, dispatchRun } from "@/lib/arm";
+import {
+  approveRun,
+  armWorkerUrl,
+  cancelRun,
+  dispatchRun,
+  resumeAccountVerification
+} from "@/lib/arm";
 
 const BASE = "https://arm.example.com";
 const payload = {
@@ -69,5 +75,18 @@ describe("arm worker client", () => {
     await cancelRun("r1");
     expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/runs/r1/approve`);
     expect(fetchMock.mock.calls[1][0]).toBe(`${BASE}/runs/r1/cancel`);
+  });
+
+  it("resumeAccountVerification releases a run parked on its ATS account email", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await resumeAccountVerification("r1")).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/runs/r1/account-verified`);
+  });
+
+  it("reports an offline worker so the run stays parked rather than looking done", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    expect(await resumeAccountVerification("r1")).toEqual({ ok: false, reason: "arm_offline" });
   });
 });
