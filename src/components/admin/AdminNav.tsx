@@ -9,6 +9,7 @@ import { usePathname } from "next/navigation";
  */
 const navItems = [
   { href: "/admin/dashboard", label: "Overview" },
+  { href: "/admin/users", label: "Users" },
   { href: "/admin/system", label: "System" }
 ];
 

@@ -284,9 +284,16 @@ section for the posture.
       + nav shell, proxy + robots, `admin_audit_log` migration and
       `logAdminAction`, platform overview, `/admin/system` (env matrix,
       dependency probes, audit viewer), `create-admin.ts` one-shot
-- [ ] Users: fleet list + per-user 360 detail; operator actions (comp or revoke
-      a plan, resend welcome, delete a user with an impact preview, read-only
-      view-as impersonation)
+- [x] Users: fleet roster (sortable and filterable through the URL) + per-user
+      detail covering billing, quotas, applications, runs, resumes, memory,
+      vaulted ATS accounts, and alias mail; operator actions (comp or revoke a
+      plan, resend welcome, delete an account with an impact preview), each
+      audited and each refusing rather than half-succeeding
+- [ ] Session impersonation ("view as") is deliberately NOT built. Tenant pages
+      read through the RLS-scoped client, so real impersonation would mean
+      swapping every dashboard read to the service role and giving up RLS as
+      defense in depth on the tenant surface. `/admin/users/[id]` mirrors what
+      the user sees instead. Revisit only if UI-fidelity debugging demands it
 - [ ] Runs + ATS health: fleet run console (funnel, failure taxonomy, phase
       durations, refund provenance), run forensics page, playbook decay and
       field-stat guidance thresholds, admin refund/retry/cancel

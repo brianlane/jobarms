@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeClient, fakeFrom, type Result } from "./helpers/supabase";
 
-const holder = vi.hoisted(() => ({ service: null as unknown }));
+const holder = vi.hoisted(() => ({ service: null as unknown, listUsers: null as unknown }));
 vi.mock("@/lib/supabase/service", () => ({
-  createSupabaseServiceClient: vi.fn(() => holder.service)
+  createSupabaseServiceClient: vi.fn(() => {
+    if (holder.service === "throw") throw new Error("no service key");
+    return holder.service;
+  })
 }));
 
 import {
+  AUTH_PER_PAGE,
   loadAiUsage,
   loadApplications,
+  loadAuthDirectory,
   loadCatalogSummary,
   loadFleetSnapshot,
   loadProfiles,
@@ -122,6 +127,70 @@ describe("loadQuotaUsage", () => {
     holder.service = client({ arm_run_usage: [{ data: null }, { data: null }] });
     const usage = await loadQuotaUsage(profiles, subscriptions, NOW);
     expect([...usage.values()]).toEqual([0, 0, 0]);
+  });
+});
+
+describe("loadAuthDirectory", () => {
+  function authClient(pages: { users?: unknown[]; error?: unknown }[]) {
+    const listUsers = vi.fn(async () => {
+      const page = pages.shift() ?? { users: [] };
+      return { data: page.users ? { users: page.users } : null, error: page.error ?? null };
+    });
+    holder.listUsers = listUsers;
+    holder.service = { auth: { admin: { listUsers } } };
+    return listUsers;
+  }
+
+  it("collects sign-in recency keyed by user id", async () => {
+    authClient([
+      {
+        users: [
+          { id: "u1", last_sign_in_at: "2026-07-14T00:00:00Z", email_confirmed_at: "2026-01-01T00:00:00Z" },
+          { id: "u2" }
+        ]
+      }
+    ]);
+    const directory = await loadAuthDirectory();
+    expect(directory.clipped).toBe(false);
+    expect(directory.byId.get("u1")).toEqual({
+      lastSignInAt: "2026-07-14T00:00:00Z",
+      emailConfirmedAt: "2026-01-01T00:00:00Z"
+    });
+    expect(directory.byId.get("u2")).toEqual({ lastSignInAt: null, emailConfirmedAt: null });
+  });
+
+  it("pages until a short page and marks the scan complete", async () => {
+    const full = Array.from({ length: AUTH_PER_PAGE }, (_, i) => ({ id: `u${i}` }));
+    const listUsers = authClient([{ users: full }, { users: [{ id: "last" }] }]);
+    const directory = await loadAuthDirectory();
+    expect(listUsers).toHaveBeenCalledTimes(2);
+    expect(directory.clipped).toBe(false);
+    expect(directory.byId.size).toBe(AUTH_PER_PAGE + 1);
+  });
+
+  it("reports a clipped scan when every page is full", async () => {
+    const full = Array.from({ length: AUTH_PER_PAGE }, (_, i) => ({ id: `u${i}` }));
+    const listUsers = authClient(Array.from({ length: 10 }, () => ({ users: full })));
+    const directory = await loadAuthDirectory();
+    expect(listUsers).toHaveBeenCalledTimes(10);
+    expect(directory.clipped).toBe(true);
+  });
+
+  it("degrades to a clipped empty directory on an API error", async () => {
+    authClient([{ users: [], error: { message: "denied" } }]);
+    expect(await loadAuthDirectory()).toEqual({ byId: new Map(), clipped: true });
+  });
+
+  it("degrades when the client cannot be built", async () => {
+    holder.service = "throw";
+    expect(await loadAuthDirectory()).toEqual({ byId: new Map(), clipped: true });
+  });
+
+  it("treats a null payload as an empty page", async () => {
+    holder.service = {
+      auth: { admin: { listUsers: vi.fn(async () => ({ data: null, error: null })) } }
+    };
+    expect((await loadAuthDirectory()).clipped).toBe(false);
   });
 });
 

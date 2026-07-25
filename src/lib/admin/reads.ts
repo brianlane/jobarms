@@ -160,6 +160,52 @@ export async function loadCatalogSummary(now: Date = new Date()): Promise<Catalo
   };
 }
 
+/** Pagination bounds for the auth-directory scan, far above current scale. */
+export const AUTH_PAGE_CAP = 10;
+export const AUTH_PER_PAGE = 500;
+
+export interface AuthDirectory {
+  byId: Map<string, { lastSignInAt: string | null; emailConfirmedAt: string | null }>;
+  /**
+   * True when the scan filled its page cap, meaning the directory is PARTIAL.
+   * Callers must degrade rather than mis-read the users it never reached as
+   * never having signed in.
+   */
+  clipped: boolean;
+}
+
+/**
+ * Last sign-in and email-confirmation state for every account. Lives in the
+ * auth schema rather than `profiles`, so it needs the admin API; the scan is
+ * capped so a large directory cannot turn one page render into thousands of
+ * calls. A failure degrades to an empty directory, since engagement is a
+ * nice-to-have column and not worth erroring a page over.
+ */
+export async function loadAuthDirectory(): Promise<AuthDirectory> {
+  const byId = new Map<string, { lastSignInAt: string | null; emailConfirmedAt: string | null }>();
+  try {
+    const supabase = createSupabaseServiceClient();
+    for (let page = 1; page <= AUTH_PAGE_CAP; page += 1) {
+      const { data, error } = await supabase.auth.admin.listUsers({
+        page,
+        perPage: AUTH_PER_PAGE
+      });
+      if (error) return { byId, clipped: true };
+      const users = data?.users ?? [];
+      for (const user of users) {
+        byId.set(user.id, {
+          lastSignInAt: user.last_sign_in_at ?? null,
+          emailConfirmedAt: user.email_confirmed_at ?? null
+        });
+      }
+      if (users.length < AUTH_PER_PAGE) return { byId, clipped: false };
+    }
+    return { byId, clipped: true };
+  } catch {
+    return { byId, clipped: true };
+  }
+}
+
 export interface FleetSnapshot {
   profiles: AdminProfileRow[];
   subscriptions: AdminSubscriptionRow[];

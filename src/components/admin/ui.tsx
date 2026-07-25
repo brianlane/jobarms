@@ -192,15 +192,16 @@ export function Table({
   );
 }
 
-/**
- * A user reference. Renders as plain text for now and becomes a link to the
- * per-user page once that page exists, so no admin surface ships a dead link.
- */
+/** A user reference that goes to their admin detail page. */
 export function UserLink({ id, email }: { id: string; email: string }) {
   return (
-    <span className="font-medium text-slate-200" title={id}>
+    <Link
+      href={`/admin/users/${id}`}
+      className="font-medium text-slate-200 hover:text-arm-300"
+      title={id}
+    >
       {email || id.slice(0, 8)}
-    </span>
+    </Link>
   );
 }
 

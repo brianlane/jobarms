@@ -288,6 +288,19 @@ light so it is never ambiguous which one you are looking at.
   `/admin/system`.
 - **`/admin/system`** shows configuration as set or unset, never a value, plus
   dependency reachability and when Stripe last wrote a subscription row.
+- **`/admin/users`** is the fleet roster (plan, engagement, quota pressure, run
+  success rate) and `/admin/users/[id]` is the whole footprint of one account:
+  billing, every quota against its own window, applications, runs, resumes,
+  remembered questions, vaulted ATS accounts, and managed alias mail.
+- **Operator actions refuse rather than half-succeed.** Comping a plan is
+  refused while Stripe owns the subscription (the next webhook would undo it);
+  deleting an account is refused while Stripe is still billing and on the
+  operator's own account; storage objects are removed explicitly because the
+  Postgres cascade cannot reach them.
+- **Privacy holds on the operator surface too.** Profile data is shown as
+  counts, the voluntary self-identification vault is reported as populated or
+  empty and never read, answer memory lists questions and not answers, and
+  vaulted ATS passwords are never selected out of the database.
 - Robots disallow `/admin`, and every admin page carries `noindex`.
 
 ## Security standards & posture
