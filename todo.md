@@ -318,9 +318,10 @@ section for the posture.
       `/admin/ai` unit economics (cost per submitted application, per user,
       margin, fallback rate), `/admin/revenue` (MRR trend, ARPU, conversion,
       pending churn, billing problems)
-- [ ] Catalog + engagement: ingestion health (per-ATS mix, sweep freshness,
-      companies, Discover attribution) and engagement (active users, onboarding
-      funnel, signup cohort retention)
+- [x] Catalog + engagement: `/admin/catalog` (size, daily adds, platform mix,
+      per-source freshness, stale boards, Discover attribution) and
+      `/admin/engagement` (active users by day/week/month, activation funnel from
+      signup to a landed application, weekly cohorts, segments)
 
 ## Later / parked
 

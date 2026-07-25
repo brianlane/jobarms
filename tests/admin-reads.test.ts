@@ -16,8 +16,13 @@ import {
   loadAuthDirectory,
   loadFieldStats,
   loadPlaybooks,
+  loadApplicationSources,
+  loadCompanies,
+  loadRecentJobs,
+  loadResumeOwners,
   loadRunsWithJobs,
   loadSpendEvents,
+  loadSubmittedOwners,
   loadCatalogSummary,
   loadFleetSnapshot,
   loadProfiles,
@@ -152,6 +157,51 @@ describe("loadRunsWithJobs", () => {
   it("defaults the window and treats a null payload as empty", async () => {
     holder.service = client({});
     expect(await loadRunsWithJobs()).toEqual([]);
+  });
+});
+
+describe("catalog and engagement reads", () => {
+  it("windows the recent-jobs read", async () => {
+    const from = fakeFrom({ jobs: [{ data: [{ ats: "lever" }] }] });
+    holder.service = fakeClient({ from });
+    expect(await loadRecentJobs(14, NOW)).toEqual([{ ats: "lever" }]);
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.gte).toHaveBeenCalledWith("created_at", windowStartIso(14, NOW));
+  });
+
+  it("returns companies and application sources", async () => {
+    holder.service = client({
+      companies: [{ data: [{ id: "c1", name: "Acme" }] }],
+      applications: [{ data: [{ id: "a1", jobs: { source: "manual" } }] }]
+    });
+    expect(await loadCompanies()).toEqual([{ id: "c1", name: "Acme" }]);
+    expect(await loadApplicationSources()).toEqual([{ id: "a1", jobs: { source: "manual" } }]);
+  });
+
+  it("collapses owner reads into distinct id sets", async () => {
+    holder.service = client({
+      resumes: [{ data: [{ user_id: "u1" }, { user_id: "u1" }, { user_id: "u2" }] }],
+      application_runs: [{ data: [{ user_id: "u3" }] }]
+    });
+    expect([...(await loadResumeOwners())].sort()).toEqual(["u1", "u2"]);
+    expect([...(await loadSubmittedOwners())]).toEqual(["u3"]);
+  });
+
+  it("scopes the submitted-owner read to submitted runs", async () => {
+    const from = fakeFrom({ application_runs: [{ data: [] }] });
+    holder.service = fakeClient({ from });
+    await loadSubmittedOwners();
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.eq).toHaveBeenCalledWith("status", "submitted");
+  });
+
+  it("defaults the window and treats null payloads as empty", async () => {
+    holder.service = client({});
+    expect(await loadRecentJobs()).toEqual([]);
+    expect(await loadCompanies()).toEqual([]);
+    expect(await loadApplicationSources()).toEqual([]);
+    expect(await loadResumeOwners()).toEqual(new Set());
+    expect(await loadSubmittedOwners()).toEqual(new Set());
   });
 });
 

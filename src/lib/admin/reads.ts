@@ -26,6 +26,7 @@ import {
 import type { AdminRunRow } from "@/lib/admin/run-stats";
 import type { FieldStatRow, PlaybookRow } from "@/lib/admin/ats-health";
 import type { SpendEventRow } from "@/lib/admin/spend";
+import type { CatalogJobRow, CompanyRow } from "@/lib/admin/catalog";
 
 /** Row caps. Generous next to current scale, small enough to stay one page. */
 export const USER_ROW_CAP = 5000;
@@ -192,6 +193,76 @@ export async function loadRunsWithJobs(
     .order("created_at", { ascending: false })
     .limit(RUN_ROW_CAP);
   return (data ?? []) as unknown as AdminRunWithJob[];
+}
+
+export const CATALOG_JOB_CAP = 8000;
+export const CATALOG_WINDOW_DAYS = 14;
+export const COMPANY_ROW_CAP = 500;
+
+/**
+ * Jobs added inside a trailing window. The catalog as a whole is far too big to
+ * read (thousands of rows, growing every half hour), so the mix, the daily chart,
+ * and per-company activity are all computed from the WINDOW, while the totals
+ * come from head counts in `loadCatalogSummary`.
+ */
+export async function loadRecentJobs(
+  days = CATALOG_WINDOW_DAYS,
+  now: Date = new Date()
+): Promise<CatalogJobRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("jobs")
+    .select("ats, source, company, created_at")
+    .gte("created_at", windowStartIso(days, now))
+    .order("created_at", { ascending: false })
+    .limit(CATALOG_JOB_CAP);
+  return (data ?? []) as CatalogJobRow[];
+}
+
+export async function loadCompanies(): Promise<CompanyRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("companies")
+    .select("id, name, ats, board_token, active, last_ingested_at, created_at")
+    .order("name")
+    .limit(COMPANY_ROW_CAP);
+  return (data ?? []) as CompanyRow[];
+}
+
+/** Applications with the source of the job behind them, for attribution. */
+export async function loadApplicationSources(): Promise<{ jobs: { source: string } | null }[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("applications")
+    .select("id, jobs(source)")
+    .order("created_at", { ascending: false })
+    .limit(APPLICATION_ROW_CAP);
+  return (data ?? []) as unknown as { jobs: { source: string } | null }[];
+}
+
+/** Distinct user ids that own at least one row of `table`. */
+async function ownerIds(table: string): Promise<Set<string>> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase.from(table).select("user_id").limit(APPLICATION_ROW_CAP);
+  return new Set(((data ?? []) as { user_id: string }[]).map((row) => row.user_id));
+}
+
+export async function loadResumeOwners(): Promise<Set<string>> {
+  return ownerIds("resumes");
+}
+
+/**
+ * Users who have had at least one run reach `submitted`: the far end of the
+ * activation funnel, and the only step that means the product delivered.
+ */
+export async function loadSubmittedOwners(): Promise<Set<string>> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("application_runs")
+    .select("user_id")
+    .eq("status", "submitted")
+    .limit(APPLICATION_ROW_CAP);
+  return new Set(((data ?? []) as { user_id: string }[]).map((row) => row.user_id));
 }
 
 export const SPEND_ROW_CAP = 20000;
