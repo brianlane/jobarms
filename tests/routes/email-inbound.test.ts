@@ -15,10 +15,26 @@ const forwardInboundEmail = vi.hoisted(() =>
     }) => true
   )
 );
+const completeRenderVerification = vi.hoisted(() =>
+  vi.fn(
+    async (_args: { userId: string; tenantHost: string; link?: string | null; code?: string | null }) =>
+      ({ ok: true, data: { status: "authenticated" } }) as
+        | { ok: true; data: { status: string } }
+        | { ok: false; error: string }
+  )
+);
+const markSiteAccountVerified = vi.hoisted(() => vi.fn(async () => true));
+const resumeAccountVerification = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: true }) as { ok: boolean; reason?: string })
+);
+
 vi.mock("@/lib/supabase/service", () => ({
   createSupabaseServiceClient: vi.fn(() => holder.service)
 }));
 vi.mock("@/lib/email", () => ({ forwardInboundEmail }));
+vi.mock("@/lib/render", () => ({ completeRenderVerification }));
+vi.mock("@/lib/site-accounts", () => ({ markSiteAccountVerified }));
+vi.mock("@/lib/arm", () => ({ resumeAccountVerification }));
 
 import { POST } from "@/app/api/email/inbound/route";
 
@@ -47,13 +63,23 @@ const payload = (over: Record<string, unknown> = {}) => ({
  * `profile` and `insert` are read with `in` so an explicit null (alias nobody
  * owns / duplicate delivery) is honored instead of falling back to the default.
  */
-function serviceWith(over: { profile?: unknown; insert?: unknown } = {}) {
+function serviceWith(
+  over: { profile?: unknown; insert?: unknown; pendingRun?: unknown } = {}
+) {
   return fakeClient({
     from: fakeFrom({
       profiles: [{ data: "profile" in over ? over.profile : { id: "u1", email: "user@gmail.com" } }],
       inbound_emails: [
         "insert" in over ? (over.insert as { data: unknown }) : { data: { id: "ie-1" } },
         { data: null }
+      ],
+      application_runs: [
+        {
+          data:
+            "pendingRun" in over
+              ? over.pendingRun
+              : { id: "run-1", tenant_host: "acme.wd1.myworkdayjobs.com" }
+        }
       ]
     })
   });
@@ -64,6 +90,12 @@ beforeEach(() => {
   holder.service = null;
   forwardInboundEmail.mockClear();
   forwardInboundEmail.mockResolvedValue(true);
+  completeRenderVerification.mockClear();
+  completeRenderVerification.mockResolvedValue({ ok: true, data: { status: "authenticated" } });
+  markSiteAccountVerified.mockClear();
+  markSiteAccountVerified.mockResolvedValue(true);
+  resumeAccountVerification.mockClear();
+  resumeAccountVerification.mockResolvedValue({ ok: true });
 });
 
 describe("auth", () => {
@@ -123,7 +155,12 @@ describe("logging, extraction, and forwarding", () => {
     const res = await POST(post(payload()));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, forwarded: true, verification: true });
+    expect(await res.json()).toEqual({
+      ok: true,
+      forwarded: true,
+      verification: true,
+      consumed: "verified"
+    });
 
     const insertArg = service.from.mock.results
       .map((r) => r.value)
@@ -205,5 +242,103 @@ describe("logging, extraction, and forwarding", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, forwarded: false });
+  });
+});
+
+describe("consuming an account verification", () => {
+  it("completes it in the held session and resumes the parked run", async () => {
+    holder.service = serviceWith();
+
+    const res = await POST(post(payload()));
+
+    expect(await res.json()).toMatchObject({ consumed: "verified" });
+    expect(completeRenderVerification).toHaveBeenCalledWith({
+      userId: "u1",
+      tenantHost: "acme.wd1.myworkdayjobs.com",
+      link: "https://acme.wd1.myworkdayjobs.com/verify?token=t1",
+      code: null
+    });
+    expect(markSiteAccountVerified).toHaveBeenCalledWith(
+      expect.anything(),
+      "u1",
+      "acme.wd1.myworkdayjobs.com"
+    );
+    expect(resumeAccountVerification).toHaveBeenCalledWith("run-1");
+  });
+
+  it("forwards the mail BEFORE touching the browser, so an outage cannot cost it", async () => {
+    const order: string[] = [];
+    forwardInboundEmail.mockImplementationOnce(async () => {
+      order.push("forward");
+      return true;
+    });
+    completeRenderVerification.mockImplementationOnce(async () => {
+      order.push("verify");
+      return { ok: true, data: { status: "authenticated" } };
+    });
+    holder.service = serviceWith();
+
+    await POST(post(payload()));
+
+    expect(order).toEqual(["forward", "verify"]);
+  });
+
+  it("does nothing when no run is waiting on a verification", async () => {
+    holder.service = serviceWith({ pendingRun: null });
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ consumed: "no_pending_run" });
+    expect(completeRenderVerification).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the waiting run has no tenant recorded", async () => {
+    holder.service = serviceWith({ pendingRun: { id: "run-1", tenant_host: null } });
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ consumed: "no_pending_run" });
+  });
+
+  it("leaves the run parked when the tenant rejects the verification", async () => {
+    completeRenderVerification.mockResolvedValueOnce({
+      ok: true,
+      data: { status: "needs_email_verification" }
+    });
+    holder.service = serviceWith();
+
+    const res = await POST(post(payload()));
+
+    expect(await res.json()).toMatchObject({ consumed: "failed" });
+    // Another mail may still arrive, so nothing is marked verified or resumed.
+    expect(markSiteAccountVerified).not.toHaveBeenCalled();
+    expect(resumeAccountVerification).not.toHaveBeenCalled();
+  });
+
+  it("reports a sidecar outage without failing the delivery", async () => {
+    completeRenderVerification.mockResolvedValueOnce({ ok: false, error: "render_unreachable" });
+    holder.service = serviceWith();
+
+    const res = await POST(post(payload()));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, forwarded: true, consumed: "sidecar_error" });
+  });
+
+  it("reports a failure to resume rather than marking the run done", async () => {
+    resumeAccountVerification.mockResolvedValueOnce({ ok: false, reason: "arm_offline" });
+    holder.service = serviceWith();
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ consumed: "sidecar_error" });
+  });
+
+  it("swallows an unexpected error during consumption", async () => {
+    completeRenderVerification.mockRejectedValueOnce(new Error("boom"));
+    holder.service = serviceWith();
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ ok: true, consumed: "sidecar_error" });
+  });
+
+  it("does not consume anything when the mail carried no verification", async () => {
+    holder.service = serviceWith();
+    const res = await POST(post(payload({ from: "recruiter@acme.com", text: "Hello there" })));
+    expect(await res.json()).toMatchObject({ consumed: "none" });
+    expect(completeRenderVerification).not.toHaveBeenCalled();
   });
 });

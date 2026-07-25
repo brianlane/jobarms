@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { requireEnv } from "@/lib/env";
 import { forwardInboundEmail } from "@/lib/email";
@@ -9,6 +10,9 @@ import {
   extractVerification,
   isAtsAccountSender
 } from "@/lib/applicant-email";
+import { completeRenderVerification } from "@/lib/render";
+import { markSiteAccountVerified } from "@/lib/site-accounts";
+import { resumeAccountVerification } from "@/lib/arm";
 
 /**
  * Inbound mail webhook, called by the `jobarms-email-inbound` Cloudflare Email
@@ -113,9 +117,72 @@ export async function POST(request: Request) {
     await service.from("inbound_emails").update({ forwarded: true }).eq("id", inserted.id);
   }
 
+  // Act on a verification: hand the link/code to the sidecar so it completes the
+  // confirmation inside the session that created the account, then release the
+  // run parked on it. Best-effort and AFTER the forward, so a sidecar outage can
+  // never cost the user their mail; the parked run simply times out honestly.
+  let consumed: ConsumeOutcome = "none";
+  if (verification.link || verification.code) {
+    consumed = await consumeVerification(service, {
+      userId: profile.id as string,
+      link: verification.link,
+      code: verification.code
+    });
+  }
+
   return NextResponse.json({
     ok: true,
     forwarded,
-    verification: Boolean(verification.link || verification.code)
+    verification: Boolean(verification.link || verification.code),
+    consumed
   });
+}
+
+type ConsumeOutcome = "none" | "no_pending_run" | "verified" | "failed" | "sidecar_error";
+
+/**
+ * Complete a pending account verification and resume the run waiting on it.
+ *
+ * Scoped to a run that is actually parked at `needs_account_verification` for
+ * this user, so an old or unsolicited verification mail cannot drive the browser.
+ */
+async function consumeVerification(
+  service: SupabaseClient,
+  args: { userId: string; link: string | null; code: string | null }
+): Promise<ConsumeOutcome> {
+  try {
+    const { data: run } = await service
+      .from("application_runs")
+      .select("id, tenant_host")
+      .eq("user_id", args.userId)
+      .eq("status", "needs_account_verification")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!run?.tenant_host) return "no_pending_run";
+
+    const tenantHost = run.tenant_host as string;
+    const result = await completeRenderVerification({
+      userId: args.userId,
+      tenantHost,
+      link: args.link,
+      code: args.code
+    });
+    if (!result.ok) return "sidecar_error";
+
+    if (result.data.status !== "authenticated") {
+      // The tenant did not accept it (expired link, wrong code). Leave the run
+      // parked: another mail may still arrive before the timeout.
+      return "failed";
+    }
+
+    await markSiteAccountVerified(service, args.userId, tenantHost);
+    // Release the workflow. The worker owns run state, so a failure here leaves
+    // the run parked to time out rather than marking it done behind the worker.
+    const resumed = await resumeAccountVerification(run.id as string);
+    return resumed.ok ? "verified" : "sidecar_error";
+  } catch {
+    // Verification is advisory: the message is already stored and forwarded.
+    return "sidecar_error";
+  }
 }

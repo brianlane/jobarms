@@ -232,10 +232,21 @@ Phase B - `vps/render` sidecar (the controllable browser):
 
 Phase C - account vault + verification loop:
 
-- [ ] `site_accounts` (service-only, deny-all RLS): per user + tenant host,
-      alias email, encrypted generated password, status
-- [ ] Workflow `waitForEvent("email-verified")` fed by the inbound route, which
-      hands the link/code to the sidecar to finish in the held session
+- [x] `site_accounts` (service-only, deny-all RLS): per user + tenant host, alias
+      email, AES-256-GCM encrypted password, status, failure locking
+      (migration 20260724030000_site_accounts.sql)
+- [x] One account per tenant enforced by a unique constraint + read-the-winner on
+      a concurrent dispatch, so we never create duplicate candidate profiles
+- [x] `needs_account_verification` run state + `tenant_host` on the run
+      (migration 20260724031000_run_account_verification.sql); a run stalled in
+      it for 24h is retry-eligible with a refund
+- [x] Inbound webhook consumes the verification: sidecar completes it in the held
+      session, vault row marked verified, workflow released. Mail is forwarded
+      BEFORE the browser is touched so an outage cannot cost the user their mail
+- [x] `src/lib/render.ts` client: structured-error classification (a 200 with an
+      error body is permanent; a non-2xx is transport and retryable)
+- [ ] **Manual**: `SITE_ACCOUNT_ENC_KEY` (openssl rand -hex 32) + `RENDER_URL` +
+      `RENDER_TOKEN` in .env and Vercel
 
 Phase D - Workday:
 

@@ -87,6 +87,15 @@ describe("retryDecision", () => {
     expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });
   });
 
+  it("run awaiting its ATS account email: patient at first, stuck after 24h", () => {
+    // It waits on a confirmation mail, not on the user, so a day later it is
+    // stuck rather than patient, and the slot refunds as a system failure.
+    const status = "needs_account_verification";
+    expect(retryDecision({ status, answers: null, created_at: recent }, NOW).eligible).toBe(false);
+    const d = retryDecision({ status, answers: null, created_at: stale }, NOW);
+    expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });
+  });
+
   it("submitted run: never eligible", () => {
     expect(retryDecision({ status: "submitted", answers: realAnswers, created_at: recent }, NOW).eligible).toBe(false);
   });

@@ -67,3 +67,15 @@ export function approveRun(
 export function cancelRun(runId: string): Promise<ArmDispatchResult> {
   return armPost(`/runs/${runId}/cancel`, {});
 }
+
+/**
+ * Release a run parked waiting for its ATS account email to be verified.
+ *
+ * Called by the inbound-email webhook once the sidecar has confirmed the account
+ * inside the held session. The worker owns run state, so this only sends the
+ * workflow event; a failure leaves the run parked to time out honestly rather
+ * than marking it complete behind the worker's back.
+ */
+export function resumeAccountVerification(runId: string): Promise<ArmDispatchResult> {
+  return armPost(`/runs/${runId}/account-verified`, {});
+}
