@@ -294,9 +294,12 @@ section for the posture.
       swapping every dashboard read to the service role and giving up RLS as
       defense in depth on the tenant surface. `/admin/users/[id]` mirrors what
       the user sees instead. Revisit only if UI-fidelity debugging demands it
-- [ ] Runs + ATS health: fleet run console (funnel, failure taxonomy, phase
-      durations, refund provenance), run forensics page, playbook decay and
-      field-stat guidance thresholds, admin refund/retry/cancel
+- [x] Runs + ATS health: fleet run console (step-log funnel, failure taxonomy,
+      phase durations, refund provenance), run forensics page with signed
+      screenshots, per-platform health, playbook decay, and field-stat guidance
+      read through the same `lessonsFromStats` the arm prompt uses. Operator
+      cancel + force refund; retry stays in `debug/retry-application.ts` rather
+      than duplicating the dispatch path
 - [ ] Money: `ai_spend_events` ledger + token instrumentation in the app and the
       worker, `/admin/ai` unit economics, `/admin/revenue` (MRR trend, churn,
       ARPU, conversion)

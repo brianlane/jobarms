@@ -26,6 +26,7 @@ import {
   Empty,
   MeterRow,
   PageHeading,
+  runStatusTone,
   SectionTitle,
   Stat,
   Table,
@@ -372,19 +373,11 @@ export default async function AdminDashboardPage() {
                   <UserLink id={run.user_id} email={emailById.get(run.user_id) ?? ""} />
                 </td>
                 <td className="py-2">
-                  <Badge
-                    tone={
-                      run.status === "submitted"
-                        ? "good"
-                        : run.status === "failed"
-                          ? "bad"
-                          : run.status === "needs_review"
-                            ? "warn"
-                            : "neutral"
-                    }
-                  >
-                    {run.status.replaceAll("_", " ")}
-                  </Badge>
+                  <Link href={`/admin/runs/${run.id}`}>
+                    <Badge tone={runStatusTone(run.status)}>
+                      {run.status.replaceAll("_", " ")}
+                    </Badge>
+                  </Link>
                 </td>
                 <td className="py-2 text-slate-500">{run.autonomy.replaceAll("_", " ")}</td>
                 <td className="max-w-xs truncate py-2 text-slate-500">{run.error ?? "-"}</td>

@@ -14,6 +14,9 @@ import {
   loadAiUsage,
   loadApplications,
   loadAuthDirectory,
+  loadFieldStats,
+  loadPlaybooks,
+  loadRunsWithJobs,
   loadCatalogSummary,
   loadFleetSnapshot,
   loadProfiles,
@@ -127,6 +130,45 @@ describe("loadQuotaUsage", () => {
     holder.service = client({ arm_run_usage: [{ data: null }, { data: null }] });
     const usage = await loadQuotaUsage(profiles, subscriptions, NOW);
     expect([...usage.values()]).toEqual([0, 0, 0]);
+  });
+});
+
+describe("loadRunsWithJobs", () => {
+  it("windows the read and carries the nested job", async () => {
+    const from = fakeFrom({
+      application_runs: [
+        { data: [{ id: "r1", applications: { jobs: { ats: "lever" } } }] }
+      ]
+    });
+    holder.service = fakeClient({ from });
+    const runs = await loadRunsWithJobs(30, NOW);
+    expect(runs).toHaveLength(1);
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(builder.gte).toHaveBeenCalledWith("created_at", windowStartIso(30, NOW));
+    expect(builder.select).toHaveBeenCalledWith(expect.stringContaining("applications(id, status"));
+  });
+
+  it("defaults the window and treats a null payload as empty", async () => {
+    holder.service = client({});
+    expect(await loadRunsWithJobs()).toEqual([]);
+  });
+});
+
+describe("loadPlaybooks and loadFieldStats", () => {
+  it("returns playbook rows newest first", async () => {
+    holder.service = client({ arm_playbooks: [{ data: [{ domain: "acme.com" }] }] });
+    expect(await loadPlaybooks()).toEqual([{ domain: "acme.com" }]);
+  });
+
+  it("returns field-stat rows most-seen first", async () => {
+    holder.service = client({ platform_field_stats: [{ data: [{ question_key: "auth" }] }] });
+    expect(await loadFieldStats()).toEqual([{ question_key: "auth" }]);
+  });
+
+  it("treats null payloads as empty", async () => {
+    holder.service = client({});
+    expect(await loadPlaybooks()).toEqual([]);
+    expect(await loadFieldStats()).toEqual([]);
   });
 });
 

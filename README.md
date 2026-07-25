@@ -292,6 +292,17 @@ light so it is never ambiguous which one you are looking at.
   success rate) and `/admin/users/[id]` is the whole footprint of one account:
   billing, every quota against its own window, applications, runs, resumes,
   remembered questions, vaulted ATS accounts, and managed alias mail.
+- **`/admin/runs`** is the fleet run console: filters on status, ATS, and mode,
+  a funnel built from the workflow STEP log (how far runs got, not just where
+  they are now), median and p95 time per phase, the failure taxonomy parsed out
+  of `application_runs.error`, and refund provenance. `/admin/runs/[id]` is
+  forensics: the step log, every answer the arm drafted, and signed screenshots.
+- **`/admin/ats`** is arm health per platform, the self-healing playbooks with
+  the decaying ones (failing more than they work) surfaced first, and what the
+  platform has learned. The "guiding" flag there is computed by
+  `lessonsFromStats`, the same function the dispatch path calls, so the page
+  shows the guidance the arm actually gets rather than a second reading of the
+  thresholds.
 - **Operator actions refuse rather than half-succeed.** Comping a plan is
   refused while Stripe owns the subscription (the next webhook would undo it);
   deleting an account is refused while Stripe is still billing and on the

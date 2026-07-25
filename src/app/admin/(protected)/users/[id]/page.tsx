@@ -10,6 +10,7 @@ import {
   Card,
   Empty,
   PageHeading,
+  runStatusTone,
   SectionTitle,
   Table,
   timeAgo,
@@ -34,13 +35,6 @@ const AI_KIND_LABELS: Record<string, string> = {
 
 function count(value: unknown[] | null): number {
   return Array.isArray(value) ? value.length : 0;
-}
-
-function runTone(status: string): BadgeTone {
-  if (status === "submitted") return "good";
-  if (status === "failed") return "bad";
-  if (status === "needs_review") return "warn";
-  return "neutral";
 }
 
 export default async function AdminUserDetailPage({
@@ -269,7 +263,11 @@ export default async function AdminUserDetailPage({
             {detail.runs.slice(0, 25).map((run) => (
               <tr key={run.id}>
                 <td className="py-2">
-                  <Badge tone={runTone(run.status)}>{run.status.replaceAll("_", " ")}</Badge>
+                  <Link href={`/admin/runs/${run.id}`}>
+                    <Badge tone={runStatusTone(run.status)}>
+                      {run.status.replaceAll("_", " ")}
+                    </Badge>
+                  </Link>
                 </td>
                 <td className="py-2 text-slate-500">{run.autonomy.replaceAll("_", " ")}</td>
                 <td className="max-w-sm truncate py-2 text-slate-500">{run.error ?? "-"}</td>
