@@ -21,10 +21,13 @@ This repository includes:
 
 - **App core**: Next.js (App Router, TypeScript, Tailwind 4) on Vercel;
   Supabase for auth (email/password + magic link), Postgres, and storage
-- **Automation edge**: Cloudflare Workers - Browser Rendering (Playwright) +
-  Workflows for apply sessions (`workers/apply-arm`), cron ingestion
-  (`workers/ingest`), both live on custom domains (arm.jobarms.com,
-  ingest.jobarms.com)
+- **Automation edge**: Cloudflare Workers - Workflows orchestration for apply
+  sessions (`workers/apply-arm`), cron ingestion (`workers/ingest`), inbound
+  mail (`workers/email-inbound`); the first two live on custom domains
+  (arm.jobarms.com, ingest.jobarms.com)
+- **Browser**: `vps/render`, a persistent Playwright sidecar behind a Cloudflare
+  Tunnel. It replaced Browser Rendering because a throwaway browser per phase
+  cannot hold the logged-in session an account-gated ATS requires
 - **AI**: Gemini API (dedicated "Job Arms" Google project, paid tier - prompts
   are not used for model training). Default model `gemini-3.6-flash` with
   capacity fallback `gemini-3.5-flash-lite`; both env-overridable
@@ -55,26 +58,37 @@ refunds (details under Budget enforcement).
 
 ## How an arm run works
 
+The apply-arm Worker is the **orchestrator**; the browser lives in
+[vps/render](vps/render). Each phase below is one HTTPS call to the sidecar,
+which keeps the logged-in session alive between them.
+
 1. User pastes a job URL (`POST /api/applications`). The app normalizes the
-   URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse and
-   Lever drive today), upserts the job (public ATS APIs provide
+   URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse, Lever,
+   and Workday drive today), upserts the job (public ATS APIs provide
    title/company/description), **reserves a metered run**
    (`try_reserve_arm_run` RPC, row-locked monthly cap), snapshots the
-   profile + the user's answer memory + a 24h signed resume URL, and
-   dispatches to the worker.
+   profile + the user's answer memory + a 24h signed resume URL, provisions the
+   tenant account for account-gated ATSes, and dispatches to the worker.
 2. The worker starts an **`ApplyRunWorkflow`** instance (id = run id). Steps:
-   extract the form (Browser Rendering session #1, screenshot), generate
-   answers with Gemini (profile-grounded, never invents facts; EEO fields use
-   the profile's vault or decline-to-answer), fill for review (screenshot).
+   **ensure the candidate account** (account-gated ATSes only; may park at
+   `needs_account_verification` for up to 30 minutes while the employer's
+   confirmation email is handled), extract the form, generate answers with
+   Gemini (profile-grounded, never invents facts; EEO fields use the profile's
+   vault or decline-to-answer), fill for review (screenshot).
 3. **Review gate** (default): the run parks at `needs_review`
    (`step.waitForEvent`, 7-day timeout). The user reviews/edits every answer
    in the dashboard and approves - the app forwards approval to the worker,
    which resumes the workflow.
-4. **Submit**: a fresh browser session re-fills with the approved answers,
-   attaches the resume, submits, and verifies the ATS confirmation
-   (screenshot). Tracker flips to `applied` (or `failed` with an honest
-   `submit_unconfirmed` error - never a silent maybe). Full-auto users skip
-   step 3.
+4. **Submit**: the sidecar re-fills with the approved answers in the same
+   session, attaches the resume, submits, and verifies the ATS confirmation
+   (screenshot). Tracker flips to `applied`, or `failed` with an honest
+   `captcha_blocked` / `submit_unconfirmed` error, never a silent maybe.
+   Full-auto users skip step 3.
+
+Vision recovery spans the boundary: when the sidecar cannot reach a form it
+returns `form_not_found` **with a screenshot**, the worker asks Gemini what
+stands in the way, and calls back with that strategy as the playbook to apply.
+So the AI credentials stay on the edge and the box stays a pure browser.
 
 Run state lives in `application_runs` (step log, answers, screenshots) -
 the worker writes it directly to Supabase; the dashboard polls and renders
@@ -455,8 +469,8 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 `scripts/oneshot/setup-vercel.ts`; GitHub Actions secrets are set via
 `gh secret set`. Workers get production secrets via `wrangler secret put`
 (`ARM_WORKER_SHARED_SECRET`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
-`GEMINI_API_KEY` for apply-arm; `INTERNAL_CRON_SECRET` for ingest;
-`EMAIL_INBOUND_SECRET` for email-inbound).
+`GEMINI_API_KEY`, `RENDER_URL`, `RENDER_TOKEN` for apply-arm;
+`INTERNAL_CRON_SECRET` for ingest; `EMAIL_INBOUND_SECRET` for email-inbound).
 
 ## Production checklist (high level)
 
@@ -481,9 +495,13 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 - **Supabase auth config** is code: rerun
   `scripts/oneshot/configure-supabase-auth.ts` after editing templates,
   Site URL, or SMTP.
-- **Cloudflare plan**: workers run on the free Browser Rendering allowance
-  (about 10 browser-minutes/day, roughly 3-5 arm runs). Upgrade to Workers
-  Paid before real volume; it is the only remaining infra checklist item.
+- **Render sidecar**: deploy it (`vps/render/scripts/deploy.sh`), point a
+  Cloudflare Tunnel hostname at `127.0.0.1:8085`, and set `RENDER_URL` +
+  `RENDER_TOKEN` on the apply-arm worker and in Vercel. Without it arms cannot
+  run: there is no browser anywhere else.
+- **Cloudflare plan**: the free plan is fine. Workers Paid was only ever needed
+  for Browser Rendering minutes; revisit when run volume nears the free tier's
+  3,000 workflow steps/day (roughly 300-400 arm runs/day).
 
 ## Operating scripts
 
@@ -625,7 +643,8 @@ After returning to main:
 
 ## Roadmap
 
-The full phased build plan lives in [todo.md](todo.md). Phases 0-6 and the
-tier system (pricing table above) are built and live. Open items: the
-Workers Paid upgrade before real arm-run volume, and the launch checklist
-(Stripe live keys + live webhook).
+The full phased build plan lives in [todo.md](todo.md). Phases 0-6, the tier
+system (pricing table above), and the ATS-agnostic expansion (browser sidecar,
+managed applicant email, account vault, Workday) are built. Open items: deploying
+the sidecar and running the live Workday smoke, re-homing the interactive-captcha
+solver, and the launch checklist (Stripe live keys + live webhook).

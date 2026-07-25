@@ -5,10 +5,10 @@
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "routes": [{ "pattern": "arm.jobarms.com", "custom_domain": true }],
-  // Browser Rendering + Workflows require the Workers Paid plan. CI's
-  // workers-deploy job is gated on CLOUDFLARE_API_TOKEN (Phase 3), so this
-  // config can carry the bindings before the upgrade happens.
-  "browser": { "binding": "BROWSER" },
+  // No Browser Rendering binding: the browser lives in vps/render, because a
+  // per-phase throwaway browser could not hold the logged-in session that
+  // account-gated and multi-page ATSes require. This worker is the durable
+  // orchestrator and calls the sidecar over HTTPS.
   "workflows": [
     {
       "name": "apply-run",
@@ -17,7 +17,7 @@
     }
   ],
   // Secrets (wrangler secret put): ARM_WORKER_SHARED_SECRET, SUPABASE_URL,
-  // SUPABASE_SECRET_KEY, GEMINI_API_KEY.
+  // SUPABASE_SECRET_KEY, GEMINI_API_KEY, RENDER_URL, RENDER_TOKEN.
   "observability": {
     "enabled": true
   }

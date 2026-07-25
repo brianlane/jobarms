@@ -79,10 +79,9 @@ Repo scaffold:
 
 ## Phase 3 - Apply arm (the product)
 
-- [ ] **Manual: upgrade Cloudflare to Workers Paid** ($5/mo). The workers
-      deployed and run on the free allowance (Browser Rendering free tier =
-      10 browser-minutes/day, roughly 3-5 arm runs); upgrade before real
-      usage volume. This is the ONLY remaining Cloudflare item.
+- [x] ~~Upgrade Cloudflare to Workers Paid~~ - no longer needed; Browser
+      Rendering is gone (see the sidecar below) and the free plan covers
+      Workflows at our volume.
 - [x] CLOUDFLARE_API_TOKEN → GitHub secret (`jobarms-ci`, minted Jul 22;
       CI workers-deploy verified green on run 29984023489)
 - [x] `wrangler secret put` on both workers (apply-arm:
@@ -92,7 +91,8 @@ Repo scaffold:
 - [x] Schema: jobs, applications, application_runs (+ screenshots bucket)
 - [x] `workers/apply-arm`: ApplyRunWorkflow (extract form → Gemini answers →
       fill + screenshot → review gate (waitForEvent, 7d) → submit → verify)
-- [x] Browser Rendering (Playwright) session management
+- [x] ~~Browser Rendering (Playwright) session management~~ - replaced by the
+      persistent `vps/render` sidecar; a per-phase browser could not hold a login
 - [x] ATS adapters: Greenhouse + Lever
 - [x] App: paste-a-job-URL → create application + dispatch arm run
 - [x] App ↔ worker auth (ARM_WORKER_SHARED_SECRET both directions)
@@ -226,9 +226,22 @@ Phase B - `vps/render` sidecar (the controllable browser):
 - [ ] **Manual**: run `scripts/deploy.sh` against the internal KVM1, point a
       Cloudflare Tunnel hostname (browser.jobarms.com) at 127.0.0.1:8085, and set
       `RENDER_URL` + `RENDER_TOKEN` in Vercel and on the apply-arm worker
-- [ ] Point the apply-arm Workflow's browser steps at the sidecar and delete the
-      Browser Rendering binding (next PR: the seam is built, the cutover is not)
+- [x] Cut the apply-arm Workflow over: every browser phase is now an HTTPS call
+      to the sidecar, the `BROWSER` binding is gone, and the worker bundle
+      dropped to ~26 KiB with only the Workflow binding left
+- [x] Workflow gained the account steps: `ensure account`, a 30-minute
+      `waitForEvent("account-verified")` park, and a
+      `POST /runs/:id/account-verified` endpoint for the app to release it
+- [x] Vision recovery spans the boundary: the sidecar returns `form_not_found`
+      WITH a screenshot, the worker asks Gemini what to try, and calls back with
+      that strategy, so AI credentials stay on the edge
 - [ ] Residential/mobile proxy per run, once a hard invisible block is observed
+- [ ] **Re-home the interactive-captcha solver.** It was deleted with the old
+      browser: solving needs to click the live page (now the sidecar's) and the
+      sidecar deliberately holds no AI key. The sidecar DETECTS a challenge so
+      `captcha_blocked` stays an honest outcome, but nothing tries to solve one
+      right now. Owning the fingerprint (above) matters more for the invisible
+      checks that actually block us.
 
 Phase C - account vault + verification loop:
 
