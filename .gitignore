@@ -34,6 +34,10 @@ workers/**/.dev.vars
 .wrangler/
 workers/**/.wrangler/
 
+# Render sidecar (vps/render): build output and the local coverage scratch dir
+vps/render/dist/
+vps/render/cov/
+
 # Misc
 *.tsbuildinfo
 .vercel

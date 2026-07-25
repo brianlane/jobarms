@@ -208,16 +208,27 @@ Phase A - managed applicant email:
 
 Phase B - `vps/render` sidecar (the controllable browser):
 
-- [ ] Express + Playwright service, bearer auth, SSRF guard, rate limit,
+- [x] Express + Playwright service, bearer auth, SSRF guard, rate limit,
       HTTP-200 structured errors (a Tunnel replaces origin 5xx bodies)
-- [ ] Persistent per-user-per-tenant contexts with `storageState` on disk so a
-      logged-in session survives restarts and the review gate
-- [ ] Host on newCoworker's internal KVM1 to start (bind 127.0.0.1, its OWN
-      tunnel hostname + bearer, ~2 contexts); dedicated box when volume needs it
-- [ ] Migrate browser.ts (reachForm, playbooks, vision recovery, combobox and
-      checkbox filling) into the sidecar and point ALL browser steps at it
-- [ ] Retire the Browser Rendering binding; the apply-arm Worker keeps only its
-      durable-orchestration role (review gate, verification wait, retries)
+- [x] Persistent per-user-per-tenant contexts with `storageState` on disk so a
+      logged-in session survives restarts and the review gate. Map slots are
+      reserved synchronously so concurrent first-callers cannot leak a duplicate
+      context (and a duplicate candidate account)
+- [x] Migrated browser logic (reachForm, playbooks, vision recovery, combobox and
+      checkbox filling, resume attach) with playbook + vision INJECTED, so the
+      box holds no Supabase or Gemini credentials
+- [x] Account handling: sign in, create account, detect the email-verification
+      wall, finish a verification by link or one-time code
+- [x] Multi-page wizard support (per-page extract/fill, deduped into one review
+      payload, bounded page walk)
+- [x] `scripts/deploy.sh` (idempotent systemd install, loopback-only bind,
+      hardened unit) + CI `render-check` job with a 100% coverage gate
+- [ ] **Manual**: run `scripts/deploy.sh` against the internal KVM1, point a
+      Cloudflare Tunnel hostname (browser.jobarms.com) at 127.0.0.1:8085, and set
+      `RENDER_URL` + `RENDER_TOKEN` in Vercel and on the apply-arm worker
+- [ ] Point the apply-arm Workflow's browser steps at the sidecar and delete the
+      Browser Rendering binding (next PR: the seam is built, the cutover is not)
+- [ ] Residential/mobile proxy per run, once a hard invisible block is observed
 
 Phase C - account vault + verification loop:
 
