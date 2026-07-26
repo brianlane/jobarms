@@ -54,6 +54,23 @@ describe("DashboardLayout", () => {
     holder.user = null;
     await expect(DashboardLayout({ children: "x" })).rejects.toThrow("REDIRECT:/login");
   });
+
+  it("offers the console to an operator, so /admin is not typed from memory", async () => {
+    process.env.ADMIN_EMAIL = "ops@jobarms.com";
+    holder.user = { id: "admin-1", email: "ops@jobarms.com" };
+    render(await DashboardLayout({ children: "x" }));
+
+    const link = screen.getByText("Admin console").closest("a");
+    expect(link).toHaveAttribute("href", "/admin/dashboard");
+    delete process.env.ADMIN_EMAIL;
+  });
+
+  it("shows no console link to a normal user", async () => {
+    process.env.ADMIN_EMAIL = "ops@jobarms.com";
+    render(await DashboardLayout({ children: "x" }));
+    expect(screen.queryByText("Admin console")).not.toBeInTheDocument();
+    delete process.env.ADMIN_EMAIL;
+  });
 });
 
 describe("DashboardPage", () => {

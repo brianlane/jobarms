@@ -42,6 +42,32 @@ describe("AuthForm login", () => {
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/dashboard/billing"));
   });
 
+  it("lets the server pick the landing page when no next was asked for", async () => {
+    // The admin allowlist is server-only, so this form cannot tell an operator
+    // from a normal user; /auth/landing is what makes that decision.
+    search.params = new URLSearchParams();
+    auth.signInWithPassword.mockResolvedValueOnce({ error: null });
+    render(<AuthForm mode="login" />);
+    fill();
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/auth/landing"));
+  });
+
+  it("routes a magic link through the same landing decision", async () => {
+    search.params = new URLSearchParams();
+    auth.signInWithOtp.mockResolvedValueOnce({ error: null });
+    render(<AuthForm mode="login" />);
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "a@b.com" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /magic link/i }));
+
+    await waitFor(() => expect(auth.signInWithOtp).toHaveBeenCalled());
+    expect(auth.signInWithOtp.mock.calls[0][0].options.emailRedirectTo).toContain(
+      encodeURIComponent("/auth/landing")
+    );
+  });
+
   it("shows an error on bad credentials", async () => {
     auth.signInWithPassword.mockResolvedValueOnce({ error: { message: "Invalid login" } });
     render(<AuthForm mode="login" />);
