@@ -9,7 +9,15 @@ import { safeNextPath } from "@/lib/redirect";
 export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = safeNextPath(searchParams.get("next"));
+  const requested = searchParams.get("next");
+  const next = safeNextPath(requested);
+  /**
+   * With no explicit target, hand the decision to the server: the admin
+   * allowlist is server-only, so this form cannot tell an operator from a normal
+   * user, and /auth/landing routes each to the right place. An explicit `next`
+   * always wins, so a link asking for a specific page still gets it.
+   */
+  const landing = requested ? next : "/auth/landing";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,7 +48,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
       if (error) {
         setError(error.message);
       } else {
-        router.push(next);
+        router.push(landing);
         router.refresh();
         return;
       }
@@ -58,7 +66,9 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     const supabase = createSupabaseBrowserClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(next)}` }
+      options: {
+        emailRedirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(landing)}`
+      }
     });
     if (error) setError(error.message);
     else setMessage("Magic link sent. Check your email.");
