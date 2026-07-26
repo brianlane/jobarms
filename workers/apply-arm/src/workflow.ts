@@ -166,6 +166,17 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           if (!result.ok) throw renderFailure(result, "fill for review");
 
           await saveShot(env, params, "filled", result.data.screenshotBase64);
+          // A resume that did not attach leaves a REQUIRED field empty. Logged
+          // BEFORE the review request so the timeline reads in order and the user
+          // sees it while deciding, rather than discovering it after approving.
+          if (result.data.resume === "failed") {
+            await logStep(
+              env,
+              params.runId,
+              "resume_not_attached",
+              "this employer's upload widget refused the file, so attach it yourself before submitting"
+            );
+          }
           // error: null clears residue from a transient earlier attempt
           // (e.g. a mid-run worker deploy) once the run recovers.
           await updateRun(env, params.runId, { status: "needs_review", error: null });

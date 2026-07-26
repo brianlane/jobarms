@@ -385,7 +385,10 @@ export function createApp(deps: AppDeps = {}): Express {
             const adapter = ADAPTERS[parsed.ats];
 
             // Resume first: some ATSes autofill from it and typed answers must win.
-            await attachResume(page, resume);
+            // The outcome rides along on every reply: a resume that did not attach
+            // leaves a REQUIRED field empty, and the review gate can only warn
+            // about what it is told.
+            const resumeOutcome = await attachResume(page, resume);
             await fillAnswers(page, reached.scope, answers);
 
             // Multi-page: fill each page, then advance. The same answer list is
@@ -403,6 +406,7 @@ export function createApp(deps: AppDeps = {}): Express {
             if (!submit) {
               return {
                 outcome: "filled" as SubmitOutcome,
+                resume: resumeOutcome,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -429,6 +433,7 @@ export function createApp(deps: AppDeps = {}): Express {
             if (await adapter.confirmSubmitted(page).catch(() => false)) {
               return {
                 outcome: "submitted" as SubmitOutcome,
+                resume: resumeOutcome,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -448,6 +453,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 if (await adapter.confirmSubmitted(page).catch(() => false)) {
                   return {
                     outcome: "submitted" as SubmitOutcome,
+                    resume: resumeOutcome,
                     pages,
                     screenshotBase64: await shot(page)
                   };
@@ -458,6 +464,7 @@ export function createApp(deps: AppDeps = {}): Express {
               // done and the user is told to finish on the employer's site.
               return {
                 outcome: "captcha_blocked" as SubmitOutcome,
+                resume: resumeOutcome,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -465,6 +472,7 @@ export function createApp(deps: AppDeps = {}): Express {
 
             return {
               outcome: "unconfirmed" as SubmitOutcome,
+              resume: resumeOutcome,
               pages,
               screenshotBase64: await shot(page)
             };

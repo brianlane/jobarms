@@ -134,6 +134,38 @@ describe("the happy paths", () => {
     expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "needs_review", error: null });
   });
 
+  it("tells the reviewer when the resume never attached", async () => {
+    // A required field left empty is exactly what the review gate exists to
+    // catch, and it can only catch what the run says out loud.
+    render.fillForm
+      .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1, resume: "failed" }))
+      .mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+
+    await run(params({ autonomy: "review_gate" }), async () => ({ payload: {} }));
+
+    expect(db.logStep).toHaveBeenCalledWith(
+      env,
+      "r1",
+      "resume_not_attached",
+      expect.stringContaining("attach it yourself")
+    );
+  });
+
+  it("stays quiet about the resume when it did attach", async () => {
+    render.fillForm
+      .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1, resume: "attached" }))
+      .mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+
+    await run(params({ autonomy: "review_gate" }), async () => ({ payload: {} }));
+
+    expect(db.logStep).not.toHaveBeenCalledWith(
+      env,
+      "r1",
+      "resume_not_attached",
+      expect.anything()
+    );
+  });
+
   it("submits the user's edited answers, not the generated ones", async () => {
     const edited = [{ name: "email", label: "Email", value: "edited@b.com" }];
     render.fillForm

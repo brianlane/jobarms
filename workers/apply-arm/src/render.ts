@@ -201,6 +201,12 @@ export function extractForm(
 export interface FillResponse {
   outcome: "filled" | "submitted" | "captcha_blocked" | "unconfirmed";
   pages: number;
+  /**
+   * What became of the resume. "failed" means a REQUIRED field is empty on a form
+   * we otherwise filled, which the run must say out loud rather than let a user
+   * discover after approving.
+   */
+  resume?: "not_requested" | "attached" | "failed";
   screenshotBase64?: string | null;
 }
 
