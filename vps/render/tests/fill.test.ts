@@ -462,22 +462,65 @@ describe("attachResume", () => {
     expect(input.setInputFiles).not.toHaveBeenCalled();
   });
 
-  it("does nothing when the form has no file input", async () => {
+  it("reports failure when the form has no file input", async () => {
     await expect(
       attachResume(asPage(fakePage()), { contentBase64: PDF, fileName: "", mimeType: "" })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("failed");
   });
 
-  it("leaves a non-plain upload widget for the review gate", async () => {
+  it("reports failure when the widget threw and the input holds nothing", async () => {
     const input = loc({
       count: vi.fn(async () => 1),
       setInputFiles: vi.fn(async () => {
         throw new Error("custom widget");
+      }),
+      evaluate: vi.fn(async () => false)
+    });
+    const page = fakePage({ locators: { 'input[type="file"]': input } });
+    await expect(
+      attachResume(asPage(page), { contentBase64: PDF, fileName: "", mimeType: "" })
+    ).resolves.toBe("failed");
+  });
+
+  it("reports failure when the call SUCCEEDED but no file landed", async () => {
+    // Greenhouse's widget swallows the assignment and re-renders without it, so
+    // "setInputFiles did not throw" is not evidence of anything.
+    const input = loc({ count: vi.fn(async () => 1), evaluate: vi.fn(async () => false) });
+    const page = fakePage({ locators: { 'input[type="file"]': input } });
+
+    await expect(
+      attachResume(asPage(page), { contentBase64: PDF, fileName: "", mimeType: "" })
+    ).resolves.toBe("failed");
+    expect(input.setInputFiles).toHaveBeenCalled();
+  });
+
+  it("reports failure when the input cannot even be inspected", async () => {
+    // A detached input throws on evaluate. Unknown is treated as absent, since
+    // the cost of guessing "attached" is a required field silently empty.
+    const input = loc({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => {
+        throw new Error("detached frame");
       })
     });
     const page = fakePage({ locators: { 'input[type="file"]': input } });
     await expect(
       attachResume(asPage(page), { contentBase64: PDF, fileName: "", mimeType: "" })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("failed");
+  });
+
+  it("reports attached only when the input really holds a file", async () => {
+    const input = loc({ count: vi.fn(async () => 1), evaluate: vi.fn(async () => true) });
+    const page = fakePage({ locators: { 'input[type="file"]': input } });
+    await expect(
+      attachResume(asPage(page), { contentBase64: PDF, fileName: "", mimeType: "" })
+    ).resolves.toBe("attached");
+  });
+
+  it("distinguishes a resume nobody asked for from one that failed", async () => {
+    const page = fakePage();
+    await expect(
+      attachResume(asPage(page), { contentBase64: null, fileName: "", mimeType: "" })
+    ).resolves.toBe("not_requested");
   });
 });

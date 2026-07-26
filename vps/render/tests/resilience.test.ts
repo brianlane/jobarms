@@ -264,8 +264,9 @@ describe("fill resilience", () => {
     expect(box.click).toHaveBeenCalled();
   });
 
-  it("leaves the resume for review when the upload widget rejects", async () => {
+  it("reports the resume as failed when the upload widget rejects", async () => {
     const input = hostileLoc();
+    input.evaluate = vi.fn(async () => false);
     const page = hostilePage({ locators: { 'input[type="file"]': input } });
     await expect(
       attachResume(asPage(page), {
@@ -273,6 +274,6 @@ describe("fill resilience", () => {
         fileName: "",
         mimeType: ""
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("failed");
   });
 });

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { checkboxLabelInPage, comboboxValueInPage, elementInfoInPage } from "../src/fill";
+import {
+  checkboxLabelInPage,
+  comboboxValueInPage,
+  elementInfoInPage,
+  fileInputHasFileInPage
+} from "../src/fill";
 import { visibleTextInPage } from "../src/account";
 import { num } from "../src/config";
 
@@ -205,5 +210,14 @@ describe("num", () => {
   it("falls back on a non-numeric value rather than yielding NaN", () => {
     process.env.RENDER_TEST_NUM = "soon";
     expect(num("RENDER_TEST_NUM", 7)).toBe(7);
+  });
+});
+
+describe("fileInputHasFileInPage", () => {
+  it("is true only when the input holds at least one file", () => {
+    expect(fileInputHasFileInPage({ files: { length: 1 } })).toBe(true);
+    expect(fileInputHasFileInPage({ files: { length: 0 } })).toBe(false);
+    // A widget that re-rendered the input away leaves no files collection at all.
+    expect(fileInputHasFileInPage({})).toBe(false);
   });
 });

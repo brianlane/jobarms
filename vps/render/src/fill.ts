@@ -70,6 +70,12 @@ export const checkboxLabelInPage = (node: any): string => {
   return node.getAttribute("aria-label") ?? "";
 };
 
+/**
+ * Runs IN THE PAGE. True when a file input actually holds a file. Exported so
+ * tests can drive it against a fake node, like the other in-page callbacks.
+ */
+export const fileInputHasFileInPage = (node: any): boolean => (node.files?.length ?? 0) > 0;
+
 /** Runs IN THE PAGE. The element facts the filler branches on. */
 export const elementInfoInPage = (node: any) => ({
   tag: node.tagName.toLowerCase(),
@@ -309,22 +315,32 @@ export async function fillAnswers(page: Page, scope: string, answers: Answer[]):
 /** Longest resume we will accept, decoded. Well past any real PDF or DOCX. */
 const RESUME_MAX_BYTES = 15 * 1024 * 1024;
 
+/** What became of the resume, so the caller can say so rather than assume. */
+export type ResumeOutcome = "not_requested" | "attached" | "failed";
+
 /**
  * Attach the resume to the form's file input.
  *
  * Runs BEFORE typed answers because some ATSes autofill fields from the resume,
- * and we want the arm's answers to win. No-ops when the request carried no
- * content. The bytes arrive in the request (see ResumeRef): this service makes no
- * outbound requests of its own, so it can never be used as a fetcher.
+ * and we want the arm's answers to win. The bytes arrive in the request (see
+ * ResumeRef): this service makes no outbound requests of its own, so it can never
+ * be used as a fetcher.
+ *
+ * The result is CONFIRMED against the input rather than inferred from the absence
+ * of an exception. Greenhouse's current uploader is a custom widget whose handler
+ * throws on a plain `setInputFiles` and then removes the input, so the call can
+ * appear to succeed while the form ends up holding no file at all. A required
+ * field silently empty is exactly the thing a review gate exists to catch, and it
+ * can only catch what it is told.
  */
-export async function attachResume(page: Page, resume: ResumeRef): Promise<void> {
-  if (!resume.contentBase64) return;
+export async function attachResume(page: Page, resume: ResumeRef): Promise<ResumeOutcome> {
+  if (!resume.contentBase64) return "not_requested";
   const buffer = Buffer.from(resume.contentBase64, "base64");
   // Base64 decoding is lenient, so an empty result means the payload was junk.
-  if (buffer.length === 0 || buffer.length > RESUME_MAX_BYTES) return;
+  if (buffer.length === 0 || buffer.length > RESUME_MAX_BYTES) return "failed";
 
   const fileInput = page.locator('input[type="file"]').first();
-  if ((await fileInput.count()) === 0) return;
+  if ((await fileInput.count()) === 0) return "failed";
   try {
     await fileInput.setInputFiles({
       name: resume.fileName || "resume.pdf",
@@ -334,6 +350,23 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<void>
     // Give ATS-side resume parsing a moment before typed answers land.
     await page.waitForTimeout(3000);
   } catch {
-    // Upload widget is not a plain input - leave it for the review gate.
+    // Upload widget is not a plain input; fall through to the check below, which
+    // is the only thing that actually knows whether a file landed.
   }
+  return (await resumeIsPresent(page)) ? "attached" : "failed";
+}
+
+/**
+ * Does the form hold a file now? Asked of the live input, because the widget may
+ * have been re-rendered or removed underneath us.
+ */
+async function resumeIsPresent(page: Page): Promise<boolean> {
+  const present = await page
+    .locator('input[type="file"]')
+    .first()
+    .evaluate(fileInputHasFileInPage)
+    .catch(() => false);
+  // Strict: anything but a definite yes is treated as no, because the cost of a
+  // false "attached" is a required field silently empty.
+  return present === true;
 }
