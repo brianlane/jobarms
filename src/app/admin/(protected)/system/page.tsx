@@ -130,14 +130,15 @@ export default async function AdminSystemPage() {
         ) : (
           <>
             <p className="mt-4 mb-2 text-xs text-slate-500">
-              Stored but never relayed. The provider&apos;s reason is in the function logs; only the
-              sender domain is shown here, never a subject or body.
+              Stored but never relayed, with the reason the provider gave. Only the sender domain is
+              shown, never a subject or body.
             </p>
             <ul className="space-y-1.5">
               {mail.recentFailures.map((failure) => (
-                <li key={failure.at} className="flex items-center gap-2 text-sm">
+                <li key={failure.at} className="flex flex-wrap items-center gap-2 text-sm">
                   <Badge tone="bad">failed</Badge>
                   <span className="font-mono text-xs text-slate-500">{failure.fromDomain}</span>
+                  <span className="text-xs text-slate-400">{failure.reason}</span>
                   <span className="ml-auto text-xs text-slate-500">{timeAgo(failure.at, now)}</span>
                 </li>
               ))}

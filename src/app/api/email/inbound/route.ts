@@ -107,7 +107,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, skipped: "duplicate" });
   }
 
-  const forwarded = await forwardInboundEmail({
+  const forward = await forwardInboundEmail({
     to: profile.email as string,
     alias,
     fromAddress,
@@ -116,9 +116,16 @@ export async function POST(request: Request) {
     text,
     ...(html ? { html } : {})
   });
-  if (forwarded) {
-    await service.from("inbound_emails").update({ forwarded: true }).eq("id", inserted.id);
-  }
+  // Written either way, so a refusal leaves its reason on the row instead of
+  // only in the logs. Whoever looks at /admin/system next gets the answer, not
+  // just the alarm.
+  await service
+    .from("inbound_emails")
+    .update({
+      forwarded: forward.ok,
+      forward_error: forward.ok ? null : forward.reason
+    })
+    .eq("id", inserted.id);
 
   // Act on a verification: hand the link/code to the sidecar so it completes the
   // confirmation inside the session that created the account, then release the
@@ -135,7 +142,10 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    forwarded,
+    forwarded: forward.ok,
+    // Echoed so a probe against this endpoint sees the reason immediately rather
+    // than having to go and read the row it just wrote.
+    ...(forward.ok ? {} : { forwardError: forward.reason }),
     verification: Boolean(verification.link || verification.code),
     consumed
   });

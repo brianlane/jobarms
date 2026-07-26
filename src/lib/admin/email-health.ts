@@ -19,11 +19,18 @@ export interface InboundEmailRow {
   created_at: string;
   from_domain: string;
   forwarded: boolean;
+  /** Provider reason it was refused. Null on older rows and on success. */
+  forward_error?: string | null;
 }
 
 export interface ForwardFailure {
   at: string;
   fromDomain: string;
+  /**
+   * Why the provider refused. Rows written before the column existed have none,
+   * hence the fallback rather than a promise the data cannot keep.
+   */
+  reason: string;
 }
 
 export interface InboundEmailHealth {
@@ -65,7 +72,11 @@ export function summarizeInboundEmail(
 
     failed7d += 1;
     if (age <= DAY_MS) failed24h += 1;
-    failures.push({ at: row.created_at, fromDomain: row.from_domain || "unknown" });
+    failures.push({
+      at: row.created_at,
+      fromDomain: row.from_domain || "unknown",
+      reason: row.forward_error?.trim() || "no reason recorded"
+    });
   }
 
   failures.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));

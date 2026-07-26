@@ -9,8 +9,11 @@ import { Resend } from "resend";
 /** Longest body we relay in a forward; beyond this the text is clipped. */
 const FORWARD_TEXT_MAX = 200_000;
 
+/** Longest reason we keep. Provider messages are short; a runaway one is not. */
+const REASON_MAX = 300;
+
 /**
- * Whether the provider ACCEPTED the message, naming the reason when it did not.
+ * Did the provider ACCEPT the message, and if not, why.
  *
  * The Resend SDK does not throw on a rejected send: `emails.send` resolves with
  * `{ data, error }`, where error carries codes like `invalid_from_address`,
@@ -18,17 +21,29 @@ const FORWARD_TEXT_MAX = 200_000;
  * therefore reported every send as a success, so a forward the provider refused
  * was recorded against the message as delivered and nothing ever surfaced it.
  *
- * The reason is logged rather than returned because callers only need the
- * boolean, and a rejection is worth reading in the function logs. Only the
- * provider's own code and message are logged, never the addresses.
+ * The reason is both logged and RETURNED. Logging alone meant an operator had to
+ * already suspect a problem and go looking; returning it lets the reason sit
+ * next to the message it belongs to. Only the provider's own code and message
+ * travel, never the addresses.
  */
-function accepted(
+function outcomeOf(
   what: string,
   result: { error?: { name?: string; message?: string } | null }
-): boolean {
-  if (!result.error) return true;
-  console.error(`${what} rejected by email provider`, result.error.name, result.error.message);
-  return false;
+): SendOutcome {
+  if (!result.error) return { ok: true };
+  const { name, message } = result.error;
+  console.error(`${what} rejected by email provider`, name, message);
+  return { ok: false, reason: [name, message].filter(Boolean).join(": ").slice(0, REASON_MAX) };
+}
+
+/**
+ * A send either happened or it did not, and a failure always says why. Deliberately
+ * not a bare boolean: the boolean is what let a refused forward look delivered.
+ */
+export type SendOutcome = { ok: true } | { ok: false; reason: string };
+
+function unattempted(reason: string): SendOutcome {
+  return { ok: false, reason };
 }
 
 /** Strip everything with meaning in an address header, then collapse space. */
@@ -93,13 +108,15 @@ export interface ForwardArgs {
  * user's inbox and hitting reply goes straight back to the recruiter, never
  * through us.
  *
- * Returns false (never throws) when email is unconfigured or the provider
- * fails: the message is already stored, so a failed forward is a degraded
- * notification, not lost mail.
+ * Never throws. A failure comes back with its reason: the message is already
+ * stored, so a failed forward is a degraded notification rather than lost mail,
+ * and the caller keeps the reason on the row for whoever looks later.
  */
-export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
+export async function forwardInboundEmail(args: ForwardArgs): Promise<SendOutcome> {
   const key = process.env.RESEND_API_KEY;
-  if (!key || !args.to || !args.alias) return false;
+  if (!key) return unattempted("email_unconfigured");
+  if (!args.to) return unattempted("no_recipient_on_file");
+  if (!args.alias) return unattempted("no_alias");
 
   const text = args.text.slice(0, FORWARD_TEXT_MAX);
   try {
@@ -117,11 +134,16 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
         text ||
         "This message arrived at the email JobArms applies with and had no text body."
     });
-    return accepted("inbound forward", result);
-  } catch {
-    return false;
+    return outcomeOf("inbound forward", result);
+  } catch (err) {
+    return unattempted(String(err).slice(0, REASON_MAX));
   }
 }
+
+/**
+ * Welcome mail. Still a boolean: nothing persists the reason for this one, and
+ * a rejection is logged by `outcomeOf` either way.
+ */
 export async function sendWelcomeEmail(to: string, firstName: string): Promise<boolean> {
   const key = process.env.RESEND_API_KEY;
   if (!key || !to) return false;
@@ -144,7 +166,7 @@ export async function sendWelcomeEmail(to: string, firstName: string): Promise<b
         "- JobArms"
       ].join("\n")
     });
-    return accepted("welcome email", result);
+    return outcomeOf("welcome email", result).ok;
   } catch {
     return false;
   }
