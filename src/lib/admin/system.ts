@@ -130,6 +130,15 @@ export interface ServiceProbe {
   /** HTTP status when one came back, else null. */
   status: number | null;
   detail: string;
+  /** Sidecar only: what /health reported, when it answered with a usable body. */
+  health?: RenderHealth | null;
+}
+
+export interface RenderHealth {
+  /** Cached browser contexts, one per user and tenant. */
+  sessions: number;
+  /** Phases started and not yet settled. */
+  jobs: number;
 }
 
 const PROBE_TIMEOUT_MS = 4000;
@@ -167,13 +176,58 @@ export async function probeOrigin(label: string, url: string | null): Promise<Se
   }
 }
 
+/**
+ * The sidecar's own health, not merely whether the origin answers.
+ *
+ * `/health` is its one unauthenticated route and it reports cached browser
+ * contexts and phases in flight. Both matter because the async job protocol
+ * introduced a failure a status code cannot show: a wedged Chromium keeps
+ * answering 200 while jobs accumulate and never settle. "Up" should mean
+ * working, not merely listening.
+ */
+export async function probeRender(url: string | null): Promise<ServiceProbe> {
+  const label = "Render sidecar";
+  if (!url) {
+    return { label, url: null, reachable: false, status: null, detail: "not configured", health: null };
+  }
+
+  const endpoint = `${url.replace(/\/+$/, "")}/health`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    });
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const sessions = typeof body?.sessions === "number" ? body.sessions : null;
+    const jobs = typeof body?.jobs === "number" ? body.jobs : null;
+    const readable = sessions !== null && jobs !== null;
+
+    return {
+      label,
+      url: endpoint,
+      reachable: true,
+      status: response.status,
+      detail: readable
+        ? `HTTP ${response.status}, ${sessions} cached, ${jobs} in flight`
+        : `HTTP ${response.status}`,
+      health: readable ? { sessions, jobs } : null
+    };
+  } catch (err) {
+    return {
+      label,
+      url: endpoint,
+      reachable: false,
+      status: null,
+      detail: err instanceof Error ? err.message : "unreachable",
+      health: null
+    };
+  }
+}
+
 export async function probeServices(): Promise<ServiceProbe[]> {
   const arm = process.env.ARM_WORKER_URL?.trim() || null;
   const render = process.env.RENDER_URL?.trim() || null;
-  return Promise.all([
-    probeOrigin("Apply-arm worker", arm),
-    probeOrigin("Render sidecar", render)
-  ]);
+  return Promise.all([probeOrigin("Apply-arm worker", arm), probeRender(render)]);
 }
 
 // ─── Stripe webhook freshness ───────────────────────────────────────────────

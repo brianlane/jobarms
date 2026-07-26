@@ -3,10 +3,15 @@ import {
   checkEnv,
   ENV_GROUPS,
   probeOrigin,
+  probeRender,
   probeServices,
   summarizeEnv,
   webhookFreshness
 } from "@/lib/admin/system";
+
+/** A sidecar answering /health with the body it really returns. */
+const healthy = (body: unknown, status = 200) =>
+  vi.fn(async (url: string) => ({ url, status, json: async () => body }));
 
 const NOW = new Date("2026-07-15T12:00:00Z");
 
@@ -101,14 +106,77 @@ describe("probeOrigin", () => {
   });
 });
 
+describe("probeRender", () => {
+  it("reports not configured without a url", async () => {
+    const probe = await probeRender(null);
+    expect(probe).toMatchObject({ reachable: false, detail: "not configured", health: null });
+  });
+
+  it("reads sessions and phases in flight from the health body", async () => {
+    vi.stubGlobal("fetch", healthy({ ok: true, sessions: 3, jobs: 2 }));
+    const probe = await probeRender("https://browser.jobarms.com");
+
+    expect(probe.url).toBe("https://browser.jobarms.com/health");
+    expect(probe.health).toEqual({ sessions: 3, jobs: 2 });
+    // The counts are the point: a wedged browser still answers 200.
+    expect(probe.detail).toBe("HTTP 200, 3 cached, 2 in flight");
+  });
+
+  it("strips a trailing slash rather than asking for //health", async () => {
+    const fetchMock = healthy({ sessions: 0, jobs: 0 });
+    vi.stubGlobal("fetch", fetchMock);
+    await probeRender("https://browser.jobarms.com///");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/health");
+  });
+
+  it("stays up, without counts, when the body is not the shape we expect", async () => {
+    vi.stubGlobal("fetch", healthy({ ok: true }, 200));
+    const probe = await probeRender("https://browser.jobarms.com");
+    expect(probe).toMatchObject({ reachable: true, detail: "HTTP 200", health: null });
+  });
+
+  it("stays up when the body is not JSON at all", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        status: 502,
+        json: async () => {
+          throw new Error("not json");
+        }
+      }))
+    );
+    const probe = await probeRender("https://browser.jobarms.com");
+    expect(probe).toMatchObject({ reachable: true, status: 502, health: null });
+  });
+
+  it("reports the error message when the sidecar is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("tunnel down");
+    }));
+    expect(await probeRender("https://browser.jobarms.com")).toMatchObject({
+      reachable: false,
+      detail: "tunnel down",
+      health: null
+    });
+  });
+
+  it("handles a non-Error rejection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw "socket hang up";
+    }));
+    expect((await probeRender("https://browser.jobarms.com")).detail).toBe("unreachable");
+  });
+});
+
 describe("probeServices", () => {
   it("probes the arm worker and the render sidecar", async () => {
     process.env.ARM_WORKER_URL = "https://arm.jobarms.com";
     process.env.RENDER_URL = "https://browser.jobarms.com";
-    vi.stubGlobal("fetch", vi.fn(async () => ({ status: 404 })));
+    vi.stubGlobal("fetch", healthy({ ok: true, sessions: 1, jobs: 0 }, 404));
     const probes = await probeServices();
     expect(probes.map((probe) => probe.label)).toEqual(["Apply-arm worker", "Render sidecar"]);
     expect(probes.every((probe) => probe.reachable)).toBe(true);
+    expect(probes[1].health).toEqual({ sessions: 1, jobs: 0 });
   });
 
   it("reports a blank url as unconfigured", async () => {

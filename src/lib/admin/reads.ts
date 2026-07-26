@@ -25,6 +25,7 @@ import {
 } from "@/lib/admin/overview";
 import type { AdminRunRow } from "@/lib/admin/run-stats";
 import type { FieldStatRow, PlaybookRow } from "@/lib/admin/ats-health";
+import type { InboundEmailRow } from "@/lib/admin/email-health";
 import type { SpendEventRow } from "@/lib/admin/spend";
 import type { CatalogJobRow, CompanyRow } from "@/lib/admin/catalog";
 
@@ -287,6 +288,31 @@ export async function loadSpendEvents(
     .order("created_at", { ascending: false })
     .limit(SPEND_ROW_CAP);
   return (data ?? []) as SpendEventRow[];
+}
+
+export const INBOUND_EMAIL_ROW_CAP = 2000;
+export const INBOUND_EMAIL_WINDOW_DAYS = 7;
+
+/**
+ * Managed-alias mail for the forward-health panel.
+ *
+ * The column list is deliberately narrow: timestamp, sender DOMAIN, and whether
+ * the forward went through. `subject` and `body_text` are users' real
+ * correspondence and must not cross into an operator screen, so they are not
+ * selected at all rather than selected and then dropped.
+ */
+export async function loadInboundEmails(
+  days = INBOUND_EMAIL_WINDOW_DAYS,
+  now: Date = new Date()
+): Promise<InboundEmailRow[]> {
+  const supabase = createSupabaseServiceClient();
+  const { data } = await supabase
+    .from("inbound_emails")
+    .select("created_at, from_domain, forwarded")
+    .gte("created_at", windowStartIso(days, now))
+    .order("created_at", { ascending: false })
+    .limit(INBOUND_EMAIL_ROW_CAP);
+  return (data ?? []) as InboundEmailRow[];
 }
 
 export const PLAYBOOK_ROW_CAP = 500;
