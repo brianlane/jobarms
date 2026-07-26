@@ -7,6 +7,7 @@
  * what it runs against.
  */
 import type { Page } from "playwright";
+import { scopedSelector } from "./scope.js";
 import type { FormField } from "./types.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -155,7 +156,7 @@ export const collectFieldsInPage = (elements: any[]): FormField[] => {
 export async function collectFields(page: Page, scope: string): Promise<FormField[]> {
   try {
     return await page.$$eval(
-      `${scope} input, ${scope} textarea, ${scope} select`,
+      scopedSelector(scope, ["input", "textarea", "select"]),
       collectFieldsInPage
     );
   } catch {
