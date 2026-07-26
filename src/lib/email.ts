@@ -10,14 +10,51 @@ import { Resend } from "resend";
 const FORWARD_TEXT_MAX = 200_000;
 
 /**
- * A safe From display name built from the original sender's address. Characters
- * with meaning in an address header (quotes, angle brackets, commas, colons,
- * semicolons) are stripped rather than escaped, so a crafted sender address can
- * never inject a second recipient or break the header.
+ * Whether the provider ACCEPTED the message, naming the reason when it did not.
+ *
+ * The Resend SDK does not throw on a rejected send: `emails.send` resolves with
+ * `{ data, error }`, where error carries codes like `invalid_from_address`,
+ * `validation_error`, and `daily_quota_exceeded`. Discarding the return value
+ * therefore reported every send as a success, so a forward the provider refused
+ * was recorded against the message as delivered and nothing ever surfaced it.
+ *
+ * The reason is logged rather than returned because callers only need the
+ * boolean, and a rejection is worth reading in the function logs. Only the
+ * provider's own code and message are logged, never the addresses.
+ */
+function accepted(
+  what: string,
+  result: { error?: { name?: string; message?: string } | null }
+): boolean {
+  if (!result.error) return true;
+  console.error(`${what} rejected by email provider`, result.error.name, result.error.message);
+  return false;
+}
+
+/**
+ * A safe From display name built from the original sender's address.
+ *
+ * Two separate constraints meet here.
+ *
+ * Header safety: characters with meaning in an address header (quotes, angle
+ * brackets, commas, colons, semicolons) are stripped rather than escaped, so a
+ * crafted sender address can never inject a second recipient or break the
+ * header.
+ *
+ * Deliverability: the phrase is QUOTED and the `@` is spelled out. A bare email
+ * address sitting in a display name in front of a DIFFERENT real address is
+ * invalid per RFC 5322 (an unquoted phrase cannot contain `@` or `.`) and is
+ * also the precise shape mailbox providers score as spoofing, which is a good
+ * way to have every forward filed as spam.
  */
 function displayName(fromAddress: string): string {
-  const clean = fromAddress.replace(/["'<>,;:\\\r\n]/g, "").trim().slice(0, 120);
-  return clean ? `${clean} via JobArms` : "JobArms";
+  const clean = fromAddress
+    .replace(/["'<>,;:\\\r\n]/g, "")
+    .replace(/@/g, " at ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return `"${clean ? `${clean} via JobArms` : "JobArms"}"`;
 }
 
 export interface ForwardArgs {
@@ -54,7 +91,7 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
   const text = args.text.slice(0, FORWARD_TEXT_MAX);
   try {
     const resend = new Resend(key);
-    await resend.emails.send({
+    const result = await resend.emails.send({
       // From the alias (a jobarms.com address we can authenticate) rather than
       // the original sender, which would fail SPF/DKIM and land in spam. The
       // sender goes in the display name so the user still sees who wrote.
@@ -67,7 +104,7 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
         text ||
         "This message arrived at the email JobArms applies with and had no text body."
     });
-    return true;
+    return accepted("inbound forward", result);
   } catch {
     return false;
   }
@@ -78,7 +115,7 @@ export async function sendWelcomeEmail(to: string, firstName: string): Promise<b
 
   try {
     const resend = new Resend(key);
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from: "JobArms <hello@jobarms.com>",
       to,
       subject: "Your arms are ready 🦾",
@@ -94,7 +131,7 @@ export async function sendWelcomeEmail(to: string, firstName: string): Promise<b
         "- JobArms"
       ].join("\n")
     });
-    return true;
+    return accepted("welcome email", result);
   } catch {
     return false;
   }
