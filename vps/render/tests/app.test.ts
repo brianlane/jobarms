@@ -11,6 +11,7 @@ vi.mock("playwright", () => ({
 import { createApp, type AppDeps } from "../src/app";
 import { CONFIG } from "../src/config";
 import { fakePage, goodFields, loc, TEST_CREDS } from "./helpers/fake-page";
+import { phase } from "./helpers/phase";
 
 const TOKEN = CONFIG.token;
 const JOB_URL = "https://jobs.lever.co/acme/1/apply";
@@ -55,6 +56,15 @@ describe("health and auth", () => {
       (await request(app).post("/extract").set("authorization", "Bearer nope").send({})).status
     ).toBe(401);
   });
+
+  it("reports an unknown job id as a structured error the worker can retry", async () => {
+    const { app } = appWith(formPage());
+    const res = await auth(request(app).get("/jobs/00000000-0000-0000-0000-000000000000"));
+    // 200 with a code, not a 404: the tunnel would keep the status but this is
+    // the shape every other sidecar failure uses.
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ error: "job_not_found" });
+  });
 });
 
 describe("request validation", () => {
@@ -65,7 +75,7 @@ describe("request validation", () => {
       { userId: "u1", jobUrl: JOB_URL },
       { userId: "u1", jobUrl: JOB_URL, ats: "taleo" }
     ]) {
-      const res = await auth(request(app).post("/extract").send(body));
+      const res = await phase(app, "/extract", body);
       expect(res.status, JSON.stringify(body)).toBe(400);
       expect(res.body).toEqual({ error: "invalid_body" });
     }
@@ -73,9 +83,7 @@ describe("request validation", () => {
 
   it("refuses an unsafe URL with a 200-wrapped structured error", async () => {
     const { app } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: "http://127.0.0.1/", ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: "http://127.0.0.1/", ats: "lever" });
     // 200 on purpose: a Tunnel would replace a 5xx body and hide the code.
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ error: "invalid_or_unsafe_url" });
@@ -83,9 +91,7 @@ describe("request validation", () => {
 
   it("validates /fill's answers array", async () => {
     const { app } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/fill").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.status).toBe(400);
   });
 
@@ -104,9 +110,7 @@ describe("request validation", () => {
 describe("POST /session/ensure", () => {
   it("short-circuits for an ATS that needs no account", async () => {
     const { app, runPhase } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/session/ensure").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/session/ensure", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.body).toEqual({ status: "authenticated", accountRequired: false });
     // No browser work at all for Greenhouse/Lever.
     expect(runPhase).not.toHaveBeenCalled();
@@ -114,9 +118,7 @@ describe("POST /session/ensure", () => {
 
   it("requires credentials for an account-gated ATS", async () => {
     const { app } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/session/ensure").send({ userId: "u1", jobUrl: WD_URL, ats: "workday" })
-    );
+    const res = await phase(app, "/session/ensure", { userId: "u1", jobUrl: WD_URL, ats: "workday" });
     expect(res.status).toBe(400);
   });
 
@@ -124,16 +126,12 @@ describe("POST /session/ensure", () => {
     // No credentials form on the page, so the session is already authenticated.
     const page = fakePage({ url: WD_URL, evaluate: () => "" });
     const { app } = appWith(page);
-    const res = await auth(
-      request(app)
-        .post("/session/ensure")
-        .send({
+    const res = await phase(app, "/session/ensure", {
           userId: "u1",
           jobUrl: WD_URL,
           ats: "workday",
           account: TEST_CREDS
-        })
-    );
+        });
     expect(res.body).toMatchObject({ status: "authenticated", accountRequired: true });
     expect(res.body.screenshotBase64).toBe(Buffer.from([1]).toString("base64"));
   });
@@ -143,16 +141,12 @@ describe("POST /session/ensure", () => {
       throw new Error("browser died");
     });
     const app = createApp({ runPhase } as unknown as AppDeps);
-    const res = await auth(
-      request(app)
-        .post("/session/ensure")
-        .send({
+    const res = await phase(app, "/session/ensure", {
           userId: "u1",
           jobUrl: WD_URL,
           ats: "workday",
           account: TEST_CREDS
-        })
-    );
+        });
     expect(res.status).toBe(200);
     expect(res.body.error).toBe("render_failed");
     expect(res.body.detail).toContain("browser died");
@@ -216,9 +210,7 @@ describe("POST /verify", () => {
 describe("POST /extract", () => {
   it("returns the filtered field set, scope, and a screenshot", async () => {
     const { app } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.status).toBe(200);
     // The file input is dropped: attachResume owns it, so it is not a question.
     expect(res.body.fields.map((f: { name: string }) => f.name)).toEqual(["name", "email"]);
@@ -228,9 +220,7 @@ describe("POST /extract", () => {
 
   it("reports form_not_found with a screenshot so the caller can run vision", async () => {
     const { app } = appWith(fakePage({ url: JOB_URL, eval$$: () => [] }));
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.status).toBe(200);
     expect(res.body.error).toBe("form_not_found");
     expect(res.body.detail).toContain("no fields extracted");
@@ -242,9 +232,7 @@ describe("POST /extract", () => {
     const { app } = appWith(
       fakePage({ url: JOB_URL, eval$$: () => [], screenshotThrows: true })
     );
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.body.error).toBe("form_not_found");
     expect(res.body.screenshotBase64).toBeUndefined();
   });
@@ -257,11 +245,7 @@ describe("POST /extract", () => {
       eval$$: () => (call++ === 0 ? [] : goodFields())
     });
     const { app } = appWith(page);
-    const res = await auth(
-      request(app)
-        .post("/extract")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", playbook: { action: "scroll" } })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever", playbook: { action: "scroll" } });
     expect(res.body.recovery).toMatchObject({ source: "playbook" });
     expect(res.body.playbookFailed).toBe(false);
   });
@@ -294,9 +278,7 @@ describe("POST /extract", () => {
     });
     const { app } = appWith(wd);
 
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: WD_URL, ats: "workday" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: WD_URL, ats: "workday" });
 
     expect(res.body.pages).toBe(2);
     // "email" appears on both pages but is asked once.
@@ -311,17 +293,13 @@ describe("POST /extract", () => {
       locators: { '[data-automation-id="pageFooterNextButton"]': next }
     });
     const { app } = appWith(wd);
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: WD_URL, ats: "workday" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: WD_URL, ats: "workday" });
     expect(res.body.pages).toBe(CONFIG.maxWizardPages);
   });
 
   it("still returns answers when the screenshot fails", async () => {
     const { app } = appWith(formPage({ screenshotThrows: true }));
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.body.screenshotBase64).toBeNull();
     expect(res.body.fields).toHaveLength(2);
   });
@@ -331,9 +309,7 @@ describe("POST /extract", () => {
       throw new Error("chromium segfault");
     });
     const app = createApp({ runPhase } as unknown as AppDeps);
-    const res = await auth(
-      request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" })
-    );
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.body.error).toBe("render_failed");
   });
 });
@@ -354,8 +330,7 @@ describe("POST /fill", () => {
     });
     const { app } = appWith(page);
 
-    const res = await auth(
-      request(app).post("/fill").send({
+    const res = await phase(app, "/fill", {
         userId: "u1",
         jobUrl: JOB_URL,
         ats: "lever",
@@ -365,8 +340,7 @@ describe("POST /fill", () => {
           fileName: "cv.pdf",
           mimeType: "application/pdf"
         }
-      })
-    );
+      });
 
     expect(res.body).toMatchObject({ outcome: "filled", pages: 1 });
     expect(fileInput.setInputFiles).toHaveBeenCalled();
@@ -377,9 +351,7 @@ describe("POST /fill", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const { app } = appWith(formPage());
-    const res = await auth(
-      request(app).post("/fill").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers });
     expect(res.body.outcome).toBe("filled");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -392,11 +364,7 @@ describe("POST /fill", () => {
       locators: { "text=/": loc() }
     });
     const { app } = appWith(page);
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
     expect(res.body.outcome).toBe("submitted");
   });
 
@@ -465,11 +433,7 @@ describe("POST /fill", () => {
     // the worker because the vision model lives there.
     const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(askSolver).toHaveBeenCalled();
     expect(res.body.outcome).toBe("submitted");
@@ -484,11 +448,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
   });
@@ -507,11 +467,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("submitted");
   });
@@ -528,11 +484,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", runId: "run-1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
     expect(fetchMock.mock.calls[0][0]).toBe(CONFIG.solverUrl);
@@ -553,11 +505,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase } as unknown as AppDeps);
 
-    await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect("runId" in JSON.parse(fetchMock.mock.calls[0][1].body)).toBe(false);
   });
@@ -589,11 +537,7 @@ describe("POST /fill", () => {
       askSolver: vi.fn(async () => [0])
     } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
   });
@@ -643,11 +587,7 @@ describe("POST /fill", () => {
       askSolver: vi.fn(async () => [0])
     } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
   });
@@ -666,11 +606,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
   });
@@ -686,11 +622,7 @@ describe("POST /fill", () => {
     );
     const app = createApp({ runPhase, askSolver } as unknown as AppDeps);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     expect(res.body.outcome).toBe("captcha_blocked");
   });
@@ -712,11 +644,7 @@ describe("POST /fill", () => {
     });
     const { app } = appWith(page);
 
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
 
     // A specific, honest outcome: the application was filled, an anti-bot check
     // stopped the send, and metering treats that as work done.
@@ -735,11 +663,7 @@ describe("POST /fill", () => {
       locators: { "text=/": missing }
     });
     const { app } = appWith(page);
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
     expect(res.body.outcome).toBe("unconfirmed");
   });
 
@@ -772,11 +696,7 @@ describe("POST /fill", () => {
     });
 
     const { app } = appWith(page);
-    const res = await auth(
-      request(app)
-        .post("/fill")
-        .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers, submit: true });
     expect(res.body.outcome).toBe("unconfirmed");
   });
 
@@ -803,9 +723,7 @@ describe("POST /fill", () => {
     });
     const { app } = appWith(wd);
 
-    const res = await auth(
-      request(app).post("/fill").send({ userId: "u1", jobUrl: WD_URL, ats: "workday", answers })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: WD_URL, ats: "workday", answers });
 
     expect(res.body.pages).toBe(2);
     // Once per page.
@@ -817,9 +735,7 @@ describe("POST /fill", () => {
       throw new Error("oom");
     });
     const app = createApp({ runPhase } as unknown as AppDeps);
-    const res = await auth(
-      request(app).post("/fill").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers })
-    );
+    const res = await phase(app, "/fill", { userId: "u1", jobUrl: JOB_URL, ats: "lever", answers });
     expect(res.body.error).toBe("render_failed");
   });
 });
@@ -840,7 +756,7 @@ describe("concurrency gate", () => {
 
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
-        auth(request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" }))
+        phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" })
       )
     );
 

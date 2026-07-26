@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  completeRenderVerification,
-  ensureRenderSession,
-  renderUrl
-} from "@/lib/render";
+import { completeRenderVerification, renderUrl } from "@/lib/render";
 
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+
+const verify = () =>
+  completeRenderVerification({
+    userId: "u1",
+    tenantHost: "acme.wd1.myworkdayjobs.com",
+    code: "483920"
+  });
 
 beforeEach(() => {
   process.env.RENDER_URL = "https://browser.jobarms.com";
@@ -29,24 +32,29 @@ describe("renderUrl", () => {
   });
 });
 
-describe("ensureRenderSession", () => {
-  it("posts with the bearer and returns the payload", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      ok({ status: "authenticated", accountRequired: true })
-    );
+describe("completeRenderVerification", () => {
+  it("posts the link with the bearer and returns the resulting status", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await ensureRenderSession({
+    const result = await completeRenderVerification({
       userId: "u1",
-      jobUrl: "https://acme.wd1.myworkdayjobs.com/job/1",
-      ats: "workday",
-      account: { email: "a@jobarms.com", password: "pw" }
+      tenantHost: "acme.wd1.myworkdayjobs.com",
+      link: "https://acme.wd1.myworkdayjobs.com/verify?t=1"
     });
 
-    expect(result).toEqual({ ok: true, data: { status: "authenticated", accountRequired: true } });
+    expect(result).toEqual({ ok: true, data: { status: "authenticated" } });
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://browser.jobarms.com/session/ensure");
+    expect(url).toBe("https://browser.jobarms.com/verify");
     expect(init.headers.authorization).toBe("Bearer render-token");
+    expect(JSON.parse(init.body)).toMatchObject({ tenantHost: "acme.wd1.myworkdayjobs.com" });
+  });
+
+  it("passes a one-time code through", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await verify();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).code).toBe("483920");
   });
 
   it("reports render_unconfigured without attempting a call", async () => {
@@ -54,9 +62,7 @@ describe("ensureRenderSession", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(await ensureRenderSession({ userId: "u1", jobUrl: "https://x/1", ats: "lever" })).toEqual(
-      { ok: false, error: "render_unconfigured" }
-    );
+    expect(await verify()).toEqual({ ok: false, error: "render_unconfigured" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -65,19 +71,20 @@ describe("ensureRenderSession", () => {
       "fetch",
       vi.fn().mockResolvedValue(ok({ error: "login_failed", detail: "bad credentials" }))
     );
-    expect(
-      await ensureRenderSession({ userId: "u1", jobUrl: "https://x/1", ats: "workday" })
-    ).toEqual({ ok: false, error: "login_failed", detail: "bad credentials" });
+    expect(await verify()).toEqual({
+      ok: false,
+      error: "login_failed",
+      detail: "bad credentials"
+    });
   });
 
   it("classifies a non-2xx as unreachable, which IS worth retrying", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502 }));
-    const result = await ensureRenderSession({
-      userId: "u1",
-      jobUrl: "https://x/1",
-      ats: "lever"
+    expect(await verify()).toEqual({
+      ok: false,
+      error: "render_unreachable",
+      detail: "status 502"
     });
-    expect(result).toEqual({ ok: false, error: "render_unreachable", detail: "status 502" });
   });
 
   it("classifies an unparseable body as unreachable", async () => {
@@ -91,13 +98,12 @@ describe("ensureRenderSession", () => {
         }
       })
     );
-    const result = await ensureRenderSession({ userId: "u1", jobUrl: "https://x/1", ats: "lever" });
-    expect(result).toMatchObject({ ok: false, error: "render_unreachable" });
+    expect(await verify()).toMatchObject({ ok: false, error: "render_unreachable" });
   });
 
   it("classifies a transport failure as unreachable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("tunnel down")));
-    const result = await ensureRenderSession({ userId: "u1", jobUrl: "https://x/1", ats: "lever" });
+    const result = await verify();
     expect(result).toMatchObject({ ok: false, error: "render_unreachable" });
     expect((result as { detail: string }).detail).toContain("tunnel down");
   });
@@ -107,34 +113,8 @@ describe("ensureRenderSession", () => {
     vi.stubGlobal("fetch", vi.fn());
     // requireEnv throws inside the try, so it surfaces as unreachable with the
     // env name in the detail: loud enough to diagnose, and no call is made.
-    const result = await ensureRenderSession({ userId: "u1", jobUrl: "https://x/1", ats: "lever" });
+    const result = await verify();
     expect(result).toMatchObject({ ok: false, error: "render_unreachable" });
     expect((result as { detail: string }).detail).toContain("RENDER_TOKEN");
-  });
-});
-
-describe("completeRenderVerification", () => {
-  it("posts the link and returns the resulting status", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await completeRenderVerification({
-      userId: "u1",
-      tenantHost: "acme.wd1.myworkdayjobs.com",
-      link: "https://acme.wd1.myworkdayjobs.com/verify?t=1"
-    });
-
-    expect(result).toEqual({ ok: true, data: { status: "authenticated" } });
-    expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/verify");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
-      tenantHost: "acme.wd1.myworkdayjobs.com"
-    });
-  });
-
-  it("passes a one-time code through", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
-    vi.stubGlobal("fetch", fetchMock);
-    await completeRenderVerification({ userId: "u1", tenantHost: "acme.com", code: "483920" });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).code).toBe("483920");
   });
 });

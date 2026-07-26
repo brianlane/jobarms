@@ -43,6 +43,7 @@ import { collectFieldsInPage } from "../src/extract";
 import { createApp, type AppDeps } from "../src/app";
 import { CONFIG } from "../src/config";
 import { fakePage, goodFields, loc, TEST_CREDS } from "./helpers/fake-page";
+import { phase } from "./helpers/phase";
 
 const asPage = (p: ReturnType<typeof fakePage>) => p as unknown as Page;
 const WD_URL = "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/1";
@@ -185,7 +186,7 @@ describe("wizard that cannot advance", () => {
   it("stops extracting when the wizard offers no way forward", async () => {
     // Neither a next nor a submit control: a single-page Workday application.
     const page = fakePage({ url: WD_URL, eval$$: () => goodFields() });
-    const res = await authed(appWith(page), "/extract").send({
+    const res = await phase(appWith(page), "/extract", {
       userId: "u1",
       jobUrl: WD_URL,
       ats: "workday"
@@ -195,7 +196,7 @@ describe("wizard that cannot advance", () => {
 
   it("stops filling when the wizard offers no way forward", async () => {
     const page = fakePage({ url: WD_URL, eval$$: () => goodFields() });
-    const res = await authed(appWith(page), "/fill").send({
+    const res = await phase(appWith(page), "/fill", {
       userId: "u1",
       jobUrl: WD_URL,
       ats: "workday",

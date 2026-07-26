@@ -106,10 +106,13 @@ Repo scaffold:
       posting → form extracted (30+ fields) → Gemini answers grounded in the
       smoke profile → filled + screenshots → parked at needs_review →
       canceled. Review-gate smoke NEVER submits.
-- [ ] Greenhouse live run: most big boards now redirect to company careers
-      sites that lazy-embed the GH iframe; the adapter chases the iframe but
-      needs validation against a company that still hosts on
-      job-boards.greenhouse.io
+- [ ] Greenhouse live run: CONFIRMED broken against the current catalog. Every
+      `boards.greenhouse.io` posting we ingest 301s to the employer's own site
+      (stripe.com/jobs/listing/..., careers.airbnb.com, databricks.com), which
+      lazy-embeds the GH form in an iframe. Extraction reads the main frame
+      only, finds one field, and reports form_not_found even though the vision
+      model can see the form. Lever is unaffected. 37 of 40 catalog jobs are
+      unreachable until extraction descends into the embed
 
 ## Phase 4 - Tracker
 
@@ -223,9 +226,17 @@ Phase B - `vps/render` sidecar (the controllable browser):
       payload, bounded page walk)
 - [x] `scripts/deploy.sh` (idempotent systemd install, loopback-only bind,
       hardened unit) + CI `render-check` job with a 100% coverage gate
-- [ ] **Manual**: run `scripts/deploy.sh` against the internal KVM1, point a
-      Cloudflare Tunnel hostname (browser.jobarms.com) at 127.0.0.1:8085, and set
-      `RENDER_URL` + `RENDER_TOKEN` in Vercel and on the apply-arm worker
+- [x] Deployed to the internal KVM1 (1806097) with its own `cloudflared-jobarms`
+      unit beside the connector already on the box; browser.jobarms.com is up
+      and `RENDER_URL` + `RENDER_TOKEN` are set in Vercel and on apply-arm.
+      Capped at one concurrent phase: that box has a single vCPU
+- [x] Phases are started, not awaited. Cloudflare caps an origin response at
+      100s and a 24-field Lever fill measures ~133s, so waiting inline turned
+      finished work into a 524. `/session/ensure`, `/extract`, and `/fill`
+      return a job id and the worker polls `GET /jobs/:id`
+- [x] `deploy.sh` installs Chromium with the RESOLVED playwright, not the range
+      in package.json: `^1.58.0` resolving to 1.62.0 left the box holding
+      browser build 1208 while the runtime wanted 1234
 - [x] Cut the apply-arm Workflow over: every browser phase is now an HTTPS call
       to the sidecar, the `BROWSER` binding is gone, and the worker bundle
       dropped to ~26 KiB with only the Workflow binding left
@@ -280,9 +291,11 @@ Phase D - Workday:
 - [x] Ingest fetcher for a tenant career site (`board_token` is
       `<tenant>.<cluster>/<site>`, e.g. `acme.wd1/Careers`)
 - [ ] **Live review-gated smoke on a real Workday posting**, end to end through
-      account creation and email verification. Blocked on the Phase B manual steps
-      (sidecar deployed, tunnel up, secrets set); `debug/smoke-arm-run.ts` is
-      review-gated so it can never submit
+      account creation and email verification. No longer blocked on
+      infrastructure (sidecar deployed, tunnel up, secrets set, and a Lever run
+      proved the whole path); needs a Workday posting seeded to run against.
+      `debug/smoke-arm-run.ts` is review-gated so it can never submit, and it
+      only knows greenhouse/lever today
 - [ ] Seed a few Workday companies once that smoke passes
 
 Note: the Workers Paid upgrade is no longer a launch blocker (it only ever

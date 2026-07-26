@@ -5,31 +5,104 @@ import {
   ensureSession,
   extractForm,
   fetchResumeBase64,
-  fillForm
+  fillForm,
+  timers
 } from "../src/render";
 
 const env: Env = { RENDER_URL: "https://browser.jobarms.com", RENDER_TOKEN: "render-token" };
 
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 
-beforeEach(() => vi.restoreAllMocks());
+const extract = () => extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" });
+
+/**
+ * A sidecar speaking the async protocol: the POST starts a job, and the poll
+ * reports `running` the requested number of times before settling on `result`.
+ */
+function sidecar(result: unknown, runningPolls = 0) {
+  let polls = 0;
+  return vi.fn(async (_url: string, init: { method: string }) => {
+    if (init.method === "POST") return ok({ jobId: "job-1" });
+    polls++;
+    return polls <= runningPolls ? ok({ status: "running" }) : ok({ status: "done", result });
+  });
+}
+
+/** Poll delays are real seconds in production; here they only move a fake clock. */
+let now = 0;
+beforeEach(() => {
+  vi.restoreAllMocks();
+  now = 1_000_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(timers, "sleep").mockImplementation(async (ms: number) => {
+    now += ms;
+  });
+});
 afterEach(() => vi.unstubAllGlobals());
 
-describe("classifying sidecar replies", () => {
-  it("returns the payload on success, with the bearer attached", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({ fields: [], pages: 1 }));
+describe("starting a phase and polling it", () => {
+  it("returns the settled payload, with the bearer on both exchanges", async () => {
+    const fetchMock = sidecar({ fields: [], pages: 1 });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" });
+    expect(await extract()).toEqual({ ok: true, data: { fields: [], pages: 1 } });
 
-    expect(result).toEqual({ ok: true, data: { fields: [], pages: 1 } });
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://browser.jobarms.com/extract");
-    expect(init.headers.authorization).toBe("Bearer render-token");
+    const [startUrl, startInit] = fetchMock.mock.calls[0];
+    expect(startUrl).toBe("https://browser.jobarms.com/extract");
+    expect(startInit.method).toBe("POST");
+    expect((startInit as unknown as { headers: Record<string, string> }).headers.authorization).toBe(
+      "Bearer render-token"
+    );
+
+    const [pollUrl, pollInit] = fetchMock.mock.calls[1];
+    expect(pollUrl).toBe("https://browser.jobarms.com/jobs/job-1");
+    expect(pollInit.method).toBe("GET");
+  });
+
+  it("keeps polling while the phase is still running", async () => {
+    const fetchMock = sidecar({ outcome: "filled" }, 3);
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await extract()).toEqual({ ok: true, data: { outcome: "filled" } });
+    // One POST plus four reads: three "running", then the answer.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("gives up once the phase outlives its budget", async () => {
+    // Never settles. The loop must end on the budget rather than spin forever.
+    const fetchMock = vi.fn(async (_url: string, init: { method: string }) =>
+      init.method === "POST" ? ok({ jobId: "job-1" }) : ok({ status: "running" })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await extract()).toEqual({
+      ok: false,
+      error: "render_unreachable",
+      detail: "phase exceeded its budget"
+    });
+  });
+
+  it("reports a job the sidecar no longer knows, so the phase is retried", async () => {
+    // What a restarted box says: the work is gone, and re-running it is right.
+    const fetchMock = vi.fn(async (_url: string, init: { method: string }) =>
+      init.method === "POST" ? ok({ jobId: "job-1" }) : ok({ error: "job_not_found" })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await extract()).toEqual({ ok: false, error: "job_not_found" });
+  });
+
+  it("treats a start with no job id as unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({})));
+    expect(await extract()).toEqual({
+      ok: false,
+      error: "render_unreachable",
+      detail: "no job id"
+    });
   });
 
   it("strips trailing slashes from the configured URL", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({}));
+    const fetchMock = sidecar({ fields: [] });
     vi.stubGlobal("fetch", fetchMock);
     await extractForm(
       { ...env, RENDER_URL: "https://browser.jobarms.com///" },
@@ -52,13 +125,12 @@ describe("classifying sidecar replies", () => {
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
 
-  it("surfaces a structured 200 error as a typed failure", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(ok({ error: "form_not_found", detail: "no fields" }))
-    );
-    expect(await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" })).toEqual({
+describe("classifying what a phase settled on", () => {
+  it("surfaces a structured error as a typed failure", async () => {
+    vi.stubGlobal("fetch", sidecar({ error: "form_not_found", detail: "no fields" }));
+    expect(await extract()).toEqual({
       ok: false,
       error: "form_not_found",
       detail: "no fields"
@@ -66,17 +138,13 @@ describe("classifying sidecar replies", () => {
   });
 
   it("passes the form_not_found screenshot through for vision", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(ok({ error: "form_not_found", screenshotBase64: "AA==" }))
-    );
-    const result = await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" });
-    expect(result).toMatchObject({ error: "form_not_found", screenshotBase64: "AA==" });
+    vi.stubGlobal("fetch", sidecar({ error: "form_not_found", screenshotBase64: "AA==" }));
+    expect(await extract()).toMatchObject({ error: "form_not_found", screenshotBase64: "AA==" });
   });
 
   it("classifies a non-2xx as unreachable, which IS worth retrying", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502 }));
-    expect(await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" })).toEqual({
+    expect(await extract()).toEqual({
       ok: false,
       error: "render_unreachable",
       detail: "status 502"
@@ -94,12 +162,13 @@ describe("classifying sidecar replies", () => {
         }
       })
     );
-    expect(
-      await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" })
-    ).toMatchObject({ error: "render_unreachable", detail: "unparseable body" });
+    expect(await extract()).toMatchObject({
+      error: "render_unreachable",
+      detail: "unparseable body"
+    });
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("tunnel down")));
-    const result = await extractForm(env, { userId: "u1", jobUrl: "https://x/1", ats: "lever" });
+    const result = await extract();
     expect(result).toMatchObject({ error: "render_unreachable" });
     expect((result as { detail: string }).detail).toContain("tunnel down");
   });
@@ -107,22 +176,24 @@ describe("classifying sidecar replies", () => {
 
 describe("the phase calls", () => {
   it("ensureSession posts to /session/ensure with the account", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
+    const fetchMock = sidecar({ status: "authenticated" });
     vi.stubGlobal("fetch", fetchMock);
     const account = { email: "a@jobarms.com", password: ["fixture", "v"].join("-") };
 
     await ensureSession(env, { userId: "u1", jobUrl: "https://x/1", ats: "workday", account });
 
     expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/session/ensure");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).account).toEqual(account);
+    const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
+    expect(JSON.parse(init.body).account).toEqual(account);
   });
 
   it("fillForm posts answers, resume bytes, and the submit flag", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(ok({ outcome: "filled", pages: 1 }));
+    const fetchMock = sidecar({ outcome: "filled", pages: 1 });
     vi.stubGlobal("fetch", fetchMock);
 
     await fillForm(env, {
       userId: "u1",
+      runId: "r1",
       jobUrl: "https://x/1",
       ats: "lever",
       answers: [{ name: "a", label: "A", value: "v" }],
@@ -130,12 +201,22 @@ describe("the phase calls", () => {
       submit: true
     });
 
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/fill");
-    expect(body).toMatchObject({
+    const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
+    expect(JSON.parse(init.body)).toMatchObject({
       submit: true,
       resume: { contentBase64: "UERG", fileName: "cv.pdf" }
     });
+  });
+});
+
+describe("timers.sleep", () => {
+  it("really waits, since the poll loop paces itself on a wall clock", async () => {
+    // Every other test replaces this with a fake clock; here it runs for real.
+    vi.restoreAllMocks();
+    const started = Date.now();
+    await timers.sleep(5);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4);
   });
 });
 

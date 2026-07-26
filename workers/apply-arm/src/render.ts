@@ -1,11 +1,19 @@
 /**
- * Worker -> render sidecar. One call per browser phase.
+ * Worker -> render sidecar. One phase per call.
  *
- * The sidecar reports application-level failures as HTTP 200 with an
- * `{ error, detail }` body, because Cloudflare replaces the body of an origin 5xx
- * with its own error page. So "ok" here means 2xx AND no `error` field, and a
- * genuine non-2xx is classified separately as a transport problem (which IS
- * worth retrying, unlike a permanent `form_not_found`).
+ * Two conventions the sidecar imposes, both because Cloudflare sits in between:
+ *
+ *  1. Application failures arrive as HTTP 200 with an `{ error, detail }` body,
+ *     since Cloudflare replaces the body of an origin 5xx with its own error
+ *     page. So "ok" means 2xx AND no `error` field, and a genuine non-2xx is
+ *     classified separately as a transport problem (worth retrying, unlike a
+ *     permanent `form_not_found`).
+ *
+ *  2. The phases that drive a form are STARTED, not awaited. Cloudflare caps an
+ *     origin response at 100 seconds and these phases regularly run longer (a
+ *     24-field Lever fill measured 133s), which surfaced as a 524 on work that
+ *     had actually succeeded. So the sidecar answers with a job id and this
+ *     client polls until the outcome is ready.
  */
 import type { Answer, Env, FormField, RecoveryStrategy } from "./types";
 
@@ -16,6 +24,12 @@ export type RenderErrorCode =
   | "needs_email_verification"
   | "login_failed"
   | "render_failed"
+  /**
+   * The job id is unknown to the sidecar: it restarted, or the result aged out
+   * from under a slow poll. Not in the deterministic set, so the workflow retries
+   * the phase, which is the right answer to a box that bounced.
+   */
+  | "job_not_found"
   /** Set here, not by the sidecar: RENDER_URL / RENDER_TOKEN not configured. */
   | "render_unconfigured"
   /** Set here: transport failure, timeout, or a non-2xx status. */
@@ -25,43 +39,101 @@ export type RenderResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: RenderErrorCode; detail?: string; screenshotBase64?: string };
 
-/** A wizard walk plus a resume-parse pause is slow; budget generously. */
-const TIMEOUT_MS = 180_000;
+/**
+ * Per-exchange timeout. Every call is now short (start a phase, or read its
+ * status), so this no longer has to cover the phase itself.
+ */
+const CALL_TIMEOUT_MS = 30_000;
 
-async function post<T>(env: Env, path: string, body: unknown): Promise<RenderResult<T>> {
+/**
+ * Wall-clock budget for one phase, spent polling. Generous: a Workday wizard
+ * walks several pages, each with its own typing and page loads.
+ */
+const PHASE_BUDGET_MS = 600_000;
+
+/**
+ * Poll delay, growing 1.5x to a cap. Deliberately few, slow polls rather than
+ * many fast ones: a Worker invocation has a hard subrequest limit, and burning
+ * it on status reads would fail the phase for the silliest possible reason.
+ */
+const POLL_START_MS = 5_000;
+const POLL_MAX_MS = 20_000;
+
+/** Split out so tests can run the poll loop without real delays. */
+export const timers = {
+  sleep: (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+};
+
+/** Turn a sidecar body into a result, honoring the HTTP-200-error convention. */
+function classify<T>(payload: Record<string, unknown> | null): RenderResult<T> {
+  if (!payload) return { ok: false, error: "render_unreachable", detail: "unparseable body" };
+  if (typeof payload.error === "string") {
+    return {
+      ok: false,
+      error: payload.error as RenderErrorCode,
+      ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}),
+      // form_not_found carries a shot so the caller can run vision on it.
+      ...(typeof payload.screenshotBase64 === "string"
+        ? { screenshotBase64: payload.screenshotBase64 }
+        : {})
+    };
+  }
+  return { ok: true, data: payload as T };
+}
+
+async function call<T>(
+  env: Env,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown
+): Promise<RenderResult<T>> {
   const base = (env.RENDER_URL ?? "").replace(/\/+$/, "");
   if (!base || !env.RENDER_TOKEN) return { ok: false, error: "render_unconfigured" };
 
   try {
     const res = await fetch(`${base}${path}`, {
-      method: "POST",
+      method,
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${env.RENDER_TOKEN}`
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS)
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS)
     });
 
     if (!res.ok) {
       return { ok: false, error: "render_unreachable", detail: `status ${res.status}` };
     }
-    const payload = (await res.json().catch(() => null)) as
-      | (T & { error?: RenderErrorCode; detail?: string; screenshotBase64?: string })
-      | null;
-    if (!payload) return { ok: false, error: "render_unreachable", detail: "unparseable body" };
-    if (payload.error) {
-      return {
-        ok: false,
-        error: payload.error,
-        detail: payload.detail,
-        // form_not_found carries a shot so the caller can run vision on it.
-        ...(payload.screenshotBase64 ? { screenshotBase64: payload.screenshotBase64 } : {})
-      };
-    }
-    return { ok: true, data: payload as T };
+    return classify<T>((await res.json().catch(() => null)) as Record<string, unknown> | null);
   } catch (err) {
     return { ok: false, error: "render_unreachable", detail: String(err).slice(0, 200) };
+  }
+}
+
+type JobRead = { status: "running" } | { status: "done"; result: Record<string, unknown> };
+
+/** Start a phase, then poll until it settles or the budget runs out. */
+async function runPhase<T>(env: Env, path: string, body: unknown): Promise<RenderResult<T>> {
+  const started = await call<{ jobId?: unknown }>(env, "POST", path, body);
+  if (!started.ok) return started;
+  const jobId = typeof started.data.jobId === "string" ? started.data.jobId : "";
+  if (!jobId) return { ok: false, error: "render_unreachable", detail: "no job id" };
+
+  const deadline = Date.now() + PHASE_BUDGET_MS;
+  let wait = POLL_START_MS;
+  for (;;) {
+    await timers.sleep(wait);
+    wait = Math.min(POLL_MAX_MS, Math.round(wait * 1.5));
+
+    const read = await call<JobRead>(env, "GET", `/jobs/${encodeURIComponent(jobId)}`);
+    if (!read.ok) return read;
+    if (read.data.status === "done") return classify<T>(read.data.result);
+
+    // Checked AFTER a read so a phase that finishes right on the boundary is
+    // still collected rather than reported as a timeout.
+    if (Date.now() >= deadline) {
+      return { ok: false, error: "render_unreachable", detail: "phase exceeded its budget" };
+    }
   }
 }
 
@@ -97,7 +169,7 @@ export function ensureSession(
     account?: { email: string; password: string };
   }
 ): Promise<RenderResult<EnsureSessionResponse>> {
-  return post(env, "/session/ensure", args);
+  return runPhase(env, "/session/ensure", args);
 }
 
 export interface ExtractResponse {
@@ -123,7 +195,7 @@ export function extractForm(
     playbook?: RecoveryStrategy | null;
   }
 ): Promise<RenderResult<ExtractResponse>> {
-  return post(env, "/extract", args);
+  return runPhase(env, "/extract", args);
 }
 
 export interface FillResponse {
@@ -147,7 +219,7 @@ export function fillForm(
     playbook?: RecoveryStrategy | null;
   }
 ): Promise<RenderResult<FillResponse>> {
-  return post(env, "/fill", args);
+  return runPhase(env, "/fill", args);
 }
 
 /**

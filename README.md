@@ -145,13 +145,33 @@ Rendering entirely, for capability reasons rather than cost:
 The apply-arm Worker keeps everything durable: the review gate, the
 email-verification wait, step retries, and refund policy are Workflows features
 we would otherwise rebuild as a queue and state machine on the box. Each browser
-phase is one HTTPS call to the sidecar, so a crash costs a step, never a run. The
+phase is one job on the sidecar, so a crash costs a step, never a run. The
 sidecar holds no Supabase or Gemini credentials and makes no outbound requests of
 its own: the playbook to try, the vision diagnosis, and the resume bytes all
 arrive in the request, and the winning strategy comes back for the Worker to
 record. That last part is deliberate, not incidental: a service that never
 fetches a caller-supplied URL cannot be turned into a fetcher for an
 attacker-chosen one.
+
+### Phases are started, not awaited
+
+Cloudflare caps an origin response at 100 seconds, and browser phases routinely
+run longer: filling a 24-field Lever form measures ~133s on the KVM1 box, and a
+Workday wizard is several pages of that. Waiting inline meant Cloudflare killed
+the connection with a 524 and the Worker recorded a transport failure for work
+the sidecar had actually COMPLETED.
+
+So `POST /session/ensure`, `/extract`, and `/fill` return a job id immediately
+and the Worker polls `GET /jobs/:id` until it settles. Every exchange is short
+while the browser takes as long as it needs. Polls back off (5s growing to 20s,
+inside a 10-minute budget) because a Worker invocation has a hard subrequest
+limit and burning it on status reads would fail a phase for the silliest
+possible reason. A job id the sidecar no longer recognizes (it restarted, or the
+result aged out) comes back as `job_not_found`, which is not in the
+deterministic set, so the Worker simply retries the phase.
+
+`/verify` stays a plain request/response: it is one navigation, and its caller is
+the inbound-mail webhook, which wants a prompt answer.
 
 One consequence worth stating plainly: **the Workers Paid upgrade is no longer a
 launch blocker.** It only ever bought Browser Rendering minutes. Workflows on the
@@ -566,7 +586,10 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 - **Render sidecar**: deploy it (`vps/render/scripts/deploy.sh`), point a
   Cloudflare Tunnel hostname at `127.0.0.1:8085`, and set `RENDER_URL` +
   `RENDER_TOKEN` on the apply-arm worker and in Vercel. Without it arms cannot
-  run: there is no browser anywhere else.
+  run: there is no browser anywhere else. It currently shares the internal KVM1
+  box (`browser.jobarms.com`, its own `cloudflared-jobarms` unit alongside the
+  connector already there), capped at one concurrent phase because that box has
+  a single vCPU.
 - **Cloudflare plan**: the free plan is fine. Workers Paid was only ever needed
   for Browser Rendering minutes; revisit when run volume nears the free tier's
   3,000 workflow steps/day (roughly 300-400 arm runs/day).
