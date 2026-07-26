@@ -1,6 +1,14 @@
 /**
  * App -> render sidecar calls.
  *
+ * Only `/verify` lives here: the app's single reason to touch the browser is
+ * finishing an account verification when the mail arrives. Establishing the
+ * session, reading the form, and filling it all belong to the apply-arm worker,
+ * which owns run orchestration and polls those phases as async jobs (see
+ * workers/apply-arm/src/render.ts). `/verify` stays a plain request/response
+ * because it is one navigation and this caller is a webhook that wants a prompt
+ * answer.
+ *
  * The sidecar reports application-level failures as HTTP 200 with an
  * `{ error, detail }` body, because Cloudflare replaces the body of an origin
  * 5xx with its own error page (see vps/render/src/app.ts). So "ok" here means a
@@ -29,8 +37,8 @@ export type RenderResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: RenderErrorCode; detail?: string };
 
-/** Browser phases can be slow (a wizard walk, a resume parse pause). */
-const REQUEST_TIMEOUT_MS = 180_000;
+/** One navigation plus the tenant's response, well inside Cloudflare's cap. */
+const REQUEST_TIMEOUT_MS = 60_000;
 
 async function renderPost<T>(path: string, body: unknown): Promise<RenderResult<T>> {
   const base = renderUrl();
@@ -64,22 +72,6 @@ async function renderPost<T>(path: string, body: unknown): Promise<RenderResult<
   } catch (err) {
     return { ok: false, error: "render_unreachable", detail: String(err).slice(0, 200) };
   }
-}
-
-export interface EnsureSessionResponse {
-  status: "authenticated" | "needs_email_verification" | "login_failed";
-  accountRequired: boolean;
-  screenshotBase64?: string | null;
-}
-
-/** Authenticate (or create) the candidate account on this tenant. */
-export function ensureRenderSession(args: {
-  userId: string;
-  jobUrl: string;
-  ats: string;
-  account?: { email: string; password: string };
-}): Promise<RenderResult<EnsureSessionResponse>> {
-  return renderPost("/session/ensure", args);
 }
 
 export interface VerifyResponse {

@@ -12,6 +12,7 @@ import { applyStrategy, reachForm } from "../src/reach";
 import { fillField } from "../src/fill";
 import { collectFieldsInPage } from "../src/extract";
 import { fakePage, goodFields, loc, TEST_CREDS } from "./helpers/fake-page";
+import { phase } from "./helpers/phase";
 
 const asPage = (p: ReturnType<typeof fakePage>) => p as unknown as Page;
 const JOB_URL = "https://jobs.lever.co/acme/1/apply";
@@ -60,7 +61,7 @@ describe("auth middleware with no bearer configured", () => {
     });
 
     // No authorization header at all.
-    const res = await request(app).post("/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" });
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.status).toBe(200);
 
     vi.doUnmock("../src/config");
@@ -96,10 +97,13 @@ describe("with no captcha callback configured", () => {
         fn({ page, context: {}, key: "k" } as never)) as never
     });
 
-    const res = await request(app)
-      .post("/fill")
-      .set("authorization", `Bearer ${CONFIG.token}`)
-      .send({ userId: "u1", jobUrl: JOB_URL, ats: "lever", answers: [], submit: true });
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: JOB_URL,
+      ats: "lever",
+      answers: [],
+      submit: true
+    });
 
     expect(res.body.outcome).toBe("captcha_blocked");
     // Nothing was asked of the edge, because there is nowhere to ask.
@@ -173,7 +177,7 @@ describe("request parsing edges", () => {
 
   it("defaults a missing playbook to none", async () => {
     const app = appWith(page());
-    const res = await authed(app, "/extract").send({ userId: "u1", jobUrl: JOB_URL, ats: "lever" });
+    const res = await phase(app, "/extract", { userId: "u1", jobUrl: JOB_URL, ats: "lever" });
     expect(res.body.recovery).toBeNull();
   });
 });

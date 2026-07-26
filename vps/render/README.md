@@ -60,11 +60,31 @@ All require `Authorization: Bearer $RENDER_TOKEN` except `/health`.
 
 | Route | Purpose |
 |---|---|
-| `GET /health` | liveness + live session count |
-| `POST /session/ensure` | sign in or create the candidate account on this tenant |
+| `GET /health` | liveness, live session count, jobs in flight |
+| `POST /session/ensure` | start: sign in or create the candidate account on this tenant |
+| `POST /extract` | start: reach the form and read its fields (walks wizard pages) |
+| `POST /fill` | start: fill approved answers, optionally submit |
+| `GET /jobs/:id` | poll one of the three above |
 | `POST /verify` | finish an email verification inside the held session |
-| `POST /extract` | reach the form and read its fields (walks wizard pages) |
-| `POST /fill` | fill approved answers, optionally submit |
+
+**The three phase routes return a job id, not a result.** They answer
+`{ "jobId": "..." }` right away and the caller polls `GET /jobs/:id`, which
+reports `{ "status": "running" }` until the phase settles and then
+`{ "status": "done", "result": { ... } }`, where `result` is exactly the body the
+route would have returned.
+
+This exists because Cloudflare caps an origin response at 100 seconds and these
+phases regularly run longer: filling a 24-field Lever form measures ~133s on the
+KVM1 box. Waiting inline meant a 524 on work that had actually succeeded.
+
+Jobs are in-process on purpose. A job only means anything while the browser
+context behind it is alive, so a restart SHOULD forget them; an id we no longer
+recognize comes back as `job_not_found` and the caller re-runs the phase, which
+is the right answer to a box that bounced. Settled results are readable for 15
+minutes.
+
+`/verify` stays synchronous: one navigation, and its caller is the inbound-mail
+webhook, which wants a prompt answer.
 
 **Application errors return HTTP 200** with `{ error, detail }`. This is not
 sloppiness: Cloudflare replaces the body of any origin 5xx with its own error

@@ -14,11 +14,20 @@
  * genuine non-2xx as a transport failure worth retrying. Client errors (400/401)
  * keep their status, since Cloudflare passes 4xx through.
  *
+ * EQUALLY IMPORTANT: the three phases that drive a form return a job id, not a
+ * result. Cloudflare also caps an origin response at 100 seconds, and these
+ * phases regularly run longer (a 24-field Lever fill measured 133s), so waiting
+ * inline turned finished work into a 524. They start the phase and the caller
+ * polls GET /jobs/:id. See jobs.ts.
+ *
  * Endpoints (all bearer-authed except /health):
- *   POST /session/ensure  - authenticate/create the candidate account
- *   POST /verify          - finish an email verification in the held session
- *   POST /extract         - reach the form and read its fields (walks wizards)
- *   POST /fill            - fill approved answers, optionally submit
+ *   POST /session/ensure  - start: authenticate/create the candidate account
+ *   POST /extract         - start: reach the form and read its fields
+ *   POST /fill            - start: fill approved answers, optionally submit
+ *   GET  /jobs/:id        - poll one of the above
+ *   POST /verify          - finish an email verification in the held session.
+ *                           Synchronous: one navigation, and its caller is the
+ *                           inbound-mail webhook, which wants a prompt answer.
  */
 import express, { type Express, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -39,6 +48,7 @@ import { attachResume, fillAnswers } from "./fill.js";
 import { collectFields } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
+import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
 import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
@@ -50,6 +60,11 @@ function isAts(value: unknown): value is Ats {
 /** A structured, retry-safe application error (see the module doc). */
 function appError(res: Response, error: string, detail = ""): Response {
   return res.status(200).json({ error, ...(detail ? { detail: detail.slice(0, 400) } : {}) });
+}
+
+/** The same structured error, as a job result rather than a response body. */
+function errorPayload(error: string, detail: string): JobPayload {
+  return { error, detail: detail.slice(0, 400) };
 }
 
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
@@ -120,7 +135,7 @@ export function createApp(deps: AppDeps = {}): Express {
   );
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, sessions: sessionCount() });
+    res.json({ ok: true, sessions: sessionCount(), jobs: runningJobs() });
   });
 
   app.use((req, res, next) => {
@@ -130,6 +145,24 @@ export function createApp(deps: AppDeps = {}): Express {
   });
 
   const withSlot = createGate(CONFIG.maxConcurrency);
+
+  /**
+   * Hand back a job id and let the phase run on. `work` must resolve with the
+   * payload the caller should eventually read, including for failures, so every
+   * outcome is polled the same way.
+   */
+  function startPhase(res: Response, work: () => Promise<JobPayload>): void {
+    res.json({ jobId: startJob(work) });
+  }
+
+  app.get("/jobs/:id", (req, res) => {
+    const entry = readJob(req.params.id);
+    // Unknown means the box restarted or the result aged out. Reported as a
+    // structured error so the worker retries the phase rather than waiting on an
+    // answer that is never coming.
+    if (!entry) return void appError(res, "job_not_found");
+    return void res.json(entry);
+  });
 
   /**
    * Open a page in the user's cached context for this tenant, run one phase, and
@@ -179,7 +212,7 @@ export function createApp(deps: AppDeps = {}): Express {
   }
 
   // ------------------------------------------------------------------ session
-  app.post("/session/ensure", async (req, res) => {
+  app.post("/session/ensure", (req, res) => {
     const parsed = parseJobRequest(req);
     if (!parsed.ok) {
       return parsed.error === "invalid_body"
@@ -189,27 +222,33 @@ export function createApp(deps: AppDeps = {}): Express {
     const account = req.body?.account ?? {};
     const adapter = ADAPTERS[parsed.ats];
 
-    // ATSes that need no account are trivially "authenticated".
+    // ATSes that need no account are trivially "authenticated". Still answered
+    // as a job so every phase route keeps ONE contract: the caller always gets a
+    // job id back and never has to branch on which shape arrived.
     if (!adapter.requiresAccount) {
-      return void res.json({ status: "authenticated", accountRequired: false });
+      return void startPhase(res, () =>
+        Promise.resolve({ status: "authenticated", accountRequired: false })
+      );
     }
     if (typeof account.email !== "string" || typeof account.password !== "string") {
       return void res.status(400).json({ error: "invalid_body" });
     }
 
-    try {
-      const result = await withSlot(() =>
-        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
-          await page.goto(parsed.jobUrl, { waitUntil: "domcontentloaded" });
-          await adapter.openApplication(page);
-          const status = await ensureAccount(page, account);
-          return { status, screenshotBase64: await shot(page) };
-        })
-      );
-      return void res.json({ ...result, accountRequired: true });
-    } catch (err) {
-      return void appError(res, "render_failed", String(err));
-    }
+    return void startPhase(res, async () => {
+      try {
+        const result = await withSlot(() =>
+          runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+            await page.goto(parsed.jobUrl, { waitUntil: "domcontentloaded" });
+            await adapter.openApplication(page);
+            const status = await ensureAccount(page, account);
+            return { status, screenshotBase64: await shot(page) };
+          })
+        );
+        return { ...result, accountRequired: true };
+      } catch (err) {
+        return errorPayload("render_failed", String(err));
+      }
+    });
   });
 
   app.post("/verify", async (req, res) => {
@@ -243,7 +282,7 @@ export function createApp(deps: AppDeps = {}): Express {
   });
 
   // ------------------------------------------------------------------ extract
-  app.post("/extract", async (req, res) => {
+  app.post("/extract", (req, res) => {
     const parsed = parseJobRequest(req);
     if (!parsed.ok) {
       return parsed.error === "invalid_body"
@@ -252,65 +291,66 @@ export function createApp(deps: AppDeps = {}): Express {
     }
     const playbook = req.body?.playbook ?? null;
 
-    try {
-      const result = await withSlot(() =>
-        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
-          const reached = await reachForm(
-            page,
-            parsed.jobUrl,
-            parsed.ats,
-            { playbook },
-            { throwIfNotFound: true }
-          );
+    return void startPhase(res, async () => {
+      try {
+        return await withSlot(() =>
+          runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+            const reached = await reachForm(
+              page,
+              parsed.jobUrl,
+              parsed.ats,
+              { playbook },
+              { throwIfNotFound: true }
+            );
 
-          // Multi-page wizards (Workday): keep walking while the adapter can
-          // advance, accumulating every page's fields into ONE review payload so
-          // the user approves the whole application at once. Bounded so a
-          // never-advancing wizard cannot spin.
-          const adapter = ADAPTERS[parsed.ats];
-          const all: FormField[] = [...reached.rawFields];
-          let pages = 1;
-          if (adapter.nextPage) {
-            while (pages < CONFIG.maxWizardPages) {
-              if (await adapter.isLastPage?.(page)) break;
-              if (!(await adapter.nextPage(page))) break;
-              pages++;
-              const more = await collectFields(page, reached.scope);
-              // Later pages repeat nothing, but guard anyway: a wizard that
-              // re-renders the same page would otherwise duplicate questions.
-              const seen = new Set(all.map((f) => f.name));
-              for (const field of more) if (!seen.has(field.name)) all.push(field);
+            // Multi-page wizards (Workday): keep walking while the adapter can
+            // advance, accumulating every page's fields into ONE review payload
+            // so the user approves the whole application at once. Bounded so a
+            // never-advancing wizard cannot spin.
+            const adapter = ADAPTERS[parsed.ats];
+            const all: FormField[] = [...reached.rawFields];
+            let pages = 1;
+            if (adapter.nextPage) {
+              while (pages < CONFIG.maxWizardPages) {
+                if (await adapter.isLastPage?.(page)) break;
+                if (!(await adapter.nextPage(page))) break;
+                pages++;
+                const more = await collectFields(page, reached.scope);
+                // Later pages repeat nothing, but guard anyway: a wizard that
+                // re-renders the same page would otherwise duplicate questions.
+                const seen = new Set(all.map((f) => f.name));
+                for (const field of more) if (!seen.has(field.name)) all.push(field);
+              }
             }
-          }
 
+            return {
+              fields: filterApplicationFields(all),
+              pages,
+              scope: reached.scope,
+              recovery: reached.recovery,
+              playbookFailed: reached.playbookFailed,
+              screenshotBase64: await shot(page)
+            };
+          })
+        );
+      } catch (err) {
+        if (err instanceof FormNotFoundError) {
+          // Not retryable as-is, but the caller can look at the screenshot, pick
+          // a recovery strategy with its vision model, and call back with it as
+          // the `playbook`. So the shot and the reason both ride along.
           return {
-            fields: filterApplicationFields(all),
-            pages,
-            scope: reached.scope,
-            recovery: reached.recovery,
-            playbookFailed: reached.playbookFailed,
-            screenshotBase64: await shot(page)
+            error: "form_not_found",
+            detail: err.reason.slice(0, 400),
+            ...(err.screenshot ? { screenshotBase64: err.screenshot.toString("base64") } : {})
           };
-        })
-      );
-      return void res.json(result);
-    } catch (err) {
-      if (err instanceof FormNotFoundError) {
-        // Not retryable as-is, but the caller can look at the screenshot, pick a
-        // recovery strategy with its vision model, and call back with it as the
-        // `playbook`. So the shot and the reason both ride along.
-        return void res.status(200).json({
-          error: "form_not_found",
-          detail: err.reason.slice(0, 400),
-          ...(err.screenshot ? { screenshotBase64: err.screenshot.toString("base64") } : {})
-        });
+        }
+        return errorPayload("render_failed", String(err));
       }
-      return void appError(res, "render_failed", String(err));
-    }
+    });
   });
 
   // --------------------------------------------------------------------- fill
-  app.post("/fill", async (req, res) => {
+  app.post("/fill", (req, res) => {
     const parsed = parseJobRequest(req);
     if (!parsed.ok) {
       return parsed.error === "invalid_body"
@@ -329,110 +369,111 @@ export function createApp(deps: AppDeps = {}): Express {
     const resume = body.resume ?? { contentBase64: null, fileName: "", mimeType: "" };
     const playbook = body.playbook ?? null;
 
-    try {
-      const result = await withSlot(() =>
-        runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
-          // Reach the SAME form extraction found. Lenient: fillField's page-wide
-          // fallback beats filling nothing.
-          const reached = await reachForm(
-            page,
-            parsed.jobUrl,
-            parsed.ats,
-            { playbook },
-            { throwIfNotFound: false }
-          );
-          const adapter = ADAPTERS[parsed.ats];
+    return void startPhase(res, async () => {
+      try {
+        return await withSlot(() =>
+          runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+            // Reach the SAME form extraction found. Lenient: fillField's page-wide
+            // fallback beats filling nothing.
+            const reached = await reachForm(
+              page,
+              parsed.jobUrl,
+              parsed.ats,
+              { playbook },
+              { throwIfNotFound: false }
+            );
+            const adapter = ADAPTERS[parsed.ats];
 
-          // Resume first: some ATSes autofill from it and typed answers must win.
-          await attachResume(page, resume);
-          await fillAnswers(page, reached.scope, answers);
+            // Resume first: some ATSes autofill from it and typed answers must win.
+            await attachResume(page, resume);
+            await fillAnswers(page, reached.scope, answers);
 
-          // Multi-page: fill each page, then advance. The same answer list is
-          // applied per page; fillField no-ops on names this page does not have.
-          let pages = 1;
-          if (adapter.nextPage) {
-            while (pages < CONFIG.maxWizardPages) {
-              if (await adapter.isLastPage?.(page)) break;
-              if (!(await adapter.nextPage(page))) break;
-              pages++;
-              await fillAnswers(page, reached.scope, answers);
-            }
-          }
-
-          if (!submit) {
-            return {
-              outcome: "filled" as SubmitOutcome,
-              pages,
-              screenshotBase64: await shot(page)
-            };
-          }
-
-          const askSolver =
-            deps.askSolver ?? httpSolver({ userId: parsed.userId, ...(runId ? { runId } : {}) });
-
-          // A challenge sitting on the form BEFORE we submit (a v2 checkbox next
-          // to the button) is worth clearing first: submitting into it just
-          // wastes the attempt.
-          const preKind = await detectChallenge(page);
-          if (preKind && askSolver) {
-            await solveChallenge(page, preKind, askSolver).catch(() => false);
-          }
-
-          // A deliberate pause before the final click so behavioral scoring sees
-          // a human cadence, then click the REAL control (never a programmatic
-          // submit) so the site's captcha JS mints its token.
-          await page.waitForTimeout(1000 + Math.floor(Math.random() * 1000));
-          await adapter.submit(page);
-          await page.waitForTimeout(2500);
-
-          if (await adapter.confirmSubmitted(page).catch(() => false)) {
-            return {
-              outcome: "submitted" as SubmitOutcome,
-              pages,
-              screenshotBase64: await shot(page)
-            };
-          }
-
-          // No confirmation. A challenge on screen now means one escalated on
-          // submit (the invisible check failed and forced a visible puzzle, or
-          // the form re-rendered with one). Try to clear it and send again.
-          const postKind = await detectChallenge(page);
-          if (postKind) {
-            const solved = askSolver
-              ? await solveChallenge(page, postKind, askSolver).catch(() => false)
-              : false;
-            if (solved) {
-              await adapter.submit(page).catch(() => {});
-              await page.waitForTimeout(2500);
-              if (await adapter.confirmSubmitted(page).catch(() => false)) {
-                return {
-                  outcome: "submitted" as SubmitOutcome,
-                  pages,
-                  screenshotBase64: await shot(page)
-                };
+            // Multi-page: fill each page, then advance. The same answer list is
+            // applied per page; fillField no-ops on names this page does not have.
+            let pages = 1;
+            if (adapter.nextPage) {
+              while (pages < CONFIG.maxWizardPages) {
+                if (await adapter.isLastPage?.(page)) break;
+                if (!(await adapter.nextPage(page))) break;
+                pages++;
+                await fillAnswers(page, reached.scope, answers);
               }
             }
-            // Everything is filled and the employer's bot check stopped the
-            // send. An honest, specific outcome: metering counts it as work
-            // done and the user is told to finish on the employer's site.
+
+            if (!submit) {
+              return {
+                outcome: "filled" as SubmitOutcome,
+                pages,
+                screenshotBase64: await shot(page)
+              };
+            }
+
+            const askSolver =
+              deps.askSolver ?? httpSolver({ userId: parsed.userId, ...(runId ? { runId } : {}) });
+
+            // A challenge sitting on the form BEFORE we submit (a v2 checkbox next
+            // to the button) is worth clearing first: submitting into it just
+            // wastes the attempt.
+            const preKind = await detectChallenge(page);
+            if (preKind && askSolver) {
+              await solveChallenge(page, preKind, askSolver).catch(() => false);
+            }
+
+            // A deliberate pause before the final click so behavioral scoring sees
+            // a human cadence, then click the REAL control (never a programmatic
+            // submit) so the site's captcha JS mints its token.
+            await page.waitForTimeout(1000 + Math.floor(Math.random() * 1000));
+            await adapter.submit(page);
+            await page.waitForTimeout(2500);
+
+            if (await adapter.confirmSubmitted(page).catch(() => false)) {
+              return {
+                outcome: "submitted" as SubmitOutcome,
+                pages,
+                screenshotBase64: await shot(page)
+              };
+            }
+
+            // No confirmation. A challenge on screen now means one escalated on
+            // submit (the invisible check failed and forced a visible puzzle, or
+            // the form re-rendered with one). Try to clear it and send again.
+            const postKind = await detectChallenge(page);
+            if (postKind) {
+              const solved = askSolver
+                ? await solveChallenge(page, postKind, askSolver).catch(() => false)
+                : false;
+              if (solved) {
+                await adapter.submit(page).catch(() => {});
+                await page.waitForTimeout(2500);
+                if (await adapter.confirmSubmitted(page).catch(() => false)) {
+                  return {
+                    outcome: "submitted" as SubmitOutcome,
+                    pages,
+                    screenshotBase64: await shot(page)
+                  };
+                }
+              }
+              // Everything is filled and the employer's bot check stopped the
+              // send. An honest, specific outcome: metering counts it as work
+              // done and the user is told to finish on the employer's site.
+              return {
+                outcome: "captcha_blocked" as SubmitOutcome,
+                pages,
+                screenshotBase64: await shot(page)
+              };
+            }
+
             return {
-              outcome: "captcha_blocked" as SubmitOutcome,
+              outcome: "unconfirmed" as SubmitOutcome,
               pages,
               screenshotBase64: await shot(page)
             };
-          }
-
-          return {
-            outcome: "unconfirmed" as SubmitOutcome,
-            pages,
-            screenshotBase64: await shot(page)
-          };
-        })
-      );
-      return void res.json(result);
-    } catch (err) {
-      return void appError(res, "render_failed", String(err));
-    }
+          })
+        );
+      } catch (err) {
+        return errorPayload("render_failed", String(err));
+      }
+    });
   });
 
   return app;

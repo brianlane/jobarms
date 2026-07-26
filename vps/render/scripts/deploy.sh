@@ -79,9 +79,12 @@ npm ci --omit=dev --ignore-scripts
 npm install --no-save typescript@^7.0.2 @types/node @types/express
 npx tsc
 rm -rf node_modules/typescript
-# Chromium plus the system libraries it needs. Playwright pins the build that
-# matches the installed version, so this must run after npm ci.
-npx --yes playwright@\$(node -p "require('$APP_DIR/package.json').dependencies.playwright.replace(/^[^0-9]*/,'')") install --with-deps chromium
+# Chromium plus the system libraries it needs. Driven by the playwright that npm
+# actually RESOLVED, not the range package.json declares: those differ the moment
+# a caret range moves (^1.58.0 resolving to 1.62.0 installed browser build 1208
+# while the runtime wanted 1234, and the sidecar launched against a browser that
+# was not there). The installed binary always knows its own build.
+./node_modules/.bin/playwright install --with-deps chromium
 REMOTE
 
 echo "==> writing systemd unit"

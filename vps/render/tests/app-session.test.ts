@@ -47,11 +47,12 @@ vi.mock("../src/sessions", () => ({
 
 import { createApp } from "../src/app";
 import { CONFIG } from "../src/config";
+import { phase } from "./helpers/phase";
 
 const JOB_URL = "https://jobs.lever.co/acme/1/apply";
 const body = { userId: "u1", jobUrl: JOB_URL, ats: "lever" };
 const post = (app: ReturnType<typeof createApp>, path: string, b: unknown = body) =>
-  request(app).post(path).set("authorization", `Bearer ${CONFIG.token}`).send(b);
+  phase(app, path, b);
 
 beforeEach(() => {
   vi.clearAllMocks();
