@@ -97,9 +97,9 @@ describe("forwardInboundEmail", () => {
 
     expect(await forwardInboundEmail(base)).toBe(true);
     const arg = sendMock.mock.calls[0][0];
-    // Quoted, and the sender's @ spelled out: a bare address in a display name
-    // ahead of a different real address is invalid and reads as spoofing.
-    expect(arg.from).toBe('"recruiter at acme.com via JobArms" <a-abcdefghjk@jobarms.com>');
+    // Local part only. Google lists an email domain in the display name among
+    // the deceptive practices it treats as spoofing.
+    expect(arg.from).toBe('"recruiter (via JobArms)" <a-abcdefghjk@jobarms.com>');
     expect(arg.replyTo).toBe("recruiter@acme.com");
     expect(arg.to).toBe("user@gmail.com");
     expect(arg.subject).toBe("About your application");
@@ -124,20 +124,54 @@ describe("forwardInboundEmail", () => {
       fromAddress: 'evil" <attacker@bad.com>, victim@x.com'
     });
     const from = sendMock.mock.calls[0][0].from;
-    expect(from).toBe(
-      '"evil attacker at bad.com victim at x.com via JobArms" <a-abcdefghjk@jobarms.com>'
-    );
+    expect(from).toBe('"evil attacker (via JobArms)" <a-abcdefghjk@jobarms.com>');
     // Exactly one quoted phrase, one address, and no comma to split it on.
     expect(from.match(/"/g)).toHaveLength(2);
     expect(from).not.toContain(",");
     expect(from.match(/@/g)).toHaveLength(1);
   });
 
+  it("prefers the sender's own name over their address", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_7"));
+    const { forwardInboundEmail } = await import("@/lib/email");
+
+    await forwardInboundEmail({ ...base, fromName: "Dana Recruiter" });
+    expect(sendMock.mock.calls[0][0].from).toBe(
+      '"Dana Recruiter (via JobArms)" <a-abcdefghjk@jobarms.com>'
+    );
+  });
+
+  it("never lets an email domain reach the display name", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_8"));
+    const { forwardInboundEmail } = await import("@/lib/email");
+
+    // A sender whose NAME is itself an address, which is the shape Gmail reads
+    // as spoofing and the reason a forward was silently discarded.
+    await forwardInboundEmail({
+      ...base,
+      fromName: "brianlanefanmail@gmail.com",
+      fromAddress: "brianlanefanmail@gmail.com"
+    });
+    const from = sendMock.mock.calls[0][0].from;
+    expect(from).toBe('"brianlanefanmail (via JobArms)" <a-abcdefghjk@jobarms.com>');
+    expect(from).not.toContain("gmail.com");
+  });
+
+  it("truncates an absurdly long sender name", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_9"));
+    const { forwardInboundEmail } = await import("@/lib/email");
+
+    await forwardInboundEmail({ ...base, fromName: "z".repeat(300) });
+    expect(sendMock.mock.calls[0][0].from).toBe(
+      `"${"z".repeat(100)} (via JobArms)" <a-abcdefghjk@jobarms.com>`
+    );
+  });
+
   it("omits Reply-To and names us when the sender is unknown", async () => {
     sendMock.mockResolvedValueOnce(acceptedBy("e_4"));
     const { forwardInboundEmail } = await import("@/lib/email");
 
-    await forwardInboundEmail({ ...base, fromAddress: "" });
+    await forwardInboundEmail({ ...base, fromAddress: "", fromName: "" });
     const arg = sendMock.mock.calls[0][0];
     expect(arg.from).toBe('"JobArms" <a-abcdefghjk@jobarms.com>');
     expect(arg.replyTo).toBeUndefined();

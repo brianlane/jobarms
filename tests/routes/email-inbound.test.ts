@@ -178,9 +178,19 @@ describe("logging, extraction, and forwarding", () => {
       to: "user@gmail.com",
       alias: ALIAS,
       fromAddress: "no-reply@myworkday.com",
+      fromName: "",
       subject: "Verify your account",
       text: payload().text
     });
+  });
+
+  it("relays the sender's own name so the forward can identify them", async () => {
+    holder.service = serviceWith();
+    await POST(post({ ...payload(), fromName: "Workday Recruiting" }));
+
+    expect(forwardInboundEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ fromName: "Workday Recruiting" })
+    );
   });
 
   it("passes the HTML alternative through to the forward", async () => {

@@ -96,6 +96,10 @@ export default {
         // header can list several addresses or none of ours).
         to: message.to,
         from: email.from?.address || message.from,
+        // The sender's own name, so the forward can identify them without
+        // putting an email domain in the display name (which Gmail scores as
+        // spoofing). Absent on plenty of machine-sent mail; the app falls back.
+        fromName: email.from?.name ?? "",
         subject: email.subject ?? "",
         text: text.slice(0, MAX_TEXT_CHARS),
         ...(html && html.length <= MAX_HTML_CHARS ? { html } : {}),
