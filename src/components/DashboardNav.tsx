@@ -44,8 +44,13 @@ export function DashboardNav({ variant }: { variant: "sidebar" | "topbar" }) {
     );
   }
 
+  // min-h-0 so a nav taller than the viewport scrolls inside the sidebar instead
+  // of pushing sign-out off the bottom of it.
   return (
-    <nav className="flex flex-1 flex-col gap-1 px-3" aria-label="Dashboard navigation">
+    <nav
+      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3"
+      aria-label="Dashboard navigation"
+    >
       {navItems.map((item) => {
         const active = isActive(pathname, item.href);
         return (

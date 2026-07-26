@@ -38,8 +38,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <AdminNav variant="topbar" />
       </div>
 
-      {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-ink-800 bg-ink-950 md:flex">
+      {/*
+        Desktop sidebar. Pinned to the viewport rather than left to stretch: as a
+        plain flex child it grew to the full DOCUMENT height, and since the nav is
+        flex-1 that pushed sign-out to the bottom of the page, so reaching it on a
+        long console page meant scrolling past everything.
+      */}
+      <aside className="hidden w-60 shrink-0 flex-col self-start border-r border-ink-800 bg-ink-950 md:sticky md:top-0 md:flex md:h-screen">
         <Link href="/admin/dashboard" className="px-6 py-6 font-display text-xl font-bold text-white">
           Job<span className="text-arm-400">Arms</span>
           <span className="mt-1 block font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">
