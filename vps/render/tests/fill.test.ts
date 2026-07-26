@@ -253,6 +253,68 @@ describe("fillCombobox", () => {
   });
 });
 
+describe("resolving which element to fill", () => {
+  /** A checkbox input, and the fieldset wrapper that shares the field's name. */
+  const groupPage = () => {
+    const boxes = loc({
+      count: vi.fn(async () => 2),
+      evaluate: vi.fn(async () => ({ tag: "input", type: "checkbox", cls: "", role: "", autocomplete: "" }))
+    });
+    const wanted = loc({ evaluate: vi.fn(async () => "None of the above") });
+    const other = loc({ evaluate: vi.fn(async () => "Ordinarily a resident of Cuba") });
+    boxes.nth = vi.fn((i: number) => (i === 0 ? other : wanted));
+
+    // Greenhouse gives the wrapper the SAME id as the field name.
+    const fieldset = loc({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ tag: "fieldset", type: "", cls: "checkbox", role: "", autocomplete: "" }))
+    });
+    const page = fakePage({
+      locators: { 'input[name="q[]"]': boxes, 'type="checkbox"': boxes, "#q": fieldset }
+    });
+    return { page, boxes, wanted, other, fieldset };
+  };
+
+  it("drives the inputs, never the wrapper that shares the field name", async () => {
+    // The regression: an unrestricted #<name> match resolved the FIELDSET, whose
+    // missing `type` sent a checkbox group down the text path, and the resulting
+    // click at the container's centre ticked whichever option sat there. On a US
+    // sanctions question that answered the opposite of what was approved.
+    const { page, wanted, other, fieldset } = groupPage();
+
+    await fillField(asPage(page), "form", { name: "q[]", label: "Q", value: "None of the above" });
+
+    expect(wanted.check).toHaveBeenCalled();
+    expect(other.uncheck).toHaveBeenCalled();
+    expect(fieldset.click).not.toHaveBeenCalled();
+    expect(fieldset.fill).not.toHaveBeenCalled();
+    expect(fieldset.pressSequentially).not.toHaveBeenCalled();
+  });
+
+  it("only ever selects real controls, so a wrapper cannot be picked at all", async () => {
+    const { page } = groupPage();
+    await fillField(asPage(page), "form", { name: "q[]", label: "Q", value: "None of the above" });
+
+    // Every selector we asked for is tag-qualified: input, select, or textarea.
+    for (const [selector] of (page.locator as unknown as { mock: { calls: string[][] } }).mock.calls) {
+      for (const fragment of selector.split(", ")) {
+        expect(fragment).toMatch(/(^|\s)(input|select|textarea)[[#]/);
+      }
+    }
+  });
+
+  it("falls back to matching by id when nothing carries the name", async () => {
+    const byId = loc({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ tag: "input", type: "text", cls: "", role: "", autocomplete: "" }))
+    });
+    const page = fakePage({ locators: { "input#weird": byId } });
+
+    await fillField(asPage(page), "form", { name: "weird", label: "W", value: "v" });
+    expect(byId.pressSequentially).toHaveBeenCalled();
+  });
+});
+
 describe("fillCheckboxGroup", () => {
   it("checks a lone consent box for a truthy answer", async () => {
     const box = loc({ count: vi.fn(async () => 1) });
