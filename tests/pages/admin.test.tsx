@@ -263,7 +263,12 @@ describe("AdminSystemPage", () => {
   it("lists forwards that were stored but never relayed, by domain only", async () => {
     // The panel that did not exist when a run of silent discards went unnoticed.
     holder.inboundEmails = [
-      { created_at: new Date().toISOString(), from_domain: "myworkday.com", forwarded: false },
+      {
+        created_at: new Date().toISOString(),
+        from_domain: "myworkday.com",
+        forwarded: false,
+        forward_error: "validation_error: The from address is not valid"
+      },
       { created_at: new Date().toISOString(), from_domain: "greenhouse.io", forwarded: true }
     ];
     render(await AdminSystemPage());
@@ -271,6 +276,10 @@ describe("AdminSystemPage", () => {
     expect(screen.getByText("50% failing")).toBeInTheDocument();
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText("myworkday.com")).toBeInTheDocument();
+    // The reason is the point: an alarm you cannot answer just sends you to the logs.
+    expect(
+      screen.getByText("validation_error: The from address is not valid")
+    ).toBeInTheDocument();
     expect(screen.getByText(/never a subject or body/)).toBeInTheDocument();
   });
 

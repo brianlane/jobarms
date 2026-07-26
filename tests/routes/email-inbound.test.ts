@@ -12,7 +12,8 @@ const forwardInboundEmail = vi.hoisted(() =>
       subject: string;
       text: string;
       html?: string;
-    }) => true
+    }) =>
+      ({ ok: true }) as { ok: true } | { ok: false; reason: string }
   )
 );
 const completeRenderVerification = vi.hoisted(() =>
@@ -89,7 +90,7 @@ beforeEach(() => {
   process.env.EMAIL_INBOUND_SECRET = SECRET;
   holder.service = null;
   forwardInboundEmail.mockClear();
-  forwardInboundEmail.mockResolvedValue(true);
+  forwardInboundEmail.mockResolvedValue({ ok: true });
   completeRenderVerification.mockClear();
   completeRenderVerification.mockResolvedValue({ ok: true, data: { status: "authenticated" } });
   markSiteAccountVerified.mockClear();
@@ -245,13 +246,19 @@ describe("logging, extraction, and forwarding", () => {
   });
 
   it("reports a failed forward without losing the stored message", async () => {
-    forwardInboundEmail.mockResolvedValueOnce(false);
+    forwardInboundEmail.mockResolvedValueOnce({ ok: false, reason: "daily_quota_exceeded" });
     holder.service = serviceWith();
 
     const res = await POST(post(payload()));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, forwarded: false });
+    // The reason travels with the answer, so a probe does not have to go and
+    // read the row it just caused to be written.
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      forwarded: false,
+      forwardError: "daily_quota_exceeded"
+    });
   });
 });
 
@@ -280,7 +287,7 @@ describe("consuming an account verification", () => {
     const order: string[] = [];
     forwardInboundEmail.mockImplementationOnce(async () => {
       order.push("forward");
-      return true;
+      return { ok: true };
     });
     completeRenderVerification.mockImplementationOnce(async () => {
       order.push("verify");

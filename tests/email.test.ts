@@ -95,7 +95,7 @@ describe("forwardInboundEmail", () => {
     sendMock.mockResolvedValueOnce(acceptedBy("e_1"));
     const { forwardInboundEmail } = await import("@/lib/email");
 
-    expect(await forwardInboundEmail(base)).toBe(true);
+    expect(await forwardInboundEmail(base)).toEqual({ ok: true });
     const arg = sendMock.mock.calls[0][0];
     // Local part only. Google lists an email domain in the display name among
     // the deceptive practices it treats as spoofing.
@@ -195,25 +195,45 @@ describe("forwardInboundEmail", () => {
     expect(sendMock.mock.calls[0][0].text).toHaveLength(200_000);
   });
 
-  it("no-ops without an API key, a recipient, or an alias", async () => {
+  it("says which precondition stopped it, rather than a bare false", async () => {
     const { forwardInboundEmail } = await import("@/lib/email");
 
     delete process.env.RESEND_API_KEY;
-    expect(await forwardInboundEmail(base)).toBe(false);
+    expect(await forwardInboundEmail(base)).toEqual({
+      ok: false,
+      reason: "email_unconfigured"
+    });
 
     process.env.RESEND_API_KEY = "re_test";
-    expect(await forwardInboundEmail({ ...base, to: "" })).toBe(false);
-    expect(await forwardInboundEmail({ ...base, alias: "" })).toBe(false);
+    expect(await forwardInboundEmail({ ...base, to: "" })).toEqual({
+      ok: false,
+      reason: "no_recipient_on_file"
+    });
+    expect(await forwardInboundEmail({ ...base, alias: "" })).toEqual({
+      ok: false,
+      reason: "no_alias"
+    });
     expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("returns false when the provider throws", async () => {
+  it("carries the thrown message through as the reason", async () => {
     sendMock.mockRejectedValueOnce(new Error("resend down"));
     const { forwardInboundEmail } = await import("@/lib/email");
-    expect(await forwardInboundEmail(base)).toBe(false);
+
+    const outcome = await forwardInboundEmail(base);
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { reason: string }).reason).toContain("resend down");
   });
 
-  it("returns false and names the reason when the provider REJECTS without throwing", async () => {
+  it("truncates a runaway reason", async () => {
+    sendMock.mockRejectedValueOnce(new Error("z".repeat(900)));
+    const { forwardInboundEmail } = await import("@/lib/email");
+
+    const outcome = await forwardInboundEmail(base);
+    expect((outcome as { reason: string }).reason).toHaveLength(300);
+  });
+
+  it("returns the provider's reason when it REJECTS without throwing", async () => {
     // The failure mode that hid: the SDK resolves with { data: null, error },
     // so a refused send used to be recorded against the message as forwarded.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -222,7 +242,10 @@ describe("forwardInboundEmail", () => {
     );
     const { forwardInboundEmail } = await import("@/lib/email");
 
-    expect(await forwardInboundEmail(base)).toBe(false);
+    expect(await forwardInboundEmail(base)).toEqual({
+      ok: false,
+      reason: "validation_error: The from address is not valid"
+    });
     expect(logged).toHaveBeenCalledWith(
       "inbound forward rejected by email provider",
       "validation_error",

@@ -95,6 +95,20 @@ describe("summarizeInboundEmail", () => {
     const serialized = JSON.stringify(health);
     expect(serialized).not.toContain("subject");
     expect(serialized).not.toContain("body");
-    expect(Object.keys(health.recentFailures[0])).toEqual(["at", "fromDomain"]);
+    expect(Object.keys(health.recentFailures[0])).toEqual(["at", "fromDomain", "reason"]);
+  });
+
+  it("carries the provider reason through to the panel", () => {
+    const rows = [{ ...mail(1, false), forward_error: "validation_error: bad from address" }];
+    expect(summarizeInboundEmail(rows, NOW).recentFailures[0].reason).toBe(
+      "validation_error: bad from address"
+    );
+  });
+
+  it("says so plainly for rows written before the reason was recorded", () => {
+    for (const forward_error of [undefined, null, "   "]) {
+      const rows = [{ ...mail(1, false), forward_error }];
+      expect(summarizeInboundEmail(rows, NOW).recentFailures[0].reason).toBe("no reason recorded");
+    }
   });
 });

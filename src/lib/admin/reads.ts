@@ -296,10 +296,10 @@ export const INBOUND_EMAIL_WINDOW_DAYS = 7;
 /**
  * Managed-alias mail for the forward-health panel.
  *
- * The column list is deliberately narrow: timestamp, sender DOMAIN, and whether
- * the forward went through. `subject` and `body_text` are users' real
- * correspondence and must not cross into an operator screen, so they are not
- * selected at all rather than selected and then dropped.
+ * The column list is deliberately narrow: timestamp, sender DOMAIN, whether the
+ * forward went through, and the provider's reason when it did not. `subject` and
+ * `body_text` are users' real correspondence and must not cross into an operator
+ * screen, so they are not selected at all rather than selected and then dropped.
  */
 export async function loadInboundEmails(
   days = INBOUND_EMAIL_WINDOW_DAYS,
@@ -308,7 +308,7 @@ export async function loadInboundEmails(
   const supabase = createSupabaseServiceClient();
   const { data } = await supabase
     .from("inbound_emails")
-    .select("created_at, from_domain, forwarded")
+    .select("created_at, from_domain, forwarded, forward_error")
     .gte("created_at", windowStartIso(days, now))
     .order("created_at", { ascending: false })
     .limit(INBOUND_EMAIL_ROW_CAP);
