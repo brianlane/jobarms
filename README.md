@@ -251,6 +251,27 @@ sign up for anything themselves.
   reply goes straight back to the recruiter. A failed forward is a degraded
   notification, never lost mail, since the message is already stored.
 
+#### The forward's From line is load-bearing
+
+It reads `"Dana Recruiter (via JobArms)" <a-7f3k9d2pqr@jobarms.com>`: the
+sender's own name, or the local part of their address alone, and **never a full
+email address**. Putting the whole address there is the obvious thing to want,
+since the point is showing the user who wrote. Don't.
+
+Google lists [using an @gmail.com domain as the display
+name](https://support.google.com/mail/answer/81126) among the deceptive
+practices it treats as spoofing, and Gmail enforces it by accepting the message
+with a `250` and then discarding it. No bounce, nothing in spam, no signal of
+any kind. We shipped that header once and forwards silently vanished while every
+layer we had reported success. `displayName` in [src/lib/email.ts](src/lib/email.ts)
+cuts at the first `@` whatever the source, because plenty of clients set the
+display name to the address itself and trusting it would put the domain back.
+
+The same incident is why a send counts as delivered only when the provider says
+so: the Resend SDK resolves `{ data, error }` instead of throwing, so ignoring
+the return value marks every refused send as successful. Rejections now log
+their own reason (provider code and message, never the addresses).
+
 ### Branded addresses and domain authentication
 
 Explicit routing rules are matched BEFORE the catch-all, so mail to these
