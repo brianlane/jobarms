@@ -35,6 +35,8 @@ const bodySchema = z.object({
   /** Envelope recipient: the authoritative alias to route on. */
   to: z.string().max(320),
   from: z.string().max(320).default(""),
+  /** The sender's own display name, when the original message carried one. */
+  fromName: z.string().max(320).default(""),
   subject: z.string().max(2000).default(""),
   text: z.string().max(1_000_000).default(""),
   html: z.string().max(1_000_000).optional(),
@@ -49,7 +51,7 @@ export async function POST(request: Request) {
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "invalid_body" }, { status: 400 });
-  const { to, from, subject, text, html, messageId } = parsed.data;
+  const { to, from, fromName, subject, text, html, messageId } = parsed.data;
 
   const alias = to.trim().toLowerCase();
   const fromAddress = from.trim().toLowerCase();
@@ -109,6 +111,7 @@ export async function POST(request: Request) {
     to: profile.email as string,
     alias,
     fromAddress,
+    fromName,
     subject,
     text,
     ...(html ? { html } : {})

@@ -31,30 +31,41 @@ function accepted(
   return false;
 }
 
+/** Strip everything with meaning in an address header, then collapse space. */
+function headerSafe(value: string): string {
+  return value
+    .replace(/["'<>,;:\\\r\n]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
- * A safe From display name built from the original sender's address.
+ * A safe From display name identifying whoever actually wrote.
  *
  * Two separate constraints meet here.
  *
  * Header safety: characters with meaning in an address header (quotes, angle
  * brackets, commas, colons, semicolons) are stripped rather than escaped, so a
- * crafted sender address can never inject a second recipient or break the
- * header.
+ * crafted sender can never inject a second recipient or break the header.
  *
- * Deliverability: the phrase is QUOTED and the `@` is spelled out. A bare email
- * address sitting in a display name in front of a DIFFERENT real address is
- * invalid per RFC 5322 (an unquoted phrase cannot contain `@` or `.`) and is
- * also the precise shape mailbox providers score as spoofing, which is a good
- * way to have every forward filed as spam.
+ * Deliverability: NO email domain goes in here. Google lists "using an
+ * @gmail.com domain as the display name" among the deceptive display-name
+ * practices it treats as spoofing, and a bare address in a display name ahead
+ * of a DIFFERENT real address is also invalid per RFC 5322, whose unquoted
+ * phrase cannot contain `@` or `.`. Gmail acts on that by accepting the message
+ * with a 250 and then discarding it: no bounce, nothing in spam, which is how a
+ * forward went missing while every layer reported success.
+ *
+ * So we prefer the sender's own name, fall back to the local part alone, and
+ * quote the result.
  */
-function displayName(fromAddress: string): string {
-  const clean = fromAddress
-    .replace(/["'<>,;:\\\r\n]/g, "")
-    .replace(/@/g, " at ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-  return `"${clean ? `${clean} via JobArms` : "JobArms"}"`;
+function displayName(senderName: string, fromAddress: string): string {
+  const candidate = headerSafe(senderName) || headerSafe(fromAddress);
+  // Cut at the first `@` whatever the source. Plenty of clients set the display
+  // name to the address itself, so trusting the name would put the domain right
+  // back where it must not be.
+  const who = candidate.split("@")[0].trim().slice(0, 100);
+  return `"${who ? `${who} (via JobArms)` : "JobArms"}"`;
 }
 
 export interface ForwardArgs {
@@ -64,6 +75,8 @@ export interface ForwardArgs {
   alias: string;
   /** Whoever actually sent it; becomes Reply-To. */
   fromAddress: string;
+  /** The sender's own display name, when the original message carried one. */
+  fromName?: string;
   subject: string;
   text: string;
   html?: string;
@@ -95,7 +108,7 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
       // From the alias (a jobarms.com address we can authenticate) rather than
       // the original sender, which would fail SPF/DKIM and land in spam. The
       // sender goes in the display name so the user still sees who wrote.
-      from: `${displayName(args.fromAddress)} <${args.alias}>`,
+      from: `${displayName(args.fromName ?? "", args.fromAddress)} <${args.alias}>`,
       to: args.to,
       ...(args.fromAddress ? { replyTo: args.fromAddress } : {}),
       subject: args.subject || "(no subject)",

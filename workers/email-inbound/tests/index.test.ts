@@ -121,6 +121,21 @@ describe("managed alias mail", () => {
     await worker.email(message(), env);
 
     expect(postedBody(fetchMock).from).toBe("recruiter@acme.com");
+    expect(postedBody(fetchMock).fromName).toBe("");
+  });
+
+  it("relays the sender's own name, which the forward uses instead of a domain", async () => {
+    parseMock.mockResolvedValue({
+      text: "hi",
+      subject: "s",
+      from: { address: "r@acme.com", name: "Dana Recruiter" }
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await worker.email(message(), env);
+
+    expect(postedBody(fetchMock).fromName).toBe("Dana Recruiter");
   });
 
   it("defaults a missing subject to empty", async () => {
