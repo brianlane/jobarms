@@ -58,11 +58,19 @@ describe("sendWelcomeEmail", () => {
   });
 
   it("returns false when the provider REJECTS without throwing", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     sendMock.mockResolvedValueOnce(
       rejectedWith("daily_quota_exceeded", "You have reached your daily sending quota")
     );
     const { sendWelcomeEmail } = await import("@/lib/email");
+
     expect(await sendWelcomeEmail("a@b.com", "Bri")).toBe(false);
+    expect(logged).toHaveBeenCalledWith(
+      "welcome email rejected by email provider",
+      "daily_quota_exceeded",
+      "You have reached your daily sending quota"
+    );
+    logged.mockRestore();
   });
 });
 
@@ -171,13 +179,24 @@ describe("forwardInboundEmail", () => {
     expect(await forwardInboundEmail(base)).toBe(false);
   });
 
-  it("returns false when the provider REJECTS without throwing", async () => {
+  it("returns false and names the reason when the provider REJECTS without throwing", async () => {
     // The failure mode that hid: the SDK resolves with { data: null, error },
     // so a refused send used to be recorded against the message as forwarded.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     sendMock.mockResolvedValueOnce(
       rejectedWith("validation_error", "The from address is not valid")
     );
     const { forwardInboundEmail } = await import("@/lib/email");
+
     expect(await forwardInboundEmail(base)).toBe(false);
+    expect(logged).toHaveBeenCalledWith(
+      "inbound forward rejected by email provider",
+      "validation_error",
+      "The from address is not valid"
+    );
+    // The reason is diagnosable without leaking who it was for.
+    const logLine = logged.mock.calls[0].join(" ");
+    expect(logLine).not.toContain(base.to);
+    logged.mockRestore();
   });
 });

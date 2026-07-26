@@ -10,16 +10,25 @@ import { Resend } from "resend";
 const FORWARD_TEXT_MAX = 200_000;
 
 /**
- * Whether the provider ACCEPTED the message.
+ * Whether the provider ACCEPTED the message, naming the reason when it did not.
  *
  * The Resend SDK does not throw on a rejected send: `emails.send` resolves with
  * `{ data, error }`, where error carries codes like `invalid_from_address`,
  * `validation_error`, and `daily_quota_exceeded`. Discarding the return value
  * therefore reported every send as a success, so a forward the provider refused
  * was recorded against the message as delivered and nothing ever surfaced it.
+ *
+ * The reason is logged rather than returned because callers only need the
+ * boolean, and a rejection is worth reading in the function logs. Only the
+ * provider's own code and message are logged, never the addresses.
  */
-function accepted(result: { error?: unknown } | null): boolean {
-  return !result?.error;
+function accepted(
+  what: string,
+  result: { error?: { name?: string; message?: string } | null }
+): boolean {
+  if (!result.error) return true;
+  console.error(`${what} rejected by email provider`, result.error.name, result.error.message);
+  return false;
 }
 
 /**
@@ -95,7 +104,7 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<boolean> {
         text ||
         "This message arrived at the email JobArms applies with and had no text body."
     });
-    return accepted(result);
+    return accepted("inbound forward", result);
   } catch {
     return false;
   }
@@ -122,7 +131,7 @@ export async function sendWelcomeEmail(to: string, firstName: string): Promise<b
         "- JobArms"
       ].join("\n")
     });
-    return accepted(result);
+    return accepted("welcome email", result);
   } catch {
     return false;
   }
