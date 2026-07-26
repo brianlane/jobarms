@@ -53,6 +53,15 @@ export const RUN_ERROR_CODES = [
   "submit_unconfirmed",
   "review_timeout",
   "account_required",
+  // Transport and browser-side failures, which are about OUR infrastructure
+  // rather than the employer's site. Without them a sidecar outage buckets as
+  // "workflow_error" and reads as a crash to go debug, when the real answer is
+  // that the box is unreachable. A run of these in a row is an outage, not a
+  // collection of unlucky applications.
+  "render_unreachable",
+  "render_failed",
+  "job_not_found",
+  "login_failed",
   "workflow_error"
 ] as const;
 
@@ -76,6 +85,10 @@ export const RUN_ERROR_MEANING: Record<RunErrorCode, string> = {
   submit_unconfirmed: "submit fired but the ATS never confirmed",
   review_timeout: "the review gate expired after 7 days",
   account_required: "the ATS wanted a candidate account",
+  render_unreachable: "the browser sidecar never answered, so the phase never ran",
+  render_failed: "the sidecar answered but the phase died part way through",
+  job_not_found: "the sidecar forgot the phase, which usually means it restarted",
+  login_failed: "the ATS refused the candidate account we hold for this tenant",
   workflow_error: "an unexpected crash inside the workflow"
 };
 

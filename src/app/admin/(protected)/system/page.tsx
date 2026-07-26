@@ -1,5 +1,6 @@
 import { auditActionLabel, listAdminAuditLog } from "@/lib/admin/audit";
-import { loadSubscriptions } from "@/lib/admin/reads";
+import { summarizeInboundEmail } from "@/lib/admin/email-health";
+import { loadInboundEmails, loadSubscriptions } from "@/lib/admin/reads";
 import { probeServices, summarizeEnv, webhookFreshness } from "@/lib/admin/system";
 import {
   Badge,
@@ -22,12 +23,14 @@ export default async function AdminSystemPage() {
   // Each read is independent and best effort: a probe timeout or an audit read
   // failure must not blank the configuration matrix, which is the part of this
   // page you reach for when something else is already broken.
-  const [probes, subscriptions, audit] = await Promise.all([
+  const [probes, subscriptions, audit, inbound] = await Promise.all([
     probeServices(),
     loadSubscriptions().catch(() => []),
-    listAdminAuditLog(25).catch(() => [])
+    listAdminAuditLog(25).catch(() => []),
+    loadInboundEmails(7, now).catch(() => [])
   ]);
   const webhook = webhookFreshness(subscriptions, now);
+  const mail = summarizeInboundEmail(inbound, now);
 
   return (
     <div className="space-y-6">
@@ -63,7 +66,12 @@ export default async function AdminSystemPage() {
           tone={webhook.quiet ? "warn" : "neutral"}
           hint="newest subscription write"
         />
-        <Stat label="Audit entries" value={audit.length} hint="most recent 25" />
+        <Stat
+          label="Forwards failed"
+          value={mail.failed24h}
+          tone={mail.failed24h > 0 ? "bad" : "good"}
+          hint={`last 24h, of ${mail.received24h} received`}
+        />
       </div>
 
       <Card>
@@ -82,8 +90,60 @@ export default async function AdminSystemPage() {
         </ul>
         <p className="mt-4 text-xs text-slate-600">
           Any HTTP answer counts as up: the worker replies 401 without the shared secret and 404 on
-          an unrouted path, and either proves it is deployed and serving.
+          an unrouted path, and either proves it is deployed and serving. The sidecar is read from
+          its /health body instead, because a wedged browser still answers 200 while phases pile up
+          unfinished.
         </p>
+      </Card>
+
+      <Card>
+        <SectionTitle
+          right={
+            <Badge tone={mail.failed7d > 0 ? "bad" : "good"}>
+              {mail.failed7d > 0 ? `${mail.failureRatePct}% failing` : "healthy"}
+            </Badge>
+          }
+        >
+          Managed alias mail
+        </SectionTitle>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Stat label="Received 24h" value={mail.received24h} />
+          <Stat label="Received 7d" value={mail.received7d} />
+          <Stat
+            label="Failed 24h"
+            value={mail.failed24h}
+            tone={mail.failed24h > 0 ? "bad" : "neutral"}
+          />
+          <Stat
+            label="Failed 7d"
+            value={mail.failed7d}
+            tone={mail.failed7d > 0 ? "warn" : "neutral"}
+          />
+        </div>
+
+        {mail.recentFailures.length === 0 ? (
+          <p className="mt-4 text-xs text-slate-600">
+            Every message that reached an alias in the last 7 days was relayed to its owner. A
+            failure here means the message is stored but the user never saw it, so one is worth
+            reading the function logs over.
+          </p>
+        ) : (
+          <>
+            <p className="mt-4 mb-2 text-xs text-slate-500">
+              Stored but never relayed. The provider&apos;s reason is in the function logs; only the
+              sender domain is shown here, never a subject or body.
+            </p>
+            <ul className="space-y-1.5">
+              {mail.recentFailures.map((failure) => (
+                <li key={failure.at} className="flex items-center gap-2 text-sm">
+                  <Badge tone="bad">failed</Badge>
+                  <span className="font-mono text-xs text-slate-500">{failure.fromDomain}</span>
+                  <span className="ml-auto text-xs text-slate-500">{timeAgo(failure.at, now)}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </Card>
 
       <div className="space-y-4">

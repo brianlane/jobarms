@@ -12,7 +12,9 @@ const holder = vi.hoisted(() => ({
   subscriptions: [] as unknown[],
   subscriptionsThrows: false,
   audit: [] as unknown[],
-  auditThrows: false
+  auditThrows: false,
+  inboundEmails: [] as unknown[],
+  inboundEmailsThrows: false
 }));
 
 vi.mock("@/lib/admin/guard", async () => {
@@ -28,6 +30,10 @@ vi.mock("@/lib/admin/reads", async () => {
     loadSubscriptions: vi.fn(async () => {
       if (holder.subscriptionsThrows) throw new Error("read failed");
       return holder.subscriptions;
+    }),
+    loadInboundEmails: vi.fn(async () => {
+      if (holder.inboundEmailsThrows) throw new Error("read failed");
+      return holder.inboundEmails;
     })
   };
 });
@@ -142,7 +148,10 @@ beforeEach(() => {
   holder.subscriptionsThrows = false;
   holder.audit = [];
   holder.auditThrows = false;
-  vi.stubGlobal("fetch", vi.fn(async () => ({ status: 401 })));
+  holder.inboundEmails = [];
+  holder.inboundEmailsThrows = false;
+  // The sidecar probe reads /health as JSON; the arm probe only reads a status.
+  vi.stubGlobal("fetch", vi.fn(async () => ({ status: 401, json: async () => ({}) })));
   process.env.ADMIN_EMAIL = "ops@jobarms.com";
   process.env.NEXT_PUBLIC_APP_URL = "https://jobarms.com";
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://mock.supabase.co";
@@ -241,6 +250,40 @@ describe("AdminDashboardPage", () => {
 });
 
 describe("AdminSystemPage", () => {
+  it("calls the alias-mail relay healthy when nothing failed to forward", async () => {
+    holder.inboundEmails = [
+      { created_at: new Date().toISOString(), from_domain: "myworkday.com", forwarded: true }
+    ];
+    render(await AdminSystemPage());
+
+    expect(screen.getByText("healthy")).toBeInTheDocument();
+    expect(screen.getByText(/was relayed to its owner/)).toBeInTheDocument();
+  });
+
+  it("lists forwards that were stored but never relayed, by domain only", async () => {
+    // The panel that did not exist when a run of silent discards went unnoticed.
+    holder.inboundEmails = [
+      { created_at: new Date().toISOString(), from_domain: "myworkday.com", forwarded: false },
+      { created_at: new Date().toISOString(), from_domain: "greenhouse.io", forwarded: true }
+    ];
+    render(await AdminSystemPage());
+
+    expect(screen.getByText("50% failing")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("myworkday.com")).toBeInTheDocument();
+    expect(screen.getByText(/never a subject or body/)).toBeInTheDocument();
+  });
+
+  it("still renders the config matrix when the mail read fails", async () => {
+    // Every read here is best effort: the matrix is what you reach for when
+    // something else is already broken, so one failed query cannot blank it.
+    holder.inboundEmailsThrows = true;
+    render(await AdminSystemPage());
+
+    expect(screen.getByText("System")).toBeInTheDocument();
+    expect(screen.getByText("healthy")).toBeInTheDocument();
+  });
+
   it("renders configuration, probes, and an empty audit log", async () => {
     render(await AdminSystemPage());
     expect(screen.getByText("System")).toBeInTheDocument();

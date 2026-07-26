@@ -15,6 +15,7 @@ import {
   loadApplications,
   loadAuthDirectory,
   loadFieldStats,
+  loadInboundEmails,
   loadPlaybooks,
   loadApplicationSources,
   loadCompanies,
@@ -217,6 +218,22 @@ describe("loadSpendEvents", () => {
   it("defaults the window and treats a null payload as empty", async () => {
     holder.service = client({});
     expect(await loadSpendEvents()).toEqual([]);
+  });
+});
+
+describe("loadInboundEmails", () => {
+  it("returns alias-mail rows for the window", async () => {
+    holder.service = client({
+      inbound_emails: [{ data: [{ created_at: "x", from_domain: "acme.com", forwarded: true }] }]
+    });
+    expect(await loadInboundEmails(7, NOW)).toEqual([
+      { created_at: "x", from_domain: "acme.com", forwarded: true }
+    ]);
+  });
+
+  it("degrades to empty rather than erroring the page", async () => {
+    holder.service = client({ inbound_emails: [{ data: null }] });
+    expect(await loadInboundEmails(7, NOW)).toEqual([]);
   });
 });
 
