@@ -15,6 +15,7 @@
 import type { Locator, Page } from "playwright";
 import type { Answer, ResumeRef } from "./types.js";
 import { checkboxLabelMatches, splitAnswerValues } from "./field-match.js";
+import { scopedSelector } from "./scope.js";
 
 /** Above this length, type instantly - per-char typing gets too slow. */
 const REALISTIC_TYPING_MAX = 40;
@@ -181,7 +182,7 @@ export function attrEscape(value: string): string {
 /** Put one answer onto the form. Never throws. */
 export async function fillField(page: Page, scope: string, answer: Answer): Promise<void> {
   const esc = attrEscape(answer.name);
-  const scoped = `${scope} [name="${esc}"], ${scope} #${cssEscape(answer.name)}`;
+  const scoped = scopedSelector(scope, [`[name="${esc}"]`, `#${cssEscape(answer.name)}`]);
 
   // Prefer the adapter-scoped match; fall back to a page-wide match so recovered
   // custom forms (extracted page-wide) still fill.
