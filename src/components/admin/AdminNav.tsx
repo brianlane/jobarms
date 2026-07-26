@@ -50,8 +50,14 @@ export function AdminNav({ variant }: { variant: "sidebar" | "topbar" }) {
     );
   }
 
+  // min-h-0 is what lets this scroll: without it a flex child refuses to shrink
+  // below its content, so a nav taller than the viewport would push the sign-out
+  // block off the bottom of a screen-height sidebar.
   return (
-    <nav className="flex flex-1 flex-col gap-1 px-3" aria-label="Admin navigation">
+    <nav
+      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3"
+      aria-label="Admin navigation"
+    >
       {navItems.map((item) => {
         const active = isActive(pathname, item.href);
         return (

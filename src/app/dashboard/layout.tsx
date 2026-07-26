@@ -31,8 +31,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <DashboardNav variant="topbar" />
       </div>
 
-      {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col bg-ink-950 text-white md:flex">
+      {/* Desktop sidebar, pinned to the viewport for the same reason as the
+          console's: stretched to document height, a flex-1 nav puts sign-out at
+          the bottom of the page instead of the bottom of the screen. */}
+      <aside className="hidden w-60 shrink-0 flex-col self-start bg-ink-950 text-white md:sticky md:top-0 md:flex md:h-screen">
         <Link href="/" className="px-6 py-6 font-display text-xl font-bold">
           Job<span className="text-arm-400">Arms</span>
         </Link>
