@@ -106,13 +106,12 @@ Repo scaffold:
       posting → form extracted (30+ fields) → Gemini answers grounded in the
       smoke profile → filled + screenshots → parked at needs_review →
       canceled. Review-gate smoke NEVER submits.
-- [ ] Greenhouse live run: CONFIRMED broken against the current catalog. Every
-      `boards.greenhouse.io` posting we ingest 301s to the employer's own site
-      (stripe.com/jobs/listing/..., careers.airbnb.com, databricks.com), which
-      lazy-embeds the GH form in an iframe. Extraction reads the main frame
-      only, finds one field, and reports form_not_found even though the vision
-      model can see the form. Lever is unaffected. 37 of 40 catalog jobs are
-      unreachable until extraction descends into the embed
+- [x] Greenhouse live run verified end to end (real Stripe posting, review
+      gated): 21 fields extracted, 21 grounded answers, parked at needs_review,
+      canceled. It had been failing for every Greenhouse job in the catalog, and
+      the cause was not the iframe embedding we assumed: interpolating the
+      adapter's comma-separated scope matched the `<form>` element instead of
+      its inputs, so extraction saw exactly one field. Fixed in #31
 
 ## Phase 4 - Tracker
 
