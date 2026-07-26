@@ -179,18 +179,57 @@ export function attrEscape(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+/**
+ * The only elements worth pointing a fill at.
+ *
+ * Restricting by tag is load-bearing, not tidiness. Greenhouse gives a
+ * checkbox group's wrapping `<fieldset>` the SAME id as the field name, and a
+ * fieldset precedes its own inputs in document order, so an unrestricted
+ * `#<name>` match resolved the CONTAINER. A container has no `type`, so the
+ * checkbox branch never ran and the text path clicked it instead: a click at the
+ * centre of a group box, which lands on whichever option happens to sit there.
+ * On a US sanctions question that silently ticked "Ordinarily a resident of
+ * Cuba, Iran, North Korea, Syria..." while the answer said "None of the above".
+ */
+const CONTROL_TAGS = ["input", "select", "textarea"] as const;
+
+/**
+ * Resolve an answer to a real control, preferring `name` over `id` and the
+ * adapter scope over the whole page.
+ *
+ * `name` comes first because for a checkbox or radio GROUP the name IS the
+ * field, while the id may well belong to the wrapper.
+ */
+async function resolveControl(
+  page: Page,
+  scope: string,
+  answer: Answer
+): Promise<Locator | null> {
+  const esc = attrEscape(answer.name);
+  const id = cssEscape(answer.name);
+  const byName = CONTROL_TAGS.map((tag) => `${tag}[name="${esc}"]`);
+  const byId = CONTROL_TAGS.map((tag) => `${tag}#${id}`);
+
+  const attempts = [
+    scopedSelector(scope, byName),
+    scopedSelector(scope, byId),
+    // Page-wide, so a recovered custom form extracted outside the adapter scope
+    // still fills.
+    byName.join(", "),
+    byId.join(", ")
+  ];
+  for (const selector of attempts) {
+    const candidate = page.locator(selector).first();
+    if ((await candidate.count()) > 0) return candidate;
+  }
+  return null;
+}
+
 /** Put one answer onto the form. Never throws. */
 export async function fillField(page: Page, scope: string, answer: Answer): Promise<void> {
   const esc = attrEscape(answer.name);
-  const scoped = scopedSelector(scope, [`[name="${esc}"]`, `#${cssEscape(answer.name)}`]);
-
-  // Prefer the adapter-scoped match; fall back to a page-wide match so recovered
-  // custom forms (extracted page-wide) still fill.
-  let el = page.locator(scoped).first();
-  if ((await el.count()) === 0) {
-    el = page.locator(`[name="${esc}"], #${cssEscape(answer.name)}`).first();
-  }
-  if ((await el.count()) === 0) return;
+  const el = await resolveControl(page, scope, answer);
+  if (!el) return;
 
   // Inspect the real element: native controls report their tag/type, but a
   // react-select dropdown is an <input> we must OPERATE, not type into.
