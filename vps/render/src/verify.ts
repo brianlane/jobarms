@@ -41,13 +41,28 @@ function describe(values: string[]): string {
   return values.length > 0 ? values.join("; ") : "(nothing)";
 }
 
+export interface FillCheck {
+  /** Answers this read-back disagreed with. */
+  mismatches: Mismatch[];
+  /**
+   * Answers this read-back could actually SEE, whether they agreed or not.
+   *
+   * Needed because a wizard is checked page by page: a field that could not be
+   * driven on one page and was driven correctly on the next must stop counting as
+   * a problem, and only "I looked at this field" distinguishes a field that is now
+   * fine from one this page simply never showed.
+   */
+  seen: string[];
+}
+
 /**
- * Answers the form does not agree with. An empty result means the form holds what
- * was approved, as far as anything can tell from outside.
+ * Compare the answers to what the form holds, reporting both the disagreements
+ * and which answers were visible enough to judge.
  */
-export function findMismatches(answers: Answer[], state: FilledState[]): Mismatch[] {
+export function checkAnswers(answers: Answer[], state: FilledState[]): FillCheck {
   const byName = new Map(state.map((entry) => [entry.name, entry]));
   const mismatches: Mismatch[] = [];
+  const seen: string[] = [];
 
   for (const answer of answers) {
     if (answer.skipped || answer.value.trim() === "") continue;
@@ -55,6 +70,7 @@ export function findMismatches(answers: Answer[], state: FilledState[]): Mismatc
     // Unreadable is not the same as wrong: a later wizard page, or a control the
     // reader could not name, must not be reported as a disagreement.
     if (!found || found.kind === "file") continue;
+    seen.push(answer.name);
 
     if (found.kind === "choice") {
       const agrees =
@@ -84,7 +100,7 @@ export function findMismatches(answers: Answer[], state: FilledState[]): Mismatc
     }
   }
 
-  return mismatches;
+  return { mismatches, seen };
 }
 
 /**

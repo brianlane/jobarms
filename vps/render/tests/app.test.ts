@@ -432,6 +432,44 @@ describe("POST /fill", () => {
     expect(res.body.mismatches[0].actual).toBe("(nothing)");
   });
 
+  it("lets a later page's read-back supersede an earlier failure", async () => {
+    // A Workday-style wizard where a control could not be driven on the first
+    // pass and was driven correctly on the second. Appending every page's
+    // findings would refuse to submit a form that is actually right.
+    const fields = [
+      { name: "q[]", label: "Sanctions", type: "checkbox", required: true, options: [] }
+    ];
+    let call = 0;
+    const page = fakePage({
+      url: WD_URL,
+      eval$$: () => {
+        call++;
+        if (call === 1) return fields;
+        // First read-back: empty. Second, after advancing: correct.
+        const checked = call === 2 ? [] : ["None of the above"];
+        return [{ name: "q[]", kind: "choice", checked, value: "", count: 4 }];
+      },
+      locators: { "text=/": loc() }
+    });
+    // A Workday page that can advance exactly once.
+    let advanced = false;
+    page.getByRole = vi.fn(() => loc({ count: vi.fn(async () => (advanced ? 0 : 1)) }));
+
+    const { app } = appWith(page);
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: WD_URL,
+      ats: "workday",
+      answers: [{ name: "q[]", label: "Sanctions", value: "None of the above" }],
+      submit: false
+    });
+    advanced = true;
+
+    // The verdict that counts is the last one, so nothing is reported.
+    expect(res.body.outcome).toBe("filled");
+    expect(res.body.mismatches).toEqual([]);
+  });
+
   it("submits and reports a confirmed submission", async () => {
     const page = fakePage({
       url: JOB_URL,

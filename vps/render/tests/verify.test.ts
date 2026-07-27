@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { blocksSubmit, findMismatches } from "../src/verify";
+import { blocksSubmit, checkAnswers } from "../src/verify";
+
+/** Most tests only care about the disagreements. */
+const findMismatches = (a: Parameters<typeof checkAnswers>[0], s: Parameters<typeof checkAnswers>[1]) =>
+  checkAnswers(a, s).mismatches;
 import type { FilledState } from "../src/extract";
 import type { Answer } from "../src/types";
 
@@ -171,5 +175,32 @@ describe("blocksSubmit", () => {
       [choice("q[]", []), text("email", "")]
     );
     expect(found.map((m) => m.kind)).toEqual(["choice", "text"]);
+  });
+});
+
+describe("checkAnswers reports what it could see", () => {
+  it("lists the answers it was able to judge, agreed or not", () => {
+    const check = checkAnswers(
+      [answer({ name: "email", value: "a@b.com" }), answer({ name: "q[]", value: "Yes" })],
+      [text("email", "a@b.com"), choice("q[]", [])]
+    );
+    expect(check.seen).toEqual(["email", "q[]"]);
+    expect(check.mismatches.map((m) => m.name)).toEqual(["q[]"]);
+  });
+
+  it("does not claim to have seen a field the page never showed", () => {
+    // This is what lets a wizard supersede an earlier page's verdict without
+    // wrongly clearing fields the current page simply does not contain.
+    const check = checkAnswers([answer({ name: "ghost", value: "x" })], []);
+    expect(check.seen).toEqual([]);
+    expect(check.mismatches).toEqual([]);
+  });
+
+  it("ignores a file field entirely, so it is neither seen nor judged", () => {
+    const check = checkAnswers(
+      [answer({ name: "resume", value: "cv.pdf" })],
+      [{ name: "resume", kind: "file", checked: [], value: "", count: 1 }]
+    );
+    expect(check.seen).toEqual([]);
   });
 });
