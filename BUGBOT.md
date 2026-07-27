@@ -5,6 +5,13 @@ defects rather than re-litigating settled ones.
 
 ## Verified non-issues
 
+**Git pathspecs like `src/**/*.tsx` do match nested paths.** Git's default
+pathspec matching does not set `FNM_PATHNAME`, so `*` matches `/` as well.
+Verified in this repo: `git grep -- 'src/**/*.tsx'` matches all 48 tracked TSX
+files, including seven-level paths such as
+`src/app/admin/(protected)/users/[id]/page.tsx`. The "No Gemini in user-facing
+files" gate is not skipping deep App Router pages.
+
 **`jq` reads a stream of JSON values, not a single one.** Several workflows pipe
 `gh api --paginate --jq '...'` output, which is one JSON object per line, into a
 further `jq` filter. That is correct: `jq` processes each value in the stream in
