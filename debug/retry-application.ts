@@ -54,7 +54,7 @@ async function main() {
   if (!app) throw new Error("application not found");
   const job = app.jobs as unknown as {
     url: string;
-    ats: "greenhouse" | "lever";
+    ats: SupportedAts;
     title: string;
     company: string;
     description: string;

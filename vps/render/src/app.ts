@@ -59,7 +59,7 @@ import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
 import { blocksSubmit, checkAnswers, type FillCheck } from "./verify.js";
 import type { Answer, Ats, FormField, Mismatch, SubmitOutcome, TacticWin } from "./types.js";
 
-const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
+const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday", "ashby"];
 
 function isAts(value: unknown): value is Ats {
   return typeof value === "string" && (ATS_VALUES as readonly string[]).includes(value);

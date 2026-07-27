@@ -95,8 +95,13 @@ export async function applyStrategy(
     }
 
     if (strategy.action === "iframe") {
-      const providerHost =
-        ats === "greenhouse" ? "greenhouse.io" : ats === "lever" ? "lever.co" : "myworkdayjobs.com";
+      const providerHosts: Record<Ats, string> = {
+        greenhouse: "greenhouse.io",
+        lever: "lever.co",
+        workday: "myworkdayjobs.com",
+        ashby: "ashbyhq.com"
+      };
+      const providerHost = providerHosts[ats];
       for (let attempt = 0; attempt < 5; attempt++) {
         const embed = page.locator(`iframe[src*="${providerHost}"]`).first();
         if ((await embed.count()) > 0) {

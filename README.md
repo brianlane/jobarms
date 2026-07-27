@@ -64,7 +64,7 @@ which keeps the logged-in session alive between them.
 
 1. User pastes a job URL (`POST /api/applications`). The app normalizes the
    URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse, Lever,
-   and Workday drive today), upserts the job (public ATS APIs provide
+   Workday, and Ashby drive today), upserts the job (public ATS APIs provide
    title/company/description), **reserves a metered run**
    (`try_reserve_arm_run` RPC, row-locked monthly cap), snapshots the
    profile + the user's answer memory + a 24h signed resume URL, provisions the

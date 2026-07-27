@@ -215,4 +215,52 @@ const workday: AtsAdapter = {
   }
 };
 
-export const ADAPTERS: Record<Ats, AtsAdapter> = { greenhouse, lever, workday };
+const ashby: AtsAdapter = {
+  // Ashby renders its form as React components without a <form> element; the
+  // `ashby-*` classes are the public styling hooks Ashby documents for hosted
+  // boards, so they are stable across organizations. Plain `form` covers
+  // career-site embeds that wrap the board in their own markup.
+  formSelector: ".ashby-application-form-container, form",
+  requiresAccount: false,
+
+  async openApplication(page) {
+    // Postings live at /<org>/<jobId>; the form is the /application tab.
+    if (!page.url().includes("/application")) {
+      await page.goto(page.url().split("?")[0].replace(/\/?$/, "/application"), {
+        waitUntil: "domcontentloaded"
+      });
+    }
+    // The page is a client-rendered shell: the real fields (Ashby system
+    // fields, present on every posting) must hydrate before extraction.
+    await page.waitForSelector(
+      'input[name="_systemfield_name"], input[name="_systemfield_email"]',
+      { timeout: 20_000 }
+    );
+  },
+
+  async submit(page) {
+    await page
+      .locator('button:has-text("Submit Application"), button[type="submit"]')
+      .first()
+      .click();
+    await page.waitForTimeout(5000);
+  },
+
+  async confirmSubmitted(page) {
+    // Ashby is a single-page app, so the URL does not change on submit; the
+    // success state replaces the form with a submitted/thank-you message.
+    try {
+      await page
+        .locator("text=/application (has been |was )?submitted|thank you for applying/i")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return /application (has been |was )?submitted|thank you for applying/i.test(
+        await page.content()
+      );
+    }
+  }
+};
+
+export const ADAPTERS: Record<Ats, AtsAdapter> = { greenhouse, lever, workday, ashby };

@@ -49,7 +49,10 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   } | null;
   if (!job || !SUPPORTED_ATS.has(job.ats)) {
     return NextResponse.json(
-      { error: "ats_unsupported", hint: "The arm currently drives Greenhouse and Lever postings." },
+      {
+        error: "ats_unsupported",
+        hint: "The arm currently drives Greenhouse, Lever, Workday, and Ashby postings."
+      },
       { status: 422 }
     );
   }

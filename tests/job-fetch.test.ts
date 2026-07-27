@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJobMeta, parseGreenhouseUrl, parseLeverUrl } from "@/lib/job-fetch";
+import { fetchJobMeta, parseAshbyUrl, parseGreenhouseUrl, parseLeverUrl } from "@/lib/job-fetch";
 
 describe("parseGreenhouseUrl", () => {
   it("parses /jobs/<id> paths", () => {
@@ -28,6 +28,22 @@ describe("parseLeverUrl", () => {
   });
   it("returns null when too short", () => {
     expect(parseLeverUrl(new URL("https://jobs.lever.co/acme"))).toBeNull();
+  });
+});
+
+describe("parseAshbyUrl", () => {
+  it("parses /<org>/<job-uuid> with and without the /application tab", () => {
+    expect(parseAshbyUrl(new URL("https://jobs.ashbyhq.com/Valon/abc-123"))).toEqual({
+      org: "Valon",
+      jobId: "abc-123"
+    });
+    expect(parseAshbyUrl(new URL("https://jobs.ashbyhq.com/Valon/abc-123/application"))).toEqual({
+      org: "Valon",
+      jobId: "abc-123"
+    });
+  });
+  it("returns null when too short", () => {
+    expect(parseAshbyUrl(new URL("https://jobs.ashbyhq.com/Valon"))).toBeNull();
   });
 });
 
@@ -149,6 +165,78 @@ describe("fetchJobMeta", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
     const meta = await fetchJobMeta("https://jobs.lever.co/acme/xyz");
     expect(meta).toMatchObject({ company: "acme", title: "", location: "", description: "" });
+  });
+});
+
+describe("fetchJobMeta (Ashby)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const JOB_URL = "https://jobs.ashbyhq.com/My%20Org/uuid-1/application";
+
+  it("finds the posting by id on the board endpoint and decodes the org slug", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        jobs: [
+          { id: "uuid-0", title: "Wrong Job" },
+          { id: "uuid-1", title: "Engineer II", location: "NYC", descriptionPlain: "Do work" }
+        ]
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const meta = await fetchJobMeta(JOB_URL);
+
+    expect(meta).toMatchObject({
+      company: "My Org",
+      title: "Engineer II",
+      location: "NYC",
+      description: "Do work",
+      ats: "ashby"
+    });
+    // Board-wide endpoint: Ashby has no public single-posting API.
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.ashbyhq.com/posting-api/job-board/My%20Org"
+    );
+  });
+
+  it("handles a posting with missing optional fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: [{ id: "uuid-1" }] }) })
+    );
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ company: "My Org", title: "", location: "", description: "" });
+  });
+
+  it("returns fallback when the posting is not on the board", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ title: "", ats: "ashby" });
+  });
+
+  it("returns fallback when the URL is not a posting", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const meta = await fetchJobMeta("https://jobs.ashbyhq.com/Valon");
+    expect(meta).toMatchObject({ title: "", ats: "ashby" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns fallback when the endpoint responds non-2xx", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+    expect((await fetchJobMeta(JOB_URL)).title).toBe("");
+  });
+
+  it("caps a pathologically long description", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ jobs: [{ id: "uuid-1", descriptionPlain: "x".repeat(25_000) }] })
+      })
+    );
+    expect((await fetchJobMeta(JOB_URL)).description).toHaveLength(20_000);
   });
 });
 

@@ -8,7 +8,7 @@
  */
 
 /** ATSes the sidecar can drive. */
-export type Ats = "greenhouse" | "lever" | "workday";
+export type Ats = "greenhouse" | "lever" | "workday" | "ashby";
 
 export interface FormField {
   /** input name/id used to locate the control. */

@@ -39,11 +39,12 @@ describe("detectAts", () => {
     expect(detectAts("not a url")).toBe("unknown");
   });
 
-  it("supports greenhouse, lever, and workday", () => {
+  it("supports greenhouse, lever, workday, and ashby", () => {
     expect(SUPPORTED_ATS.has("greenhouse")).toBe(true);
     expect(SUPPORTED_ATS.has("lever")).toBe(true);
     expect(SUPPORTED_ATS.has("workday")).toBe(true);
-    expect(SUPPORTED_ATS.has("ashby")).toBe(false);
+    expect(SUPPORTED_ATS.has("ashby")).toBe(true);
+    expect(SUPPORTED_ATS.has("workable")).toBe(false);
     expect(SUPPORTED_ATS.has("unknown")).toBe(false);
   });
 

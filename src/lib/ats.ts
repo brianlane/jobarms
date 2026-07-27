@@ -35,7 +35,7 @@ export function detectAts(rawUrl: string): Ats {
 }
 
 /** ATSes the arm can drive today. */
-export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "workday"]);
+export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "workday", "ashby"]);
 
 /**
  * ATSes that require a candidate account on the employer's own tenant before an

@@ -220,7 +220,8 @@ describe("applyStrategy", () => {
     for (const [ats, host] of [
       ["greenhouse", "greenhouse.io"],
       ["lever", "lever.co"],
-      ["workday", "myworkdayjobs.com"]
+      ["workday", "myworkdayjobs.com"],
+      ["ashby", "ashbyhq.com"]
     ] as const) {
       const embed = loc({
         count: vi.fn(async () => 1),

@@ -9,12 +9,14 @@ describe("adapter contract", () => {
   it("marks only Workday as account-gated", () => {
     expect(ADAPTERS.greenhouse.requiresAccount).toBe(false);
     expect(ADAPTERS.lever.requiresAccount).toBe(false);
+    expect(ADAPTERS.ashby.requiresAccount).toBe(false);
     expect(ADAPTERS.workday.requiresAccount).toBe(true);
   });
 
   it("gives wizard hooks only to the multi-page ATS", () => {
     expect(ADAPTERS.greenhouse.nextPage).toBeUndefined();
     expect(ADAPTERS.lever.nextPage).toBeUndefined();
+    expect(ADAPTERS.ashby.nextPage).toBeUndefined();
     expect(ADAPTERS.workday.nextPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.isLastPage).toBeTypeOf("function");
   });
@@ -144,6 +146,62 @@ describe("lever", () => {
         asPage(fakePage({ locators: { "text=/": missing }, url: "https://jobs.lever.co/x" }))
       )
     ).toBe(false);
+  });
+});
+
+describe("ashby", () => {
+  const ashby = ADAPTERS.ashby;
+
+  it("navigates to the /application tab from a posting page", async () => {
+    const page = fakePage({ url: "https://jobs.ashbyhq.com/acme/uuid-1?src=x" });
+    await ashby.openApplication(asPage(page));
+    expect(page.goto).toHaveBeenCalledWith("https://jobs.ashbyhq.com/acme/uuid-1/application", {
+      waitUntil: "domcontentloaded"
+    });
+    // The client-rendered shell must hydrate the system fields before extract.
+    expect(page.waitForSelector).toHaveBeenCalledWith(
+      expect.stringContaining("_systemfield_name"),
+      expect.anything()
+    );
+  });
+
+  it("stays put when already on the application tab", async () => {
+    const page = fakePage({ url: "https://jobs.ashbyhq.com/acme/uuid-1/application" });
+    await ashby.openApplication(asPage(page));
+    expect(page.goto).not.toHaveBeenCalled();
+  });
+
+  it("clicks the submit control", async () => {
+    const submit = loc();
+    const page = fakePage({ locators: { 'button:has-text("Submit Application")': submit } });
+    await ashby.submit(asPage(page));
+    expect(submit.click).toHaveBeenCalled();
+  });
+
+  it("confirms on the submitted message", async () => {
+    const page = fakePage({ locators: { "text=/": loc() } });
+    expect(await ashby.confirmSubmitted(asPage(page))).toBe(true);
+  });
+
+  it("falls back to the page content, never the URL (SPA: it does not change)", async () => {
+    const missing = loc({
+      waitFor: vi.fn(async () => {
+        throw new Error("timeout");
+      })
+    });
+    const byContent = fakePage({
+      locators: { "text=/": missing },
+      url: "https://jobs.ashbyhq.com/acme/uuid-1/application",
+      content: "<p>Your application has been submitted</p>"
+    });
+    expect(await ashby.confirmSubmitted(asPage(byContent))).toBe(true);
+
+    const neither = fakePage({
+      locators: { "text=/": missing },
+      url: "https://jobs.ashbyhq.com/acme/uuid-1/application",
+      content: "<p>nope</p>"
+    });
+    expect(await ashby.confirmSubmitted(asPage(neither))).toBe(false);
   });
 });
 
