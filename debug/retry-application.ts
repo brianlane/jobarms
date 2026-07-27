@@ -149,8 +149,12 @@ async function main() {
         })
       : null;
     if (!siteAccount) {
+      // Hand the metered slot back before failing, exactly as the retry route
+      // does. Throwing with the reservation still held would quietly cost the
+      // user an arm run for an attempt that never dispatched.
+      await service.rpc("release_arm_run", { p_user_id: app.user_id, p_month_key: mk });
       throw new Error(
-        `could not reuse the ${job.ats} account for ${tenantHost}; production would return ats_account_unavailable here`
+        `could not reuse the ${job.ats} account for ${tenantHost}; production would return ats_account_unavailable here (reserved slot released)`
       );
     }
     account = { email: siteAccount.email, password: siteAccount.password };
