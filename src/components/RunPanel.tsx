@@ -9,6 +9,11 @@ export interface RunData {
   autonomy: string;
   steps: { at: string; step: string; detail?: string }[];
   answers: { name: string; label: string; value: string; skipped?: boolean }[] | null;
+  /**
+   * Answers the form did not accept, read back after filling. Null on runs that
+   * predate the check.
+   */
+  fill_mismatches?: { name: string; label: string; expected: string; actual: string }[] | null;
   form_fields: unknown;
   error: string | null;
   slot_refunded?: boolean;
@@ -59,6 +64,10 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
       return "Submitted, but confirmation was unclear";
     case "captcha_blocked":
       return "Filled everything, but an anti-bot check blocked the final submit";
+    case "fill_mismatch":
+      return `Checked its work and the form disagreed on ${step.detail || "some answers"}`;
+    case "resume_not_attached":
+      return "Couldn't attach your resume to this employer's uploader";
     default:
       return null; // internal noise stays in the technical log
   }
@@ -117,6 +126,12 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
   const working = ["queued", "running", "approved", "submitting"].includes(run.status);
   const ended = run.status === "failed" || run.status === "canceled";
   const reviewable = answers.filter((a) => (a.label || a.value || "").trim() !== "");
+
+  // Answers the form refused, so the exact field can be marked instead of making
+  // the user hunt for it in a screenshot.
+  const rejected = new Map(
+    (run.fill_mismatches ?? []).map((m) => [m.name, m.actual] as const)
+  );
   const snag = reviewing && reviewable.length === 0;
   const retryable = snag || ended;
 
@@ -161,7 +176,9 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
           <p>
             {run.error.includes("captcha_blocked")
               ? "This employer's anti-bot check blocked the automated submit. Your answers are saved; finish on the employer's site from the posting link. This run counted, since the arm did the full application."
-              : run.error.includes("submit_unconfirmed")
+              : run.error.includes("verification_failed")
+                ? "Your arm filled the form, read it back, and found the form was not holding what you approved, so it refused to submit rather than send a wrong answer. Retry below, or open the posting and finish it yourself. This run counted, since the arm did the full application."
+                : run.error.includes("submit_unconfirmed")
                 ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
                 : run.error.includes("review_timeout")
                   ? "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted."
@@ -254,6 +271,14 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
           <p className="mt-1 text-xs text-amber-700">
             Your resume is attached automatically, and anti-bot checks are handled for you.
           </p>
+          {rejected.size > 0 && (
+            <p className="mt-3 rounded-lg bg-red-100 p-3 text-sm text-red-800">
+              Your arm filled the form, then read it back and found{" "}
+              {rejected.size === 1 ? "an answer" : `${rejected.size} answers`} the form did not
+              accept, marked below. Nothing is sent until you approve, and the arm will refuse to
+              submit a choice it could not set correctly.
+            </p>
+          )}
           <div className="mt-4 space-y-3">
             {answers.map((a, i) =>
               (a.label || a.value || "").trim() === "" ? null : (
@@ -263,6 +288,11 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
                     {a.skipped && (
                       <span className="ml-2 font-semibold text-amber-700">
                         needs your answer
+                      </span>
+                    )}
+                    {rejected.has(a.name) && (
+                      <span className="ml-2 font-semibold text-red-700">
+                        the form shows {rejected.get(a.name)}
                       </span>
                     )}
                   </label>
@@ -275,7 +305,11 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
                       setAnswers(next);
                     }}
                     className={`w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
-                      a.skipped ? "border-amber-400 bg-amber-50/50" : "border-slate-300 bg-white"
+                      rejected.has(a.name)
+                        ? "border-red-400 bg-red-50/60"
+                        : a.skipped
+                          ? "border-amber-400 bg-amber-50/50"
+                          : "border-slate-300 bg-white"
                     }`}
                   />
                 </div>

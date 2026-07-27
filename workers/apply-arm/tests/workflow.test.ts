@@ -131,7 +131,112 @@ describe("the happy paths", () => {
 
     expect(render.fillForm.mock.calls[0][1].submit).toBe(false);
     expect(render.fillForm.mock.calls[1][1].submit).toBe(true);
-    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "needs_review", error: null });
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", {
+      status: "needs_review",
+      error: null,
+      fill_mismatches: []
+    });
+  });
+
+  it("refuses to submit and says which fields the form rejected", async () => {
+    // The interlock. Real work happened, so this consumes the run like
+    // captcha_blocked does, but nothing was sent.
+    render.fillForm.mockResolvedValueOnce(
+      ok({
+        outcome: "verification_failed",
+        pages: 1,
+        mismatches: [
+          {
+            name: "q[]",
+            label: "Sanctions and export controls",
+            expected: "None of the above",
+            actual: "Ordinarily a resident of Cuba"
+          }
+        ]
+      })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    const patch = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
+    )?.[2] as { error: string; fill_mismatches: unknown[] };
+    expect(patch.error).toContain("verification_failed:");
+    // Named by LABEL, since the field name means nothing to a person.
+    expect(patch.error).toContain("Sanctions and export controls");
+    expect(patch.error).toContain("nothing was submitted");
+    expect(patch.fill_mismatches).toHaveLength(1);
+    expect(db.logStep).toHaveBeenCalledWith(
+      env,
+      "r1",
+      "fill_mismatch",
+      expect.stringContaining("Sanctions")
+    );
+  });
+
+  it("summarizes rather than listing every rejected field", async () => {
+    const many = ["One", "Two", "Three", "Four", "Five"].map((label) => ({
+      name: label,
+      label,
+      expected: "x",
+      actual: "y"
+    }));
+    render.fillForm.mockResolvedValueOnce(
+      ok({ outcome: "verification_failed", pages: 1, mismatches: many })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    const patch = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
+    )?.[2] as { error: string };
+    expect(patch.error).toContain("One, Two, Three and 2 more");
+  });
+
+  it("flags a review-gate fill the form disagreed with, without blocking it", async () => {
+    render.fillForm
+      .mockResolvedValueOnce(
+        ok({
+          outcome: "filled",
+          pages: 1,
+          mismatches: [{ name: "q[]", label: "Sanctions", expected: "None", actual: "(nothing)" }]
+        })
+      )
+      .mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+
+    await run(params({ autonomy: "review_gate" }), async () => ({ payload: {} }));
+
+    expect(db.logStep).toHaveBeenCalledWith(
+      env,
+      "r1",
+      "fill_mismatch",
+      expect.stringContaining("Sanctions")
+    );
+    // Stored alongside the run so the review screen can mark the field itself.
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", {
+      status: "needs_review",
+      error: null,
+      fill_mismatches: [
+        { name: "q[]", label: "Sanctions", expected: "None", actual: "(nothing)" }
+      ]
+    });
+  });
+
+  it("names a rejected field by its raw name when it has no label", async () => {
+    render.fillForm.mockResolvedValueOnce(
+      ok({
+        outcome: "verification_failed",
+        pages: 1,
+        mismatches: [{ name: "question_99[]", label: "  ", expected: "x", actual: "y" }]
+      })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    const patch = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
+    )?.[2] as { error: string };
+    expect(patch.error).toContain("question_99[]");
   });
 
   it("tells the reviewer when the resume never attached", async () => {

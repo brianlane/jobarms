@@ -45,11 +45,12 @@ import { ADAPTERS } from "./adapters.js";
 import { FormNotFoundError, reachForm } from "./reach.js";
 import { filterApplicationFields } from "./field-filter.js";
 import { attachResume, fillAnswers } from "./fill.js";
-import { collectFields } from "./extract.js";
+import { collectFields, readFilledState } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
-import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
+import { blocksSubmit, checkAnswers } from "./verify.js";
+import type { Answer, Ats, FormField, Mismatch, SubmitOutcome } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
 
@@ -65,6 +66,33 @@ function appError(res: Response, error: string, detail = ""): Response {
 /** The same structured error, as a job result rather than a response body. */
 function errorPayload(error: string, detail: string): JobPayload {
   return { error, detail: detail.slice(0, 400) };
+}
+
+/**
+ * Verdict per answer, across however many pages a form spans.
+ *
+ * The LAST look at a field wins. A wizard is checked page by page, so a control
+ * that could not be driven on one page and was driven correctly on the next must
+ * stop counting as a problem; simply appending every page's findings would report
+ * a field as wrong long after it came right, and refuse to submit a form that is
+ * actually correct.
+ */
+function fillVerdicts() {
+  const byName = new Map<string, Mismatch | null>();
+  return {
+    record(check: { mismatches: Mismatch[]; seen: string[] }) {
+      for (const name of check.seen) byName.set(name, null);
+      for (const mismatch of check.mismatches) byName.set(mismatch.name, mismatch);
+    },
+    mismatches(): Mismatch[] {
+      return [...byName.values()].filter((entry): entry is Mismatch => entry !== null);
+    }
+  };
+}
+
+/** Read the form back and compare it to the answers it was given. */
+async function checkFill(page: Page, scope: string, answers: Answer[]) {
+  return checkAnswers(answers, await readFilledState(page, scope));
 }
 
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
@@ -391,6 +419,12 @@ export function createApp(deps: AppDeps = {}): Express {
             const resumeOutcome = await attachResume(page, resume);
             await fillAnswers(page, reached.scope, answers);
 
+            // Read the page back and compare it to what was approved. Checked
+            // BEFORE advancing, because a wizard page's state is gone once we
+            // leave it, so this is the only moment it can be seen.
+            const verdicts = fillVerdicts();
+            verdicts.record(await checkFill(page, reached.scope, answers));
+
             // Multi-page: fill each page, then advance. The same answer list is
             // applied per page; fillField no-ops on names this page does not have.
             let pages = 1;
@@ -400,6 +434,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 if (!(await adapter.nextPage(page))) break;
                 pages++;
                 await fillAnswers(page, reached.scope, answers);
+                verdicts.record(await checkFill(page, reached.scope, answers));
               }
             }
 
@@ -407,6 +442,24 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "filled" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches: verdicts.mismatches(),
+                pages,
+                screenshotBase64: await shot(page)
+              };
+            }
+
+            // The interlock. A choice field that disagrees is a factual
+            // misstatement made on the user's behalf, so this refuses to send it
+            // and hands the run to a human instead of failing it outright.
+            //
+            // Judged on everything gathered page by page above, NOT on a fresh
+            // read of the page we happen to be standing on: a wizard's earlier
+            // pages are already out of the DOM by now.
+            if (blocksSubmit(verdicts.mismatches())) {
+              return {
+                outcome: "verification_failed" as SubmitOutcome,
+                resume: resumeOutcome,
+                mismatches: verdicts.mismatches(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -434,6 +487,7 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "submitted" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches: verdicts.mismatches(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -454,6 +508,7 @@ export function createApp(deps: AppDeps = {}): Express {
                   return {
                     outcome: "submitted" as SubmitOutcome,
                     resume: resumeOutcome,
+                    mismatches: verdicts.mismatches(),
                     pages,
                     screenshotBase64: await shot(page)
                   };
@@ -465,6 +520,7 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "captcha_blocked" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches: verdicts.mismatches(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -473,6 +529,7 @@ export function createApp(deps: AppDeps = {}): Express {
             return {
               outcome: "unconfirmed" as SubmitOutcome,
               resume: resumeOutcome,
+              mismatches: verdicts.mismatches(),
               pages,
               screenshotBase64: await shot(page)
             };

@@ -233,3 +233,113 @@ describe("RunPanel polling", () => {
     expect(screen.getByText(/Your arm is working/)).toBeInTheDocument();
   });
 });
+
+describe("answers the form did not accept", () => {
+  const mismatch = {
+    name: "q[]",
+    label: "Sanctions",
+    expected: "None of the above",
+    actual: "Ordinarily a resident of Cuba"
+  };
+
+  it("marks the exact field, so nobody hunts for it in a screenshot", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [
+            { name: "q[]", label: "Sanctions", value: "None of the above" },
+            { name: "email", label: "Email", value: "a@b.com" }
+          ],
+          fill_mismatches: [mismatch]
+        })}
+        applicationId="app-1"
+      />
+    );
+
+    expect(screen.getByText(/the form shows Ordinarily a resident of Cuba/)).toBeInTheDocument();
+    expect(screen.getByText(/found an answer the form did not accept/)).toBeInTheDocument();
+  });
+
+  it("counts them when several disagree", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [
+            { name: "q[]", label: "Sanctions", value: "None of the above" },
+            { name: "b[]", label: "Other", value: "Yes" }
+          ],
+          fill_mismatches: [mismatch, { ...mismatch, name: "b[]", label: "Other" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/found 2 answers the form did not accept/)).toBeInTheDocument();
+  });
+
+  it("says nothing when the read-back agreed", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [{ name: "q[]", label: "Sanctions", value: "None of the above" }],
+          fill_mismatches: []
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.queryByText(/did not accept/)).not.toBeInTheDocument();
+  });
+
+  it("explains a run that refused to submit", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "failed",
+          error: "verification_failed: the form did not accept your answer for Sanctions"
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/refused to submit rather than send a wrong answer/)).toBeInTheDocument();
+  });
+
+  it("translates the fill_mismatch and resume steps for humans", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [{ name: "p", label: "P", value: "v" }],
+          steps: [
+            { at: AT, step: "fill_mismatch", detail: "Sanctions" },
+            { at: AT, step: "resume_not_attached" }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/the form disagreed on Sanctions/)).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't attach your resume/)).toBeInTheDocument();
+  });
+
+  it("falls back when a fill_mismatch step names no fields", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          answers: [{ name: "p", label: "P", value: "v" }],
+          steps: [{ at: AT, step: "fill_mismatch" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/the form disagreed on some answers/)).toBeInTheDocument();
+  });
+});

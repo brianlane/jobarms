@@ -356,6 +356,120 @@ describe("POST /fill", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * The interlock. `$$eval` answers both the field collector and the read-back,
+   * so the stub hands out fields first and the form's state afterwards.
+   */
+  function disagreeingPage(checked: string[]) {
+    let call = 0;
+    return fakePage({
+      url: JOB_URL,
+      eval$$: () =>
+        call++ === 0
+          ? [
+              { name: "name", label: "Full name", type: "text", required: true, options: [] },
+              { name: "email", label: "Email", type: "email", required: true, options: [] },
+              { name: "q[]", label: "Sanctions", type: "checkbox", required: true, options: [] }
+            ]
+          : [
+              { name: "name", kind: "text", checked: [], value: "Brian", count: 1 },
+              { name: "q[]", kind: "choice", checked, value: "", count: 4 }
+            ],
+      locators: { "text=/": loc() }
+    });
+  }
+  const choiceAnswers = [
+    { name: "name", label: "Full name", value: "Brian" },
+    { name: "q[]", label: "Sanctions", value: "None of the above" }
+  ];
+
+  it("refuses to submit when a choice field disagrees with the approved answer", async () => {
+    // Exactly what shipped once: a sanctions box ticked opposite to the answer.
+    // Submitting that sends a false statement, so the arm must not.
+    const { app } = appWith(disagreeingPage(["Ordinarily a resident of Cuba"]));
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: JOB_URL,
+      ats: "lever",
+      answers: choiceAnswers,
+      submit: true
+    });
+
+    expect(res.body.outcome).toBe("verification_failed");
+    expect(res.body.mismatches).toHaveLength(1);
+    expect(res.body.mismatches[0]).toMatchObject({
+      name: "q[]",
+      expected: "None of the above"
+    });
+  });
+
+  it("submits normally when the read-back agrees", async () => {
+    const { app } = appWith(disagreeingPage(["None of the above"]));
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: JOB_URL,
+      ats: "lever",
+      answers: choiceAnswers,
+      submit: true
+    });
+
+    expect(res.body.outcome).toBe("submitted");
+    expect(res.body.mismatches).toEqual([]);
+  });
+
+  it("reports mismatches on a review fill without refusing anything", async () => {
+    // Review gate never submits, so the interlock has nothing to stop; the point
+    // is that the disagreement still reaches the user.
+    const { app } = appWith(disagreeingPage([]));
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: JOB_URL,
+      ats: "lever",
+      answers: choiceAnswers
+    });
+
+    expect(res.body.outcome).toBe("filled");
+    expect(res.body.mismatches[0].actual).toBe("(nothing)");
+  });
+
+  it("lets a later page's read-back supersede an earlier failure", async () => {
+    // A Workday-style wizard where a control could not be driven on the first
+    // pass and was driven correctly on the second. Appending every page's
+    // findings would refuse to submit a form that is actually right.
+    const fields = [
+      { name: "q[]", label: "Sanctions", type: "checkbox", required: true, options: [] }
+    ];
+    let call = 0;
+    const page = fakePage({
+      url: WD_URL,
+      eval$$: () => {
+        call++;
+        if (call === 1) return fields;
+        // First read-back: empty. Second, after advancing: correct.
+        const checked = call === 2 ? [] : ["None of the above"];
+        return [{ name: "q[]", kind: "choice", checked, value: "", count: 4 }];
+      },
+      locators: { "text=/": loc() }
+    });
+    // A Workday page that can advance exactly once.
+    let advanced = false;
+    page.getByRole = vi.fn(() => loc({ count: vi.fn(async () => (advanced ? 0 : 1)) }));
+
+    const { app } = appWith(page);
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: WD_URL,
+      ats: "workday",
+      answers: [{ name: "q[]", label: "Sanctions", value: "None of the above" }],
+      submit: false
+    });
+    advanced = true;
+
+    // The verdict that counts is the last one, so nothing is reported.
+    expect(res.body.outcome).toBe("filled");
+    expect(res.body.mismatches).toEqual([]);
+  });
+
   it("submits and reports a confirmed submission", async () => {
     const page = fakePage({
       url: JOB_URL,

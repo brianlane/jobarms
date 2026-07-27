@@ -177,9 +177,21 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
               "this employer's upload widget refused the file, so attach it yourself before submitting"
             );
           }
+
+          // Answers the form did not accept. Advisory here, because the person
+          // deciding is about to look at them anyway; the point is that they are
+          // told rather than left to spot it in a screenshot.
+          const mismatches = result.data.mismatches ?? [];
+          if (mismatches.length > 0) {
+            await logStep(env, params.runId, "fill_mismatch", describeMismatches(mismatches));
+          }
           // error: null clears residue from a transient earlier attempt
           // (e.g. a mid-run worker deploy) once the run recovers.
-          await updateRun(env, params.runId, { status: "needs_review", error: null });
+          await updateRun(env, params.runId, {
+            status: "needs_review",
+            error: null,
+            fill_mismatches: mismatches
+          });
           await updateApplication(env, params.applicationId, { status: "needs_review" });
           await logStep(env, params.runId, "review_requested");
         });
@@ -244,19 +256,38 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           } catch {
             // keep the outcome; the confirmation state is what matters
           }
-          return result.data.outcome;
+          return { outcome: result.data.outcome, mismatches: result.data.mismatches ?? [] };
         }
       );
 
       await step.do("finalize", async () => {
-        if (outcome === "submitted") {
+        if (outcome.outcome === "verification_failed") {
+          // The arm filled the form, read it back, and the form disagreed with an
+          // approved answer on a choice field, so it refused to send it. That is
+          // real work and it CONSUMES the run (no refund), on the same reasoning
+          // as captcha_blocked.
+          //
+          // Recorded as failed rather than parked for review, even though review
+          // is what it deserves: this run's workflow ends here, so nothing would
+          // be listening for the approval event and the Approve button would do
+          // nothing forever. RunPanel matches the "verification_failed:" prefix.
+          // Letting full auto fall back into the review gate is the better answer
+          // and is worth doing on its own.
+          await updateRun(env, params.runId, {
+            status: "failed",
+            error: `verification_failed: the form did not accept your answer for ${describeMismatches(outcome.mismatches)}, so nothing was submitted`,
+            fill_mismatches: outcome.mismatches
+          });
+          await updateApplication(env, params.applicationId, { status: "failed" });
+          await logStep(env, params.runId, "fill_mismatch", describeMismatches(outcome.mismatches));
+        } else if (outcome.outcome === "submitted") {
           await updateRun(env, params.runId, { status: "submitted", error: null });
           await updateApplication(env, params.applicationId, {
             status: "applied",
             applied_at: new Date().toISOString()
           });
           await logStep(env, params.runId, "submitted", "confirmation detected");
-        } else if (outcome === "captcha_blocked") {
+        } else if (outcome.outcome === "captcha_blocked") {
           // The arm did the full application; only the employer's anti-bot
           // check stopped the final send. That is real work, so it CONSUMES
           // the run (no refund). RunPanel matches the "captcha_blocked:" prefix.
@@ -313,6 +344,18 @@ function hostOf(jobUrl: string): string {
  * `login_failed` logs the account step before giving up. Both raise
  * NonRetryableError there.
  */
+/**
+ * Name the fields the form disagreed with, for the timeline and the run error.
+ *
+ * Labels, not field names: the person reading this is looking at a form, and
+ * "question_35110798002[]" tells them nothing about which question it was.
+ */
+function describeMismatches(mismatches: { name: string; label: string }[]): string {
+  const named = mismatches.map((m) => m.label.trim() || m.name).filter(Boolean);
+  if (named.length <= 3) return named.join(", ");
+  return `${named.slice(0, 3).join(", ")} and ${named.length - 3} more`;
+}
+
 function renderFailure(result: RenderResult<unknown> & { ok: false }, phase: string): Error {
   const detail = result.detail ? `: ${result.detail}` : "";
   return new Error(`${result.error} during ${phase}${detail}`);

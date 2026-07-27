@@ -150,7 +150,114 @@ export const collectFieldsInPage = (elements: any[]): FormField[] => {
   }
   return fields;
 };
+/** What a control is HOLDING right now, as opposed to what it accepts. */
+export interface FilledState {
+  name: string;
+  /** choice = radio/checkbox group, text = anything typed or picked. */
+  kind: "choice" | "text" | "file";
+  /** For a choice: the labels of the options actually ticked. */
+  checked: string[];
+  /** For text: the value on screen, which for a dropdown is rendered outside the input. */
+  value: string;
+  /** Controls sharing the name, so a lone consent box is not read as a group. */
+  count: number;
+}
+
+/**
+ * Runs IN THE PAGE. Read back what the form is holding, so a fill can be checked
+ * against the answers it was given instead of assumed to have worked.
+ *
+ * Deliberately a separate callback from `collectFieldsInPage` rather than an
+ * option on it: an in-page function is serialized whole, so the two cannot share
+ * helpers, and conflating "what can this form take" with "what does it hold" is
+ * how you end up with one function that does neither well. The small duplication
+ * of label and escape helpers is the cost of running in the page at all.
+ */
+export const readFilledStateInPage = (elements: any[]): FilledState[] => {
+  const doc = (globalThis as any).document;
+  const cssEscape = (globalThis as any).CSS.escape as (v: string) => string;
+  const out: FilledState[] = [];
+  const seen = new Set<string>();
+
+  const optionLabel = (el: any): string => {
+    const oid = el.getAttribute("id");
+    const l = oid ? doc.querySelector(`label[for="${cssEscape(oid)}"]`) : null;
+    return (
+      (l?.textContent ?? el.getAttribute("aria-label") ?? el.getAttribute("value")) ?? ""
+    ).trim();
+  };
+
+  /**
+   * What a react-select style widget is holding. It commits into a rendered
+   * value node and CLEARS its own input, so reading `el.value` on one of those
+   * reports empty on a field that is correctly filled.
+   */
+  const committed = (el: any): string => {
+    const control = el.closest('[class*="select__control"]') ?? el.closest('[class*="control"]');
+    const value = control?.querySelector('[class*="single-value"], [class*="multi-value"]');
+    return (value?.textContent ?? "").trim();
+  };
+
+  for (const el of elements) {
+    const tag = el.tagName.toLowerCase();
+    const type = tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
+    if (["hidden", "submit", "button", "image", "reset"].includes(type)) continue;
+
+    const name = el.getAttribute("name") ?? el.getAttribute("id") ?? "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+
+    if (type === "radio" || type === "checkbox") {
+      const group: any[] = Array.from(
+        doc.querySelectorAll(`input[type="${type}"][name="${cssEscape(name)}"]`)
+      );
+      const boxes = group.length > 0 ? group : [el];
+      out.push({
+        name,
+        kind: "choice",
+        checked: boxes.filter((b: any) => b.checked).map(optionLabel).filter(Boolean),
+        value: "",
+        count: boxes.length
+      });
+      continue;
+    }
+
+    if (type === "file") {
+      out.push({
+        name,
+        kind: "file",
+        checked: [],
+        value: (el.files?.length ?? 0) > 0 ? "file" : "",
+        count: 1
+      });
+      continue;
+    }
+
+    out.push({
+      name,
+      kind: "text",
+      checked: [],
+      value: committed(el) || String(el.value ?? "").trim(),
+      count: 1
+    });
+  }
+  return out;
+};
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** Read back what every control under `scope` currently holds. Never throws. */
+export async function readFilledState(page: Page, scope: string): Promise<FilledState[]> {
+  try {
+    return await page.$$eval(
+      scopedSelector(scope, ["input", "textarea", "select"]),
+      readFilledStateInPage
+    );
+  } catch {
+    // Nothing readable means nothing to compare. The caller treats an empty read
+    // as "no evidence of a problem" rather than inventing one.
+    return [];
+  }
+}
 
 /** Collect every answerable control under `scope`. Never throws. */
 export async function collectFields(page: Page, scope: string): Promise<FormField[]> {

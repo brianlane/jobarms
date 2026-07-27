@@ -198,8 +198,29 @@ export function extractForm(
   return runPhase(env, "/extract", args);
 }
 
+/** An answer the form does not agree with, read back after filling. */
+export interface Mismatch {
+  name: string;
+  label: string;
+  /**
+   * Which kind of control disagreed. Carried on the mismatch because a wizard's
+   * earlier pages are gone from the DOM by submit time, so it cannot be asked of
+   * the live page without silently answering "text" for everything.
+   */
+  kind: "choice" | "text";
+  /** What the user approved. */
+  expected: string;
+  /** What the form actually holds. */
+  actual: string;
+}
+
 export interface FillResponse {
-  outcome: "filled" | "submitted" | "captcha_blocked" | "unconfirmed";
+  /**
+   * verification_failed means the form disagreed with an approved answer on a
+   * choice field and the sidecar REFUSED to submit. Filling happened; sending
+   * did not.
+   */
+  outcome: "filled" | "submitted" | "captcha_blocked" | "unconfirmed" | "verification_failed";
   pages: number;
   /**
    * What became of the resume. "failed" means a REQUIRED field is empty on a form
@@ -207,6 +228,8 @@ export interface FillResponse {
    * discover after approving.
    */
   resume?: "not_requested" | "attached" | "failed";
+  /** Answers the form did not accept. Empty means the read-back agreed. */
+  mismatches?: Mismatch[];
   screenshotBase64?: string | null;
 }
 

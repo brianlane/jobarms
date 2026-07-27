@@ -60,6 +60,25 @@ export interface Recovery {
   domain: string;
 }
 
+/** An answer the form does not agree with, read back after filling. */
+export interface Mismatch {
+  name: string;
+  label: string;
+  /**
+   * What kind of control disagreed, carried HERE rather than re-derived later.
+   *
+   * A wizard's earlier pages are gone from the DOM by the time submit happens, so
+   * asking the live page "was this a choice field?" answers no for every mismatch
+   * found before the last page, and the interlock would wave through the exact
+   * wrong ticks it exists to stop.
+   */
+  kind: "choice" | "text";
+  /** What the user approved. */
+  expected: string;
+  /** What the form actually holds. */
+  actual: string;
+}
+
 /**
  * Outcome of a submit attempt.
  * - filled: review-gate fill only (submit was not requested).
@@ -67,8 +86,16 @@ export interface Recovery {
  * - captcha_blocked: filled, but an anti-bot check could not be cleared. Counts
  *   as work done, not a system failure.
  * - unconfirmed: submit clicked, no confirmation and no captcha signal.
+ * - verification_failed: filled, but a choice field disagrees with the approved
+ *   answer, so submit was REFUSED. Counts as work done: the application is
+ *   reviewable, it just must not be sent as it stands.
  */
-export type SubmitOutcome = "filled" | "submitted" | "captcha_blocked" | "unconfirmed";
+export type SubmitOutcome =
+  | "filled"
+  | "submitted"
+  | "captcha_blocked"
+  | "unconfirmed"
+  | "verification_failed";
 
 /** Structured error codes the worker classifies on (see the module doc in app.ts). */
 export type RenderErrorCode =
