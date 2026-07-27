@@ -135,12 +135,35 @@ describe("POST /api/applications", () => {
     expect((await POST(post({ url: GH }))).status).toBe(500);
   });
 
-  it("422 for an unsupported ATS in arm mode", async () => {
+  it("422 asking for the best-effort acknowledgment on an untuned board", async () => {
     holder.server = fakeClient({ user: { id: "u1" } });
     holder.service = service({ applications: [{ data: null }, { data: { id: "app1" } }] });
     const res = await POST(post({ url: "https://example.com/job", mode: "arm" }));
     expect(res.status).toBe(422);
-    expect((await res.json()).error).toBe("ats_unsupported");
+    const body = await res.json();
+    expect(body.error).toBe("best_effort_ack_required");
+    // The job is still saved, so declining costs nothing.
+    expect(body.application_id).toBe("app1");
+  });
+
+  it("dispatches generic + review-gate-only once the best-effort terms are accepted", async () => {
+    holder.server = fakeClient({ user: { id: "u1" } });
+    holder.service = service({
+      applications: [{ data: null }, { data: { id: "app1" } }, { data: null }],
+      // full_auto on a paid plan would normally be honored; generic never is.
+      profiles: [{ data: { arm_autonomy: "full_auto" } }],
+      subscriptions: [{ data: { plan: "premium", status: "active" } }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+    const res = await POST(
+      post({ url: "https://example.com/job", mode: "arm", accept_best_effort: true })
+    );
+    expect(res.status).toBe(200);
+    const args = mocks.buildAndDispatchRun.mock.calls[0][1];
+    expect(args.ats).toBe("generic");
+    expect(args.autonomy).toBe("review_gate");
+    // Generic runs never touch the account-vault path.
+    expect(mocks.ensureSiteAccount).not.toHaveBeenCalled();
   });
 
   it("400 when the profile is missing", async () => {

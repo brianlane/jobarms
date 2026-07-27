@@ -82,12 +82,45 @@ describe("POST /api/applications/[id]/retry", () => {
     expect((await POST(req(), ctx)).status).toBe(404);
   });
 
-  it("422 when the job's ATS is unsupported", async () => {
+  it("404 when the application row has no job", async () => {
     holder.server = fakeClient({
       user: { id: "u1" },
-      from: fakeFrom({ applications: [{ data: { id: "app-1", jobs: { ...JOB, ats: "workable" } } }] })
+      from: fakeFrom({ applications: [{ data: { id: "app-1", jobs: null } }] })
     });
-    expect((await POST(req(), ctx)).status).toBe(422);
+    expect((await POST(req(), ctx)).status).toBe(404);
+  });
+
+  it("422 for an untuned board with no prior run (the ack lives on the apply page)", async () => {
+    holder.server = fakeClient({
+      user: { id: "u1" },
+      from: fakeFrom({
+        applications: [{ data: { id: "app-1", jobs: { ...JOB, ats: "workable" } } }],
+        application_runs: [{ data: null }]
+      })
+    });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("best_effort_ack_required");
+  });
+
+  it("retries an untuned board as generic, review-gate only, no account path", async () => {
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: { ...JOB, ats: "workable" } } },
+      // A prior run is the evidence the best-effort terms were accepted.
+      { data: { id: "r1", status: "failed", answers: null, created_at: new Date().toISOString() } }
+    );
+    holder.service = service({
+      // full_auto on a paid plan would normally be honored; generic never is.
+      profiles: [{ data: { arm_autonomy: "full_auto" } }],
+      subscriptions: [{ data: { plan: "premium", status: "active" } }],
+      rpc: { refund_arm_run: [true], try_reserve_arm_run: [true] }
+    });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    const args = buildAndDispatchRun.mock.calls[0][1] as { ats: string; autonomy: string };
+    expect(args.ats).toBe("generic");
+    expect(args.autonomy).toBe("review_gate");
+    expect(ensureSiteAccount).not.toHaveBeenCalled();
   });
 
   it("409 when the latest run is not retryable", async () => {

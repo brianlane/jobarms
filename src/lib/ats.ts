@@ -34,8 +34,22 @@ export function detectAts(rawUrl: string): Ats {
   return "unknown";
 }
 
-/** ATSes the arm can drive today. */
+/** ATSes the arm has a tuned adapter for today. */
 export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "workday", "ashby"]);
+
+/**
+ * The adapter a run dispatches with: the tuned adapter for supported ATSes,
+ * the best-effort `generic` adapter for every other board.
+ *
+ * Generic runs carry guardrails the caller must enforce (and the worker
+ * re-enforces): review-gate only, never account creation, and an explicit
+ * user acknowledgment that the attempt may fail and still consume a run.
+ */
+export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "generic";
+
+export function dispatchAtsOf(ats: Ats): DispatchAts {
+  return SUPPORTED_ATS.has(ats) ? (ats as DispatchAts) : "generic";
+}
 
 /**
  * ATSes that require a candidate account on the employer's own tenant before an

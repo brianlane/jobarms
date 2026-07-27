@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { dispatchRun, type ArmDispatchResult } from "@/lib/arm";
 import { lessonsFromStats } from "@/lib/answer-memory";
+import type { DispatchAts } from "@/lib/ats";
 
-/** ATSes the arm can drive, i.e. the members of SUPPORTED_ATS. */
+/** ATSes with a tuned adapter, i.e. the members of SUPPORTED_ATS. */
 export type SupportedAts = "greenhouse" | "lever" | "workday" | "ashby";
 
 export interface ResumeRow {
@@ -16,7 +17,7 @@ export interface DispatchArgs {
   applicationId: string;
   userId: string;
   jobUrl: string;
-  ats: SupportedAts;
+  ats: DispatchAts;
   autonomy: "review_gate" | "full_auto";
   jobTitle: string;
   jobCompany: string;

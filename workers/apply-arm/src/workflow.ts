@@ -56,7 +56,13 @@ const VERIFICATION_TIMEOUT = "30 minutes";
 
 export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
   async run(event: WorkflowEvent<RunParams>, step: WorkflowStep) {
-    const params = event.payload;
+    // Generic (best-effort) runs are review-gate only whatever the app sent:
+    // an untuned board must never be submitted without a human look. The app
+    // enforces this at dispatch; this is the defense in depth.
+    const params: RunParams =
+      event.payload.ats === "generic" && event.payload.autonomy === "full_auto"
+        ? { ...event.payload, autonomy: "review_gate" }
+        : event.payload;
     const env = this.env;
     const domain = hostOf(params.jobUrl);
 

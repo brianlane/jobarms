@@ -14,6 +14,7 @@ import type { Page } from "playwright";
 import { ADAPTERS } from "./adapters.js";
 import { collectFields } from "./extract.js";
 import { looksLikeApplicationForm } from "./form-sanity.js";
+import { safeUrl } from "./ssrf.js";
 import type { Ats, FormField, Recovery, RecoveryStrategy } from "./types.js";
 
 /**
@@ -95,19 +96,27 @@ export async function applyStrategy(
     }
 
     if (strategy.action === "iframe") {
-      const providerHosts: Record<Ats, string> = {
+      const providerHosts: Record<Ats, string | null> = {
         greenhouse: "greenhouse.io",
         lever: "lever.co",
         workday: "myworkdayjobs.com",
-        ashby: "ashbyhq.com"
+        ashby: "ashbyhq.com",
+        // No provider to anchor on for unknown boards: any iframe with a src
+        // is a candidate embed.
+        generic: null
       };
       const providerHost = providerHosts[ats];
+      const embedSelector = providerHost ? `iframe[src*="${providerHost}"]` : "iframe[src]";
       for (let attempt = 0; attempt < 5; attempt++) {
-        const embed = page.locator(`iframe[src*="${providerHost}"]`).first();
+        const embed = page.locator(embedSelector).first();
         if ((await embed.count()) > 0) {
           const src = await embed.getAttribute("src");
-          if (src) {
-            await page.goto(src, { waitUntil: "domcontentloaded" });
+          // Re-validated because the embed src comes from the PAGE, not the
+          // caller: on an untuned board any markup could offer an iframe, and
+          // a loopback or metadata target must never be navigated to.
+          const safe = src ? safeUrl(src) : null;
+          if (safe) {
+            await page.goto(safe, { waitUntil: "domcontentloaded" });
             return;
           }
         }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_REQUIRED_ATS,
   detectAts,
+  dispatchAtsOf,
   normalizeJobUrl,
   parseWorkdayUrl,
   SUPPORTED_ATS,
@@ -46,6 +47,15 @@ describe("detectAts", () => {
     expect(SUPPORTED_ATS.has("ashby")).toBe(true);
     expect(SUPPORTED_ATS.has("workable")).toBe(false);
     expect(SUPPORTED_ATS.has("unknown")).toBe(false);
+  });
+
+  it("dispatches tuned ATSes as themselves and everything else as generic", () => {
+    expect(dispatchAtsOf("greenhouse")).toBe("greenhouse");
+    expect(dispatchAtsOf("lever")).toBe("lever");
+    expect(dispatchAtsOf("workday")).toBe("workday");
+    expect(dispatchAtsOf("ashby")).toBe("ashby");
+    expect(dispatchAtsOf("workable")).toBe("generic");
+    expect(dispatchAtsOf("unknown")).toBe("generic");
   });
 
   it("marks only workday as needing an account per employer tenant", () => {

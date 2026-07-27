@@ -2,6 +2,17 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { detectAts, SUPPORTED_ATS } from "@/lib/ats";
+
+/** True for a parseable http(s) URL, so the warning never flashes mid-typing. */
+function isHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
   const router = useRouter();
@@ -9,9 +20,14 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
   const [url, setUrl] = useState(searchParams.get("url") ?? "");
   const [mode, setMode] = useState<"arm" | "track_only">("arm");
   const [tailor, setTailor] = useState(premium);
+  const [ackBestEffort, setAckBestEffort] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Boards without a tuned adapter dispatch the best-effort generic arm, and
+  // that path requires the user to accept its terms before anything starts.
+  const bestEffort = mode === "arm" && isHttpUrl(url) && !SUPPORTED_ATS.has(detectAts(url));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,7 +38,12 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, mode, tailor: premium && mode === "arm" && tailor })
+      body: JSON.stringify({
+        url,
+        mode,
+        tailor: premium && mode === "arm" && tailor,
+        accept_best_effort: bestEffort && ackBestEffort
+      })
     });
     const body = await res.json();
     setBusy(false);
@@ -32,8 +53,14 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
       router.refresh();
       return;
     }
+    if (body.error === "best_effort_ack_required") {
+      // Stay on the form so the warning panel can be acknowledged; navigating
+      // away would lose the checkbox the server is asking for.
+      setError(body.hint ?? "Confirm the best-effort terms to continue.");
+      return;
+    }
     if (body.application_id) {
-      // Saved to tracker but the arm couldn't run (unsupported ATS / offline).
+      // Saved to tracker but the arm couldn't run (offline / account issues).
       setNotice(body.hint ?? "Saved to your tracker.");
       setTimeout(() => {
         router.push(`/dashboard/applications/${body.application_id}`);
@@ -53,14 +80,42 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
           required
           placeholder="https://boards.greenhouse.io/company/jobs/123456"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            // A new link is a new decision: never carry an acknowledgment over.
+            setAckBestEffort(false);
+          }}
           className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-arm-500 focus:outline-none"
         />
         <p className="mt-1 text-xs text-slate-400">
-          The arm currently drives Greenhouse, Lever, Workday, and Ashby postings. Anything else is
-          saved to your tracker.
+          The arm is tuned for Greenhouse, Lever, Workday, and Ashby postings. Paste any other job
+          link and it will try its best.
         </p>
       </div>
+
+      {bestEffort && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">
+            This job board isn&apos;t one we&apos;ve tuned the arm for
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            The arm will try its best in review mode: it fills everything out and you approve every
+            answer before anything is sent. The attempt may fail, and a failed attempt can still use
+            one of your runs.
+          </p>
+          <label className="mt-3 flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={ackBestEffort}
+              onChange={(e) => setAckBestEffort(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="text-xs font-medium text-amber-900">
+              I understand this may fail and use one of my runs
+            </span>
+          </label>
+        </div>
+      )}
 
       <div className="flex gap-3">
         <button
@@ -107,7 +162,7 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
 
       <button
         type="submit"
-        disabled={busy}
+        disabled={busy || (bestEffort && !ackBestEffort)}
         className="rounded-lg bg-arm-600 px-6 py-3 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
       >
         {busy

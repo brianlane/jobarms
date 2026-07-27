@@ -10,6 +10,9 @@ describe("adapter contract", () => {
     expect(ADAPTERS.greenhouse.requiresAccount).toBe(false);
     expect(ADAPTERS.lever.requiresAccount).toBe(false);
     expect(ADAPTERS.ashby.requiresAccount).toBe(false);
+    // Load-bearing for generic: the best-effort path must NEVER create
+    // accounts on an unknown site.
+    expect(ADAPTERS.generic.requiresAccount).toBe(false);
     expect(ADAPTERS.workday.requiresAccount).toBe(true);
   });
 
@@ -17,6 +20,7 @@ describe("adapter contract", () => {
     expect(ADAPTERS.greenhouse.nextPage).toBeUndefined();
     expect(ADAPTERS.lever.nextPage).toBeUndefined();
     expect(ADAPTERS.ashby.nextPage).toBeUndefined();
+    expect(ADAPTERS.generic.nextPage).toBeUndefined();
     expect(ADAPTERS.workday.nextPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.isLastPage).toBeTypeOf("function");
   });
@@ -202,6 +206,77 @@ describe("ashby", () => {
       content: "<p>nope</p>"
     });
     expect(await ashby.confirmSubmitted(asPage(neither))).toBe(false);
+  });
+});
+
+describe("generic", () => {
+  const generic = ADAPTERS.generic;
+
+  it("returns immediately when fillable form fields are already on screen", async () => {
+    const fields = loc({ count: vi.fn(async () => 3) });
+    const page = fakePage({ locators: { "form input": fields } });
+    await generic.openApplication(asPage(page));
+    expect(page.locator).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicks Apply while no form is present, then gives up quietly", async () => {
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({ locators: { ':has-text("Apply")': apply } });
+    await expect(generic.openApplication(asPage(page))).resolves.toBeUndefined();
+    // One click per attempt: the universal move, nothing clever.
+    expect(apply.click).toHaveBeenCalledTimes(3);
+  });
+
+  it("tolerates a page with neither form nor Apply control", async () => {
+    await expect(generic.openApplication(asPage(fakePage()))).resolves.toBeUndefined();
+  });
+
+  it("shrugs off a click or load-state failure (best-effort all the way down)", async () => {
+    const apply = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { ':has-text("Apply")': apply } });
+    page.waitForLoadState = vi.fn(async () => {
+      throw new Error("navigation aborted");
+    });
+    await expect(generic.openApplication(asPage(page))).resolves.toBeUndefined();
+  });
+
+  it("clicks the submit control", async () => {
+    const submit = loc();
+    const page = fakePage({ locators: { 'button[type="submit"]': submit } });
+    await generic.submit(asPage(page));
+    expect(submit.click).toHaveBeenCalled();
+  });
+
+  it("confirms only on explicit success wording", async () => {
+    expect(
+      await generic.confirmSubmitted(asPage(fakePage({ locators: { "text=/": loc() } })))
+    ).toBe(true);
+
+    const missing = loc({
+      waitFor: vi.fn(async () => {
+        throw new Error("timeout");
+      })
+    });
+    const byContent = fakePage({
+      locators: { "text=/": missing },
+      content: "<p>Thank you for your application!</p>"
+    });
+    expect(await generic.confirmSubmitted(asPage(byContent))).toBe(true);
+
+    // "Success" alone, a changed URL, a vibe: none of it counts. With no known
+    // confirmation shape, anything less than explicit wording must end as an
+    // honest submit_unconfirmed rather than a claimed success.
+    const vague = fakePage({
+      locators: { "text=/": missing },
+      url: "https://careers.example.com/success",
+      content: "<p>Success!</p>"
+    });
+    expect(await generic.confirmSubmitted(asPage(vague))).toBe(false);
   });
 });
 

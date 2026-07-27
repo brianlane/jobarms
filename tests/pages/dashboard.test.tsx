@@ -177,8 +177,8 @@ describe("DiscoverPage", () => {
       applications: [{ data: [{ job_id: "j3" }] }]
     });
     render(await DiscoverPage());
-    expect(screen.getByText("Send an arm")).toBeInTheDocument(); // j1 lever
-    expect(screen.getByText("Track")).toBeInTheDocument(); // j2 unsupported ats
+    expect(screen.getByText("Send an arm")).toBeInTheDocument(); // j1 lever (tuned)
+    expect(screen.getByText("Send an arm (beta)")).toBeInTheDocument(); // j2 untuned -> best-effort
     expect(screen.queryByText("Already Applied")).not.toBeInTheDocument(); // j3 filtered
     expect(screen.queryByText("Elsewhere")).not.toBeInTheDocument(); // j4 location-filtered
   });

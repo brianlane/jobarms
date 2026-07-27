@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { ACCOUNT_REQUIRED_ATS, SUPPORTED_ATS, tenantHostOf, type Ats } from "@/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, dispatchAtsOf, tenantHostOf, type Ats } from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
 import { ensureSiteAccount } from "@/lib/site-accounts";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@/lib/plans";
 import { retryDecision } from "@/lib/run-outcome";
 import { cancelRun } from "@/lib/arm";
-import { buildAndDispatchRun, type SupportedAts } from "@/lib/arm-dispatch";
+import { buildAndDispatchRun } from "@/lib/arm-dispatch";
 
 export const maxDuration = 60;
 
@@ -47,15 +47,8 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     company: string;
     description: string;
   } | null;
-  if (!job || !SUPPORTED_ATS.has(job.ats)) {
-    return NextResponse.json(
-      {
-        error: "ats_unsupported",
-        hint: "The arm currently drives Greenhouse, Lever, Workday, and Ashby postings."
-      },
-      { status: 422 }
-    );
-  }
+  if (!job) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const dispatchAts = dispatchAtsOf(job.ats);
 
   const { data: latestRun } = await supabase
     .from("application_runs")
@@ -64,6 +57,19 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  // A prior run is the evidence the user accepted the best-effort terms at
+  // dispatch time (the create route enforces the acknowledgment). Without one
+  // this is a first dispatch in disguise, so send it through the front door.
+  if (dispatchAts === "generic" && !latestRun) {
+    return NextResponse.json(
+      {
+        error: "best_effort_ack_required",
+        hint: "This job board isn't one the arm is tuned for. Start the arm from the apply page, which explains what best-effort means."
+      },
+      { status: 422 }
+    );
+  }
 
   const decision = retryDecision(latestRun ?? null);
   if (!decision.eligible) {
@@ -142,19 +148,21 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     );
   }
 
+  // Generic runs are review-gate only on any plan, same rule as the create route.
   const requestedAutonomy = (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate";
-  const autonomy = canFullAuto(plan) ? requestedAutonomy : "review_gate";
+  const autonomy =
+    dispatchAts === "generic" || !canFullAuto(plan) ? "review_gate" : requestedAutonomy;
 
   // Account-gated ATSes: reuse the stored tenant credentials (ensureSiteAccount
   // is idempotent, so a retry signs in to the SAME account rather than creating
-  // a second candidate profile on the employer's tenant).
-  const ats = job.ats as SupportedAts;
+  // a second candidate profile on the employer's tenant). Generic runs never
+  // touch the account path.
   const tenantHost = tenantHostOf(job.url);
   let account: { email: string; password: string } | null = null;
-  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+  if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(job.ats) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     const siteAccount = alias
-      ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats, email: alias })
+      ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats: job.ats, email: alias })
       : null;
     if (!siteAccount) {
       await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
@@ -190,7 +198,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     applicationId: id,
     userId: user.id,
     jobUrl: job.url,
-    ats,
+    ats: dispatchAts,
     autonomy,
     jobTitle: job.title,
     jobCompany: job.company,

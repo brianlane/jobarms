@@ -15,10 +15,10 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { retryDecision } from "../src/lib/run-outcome";
-import { ACCOUNT_REQUIRED_ATS, tenantHostOf } from "../src/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, dispatchAtsOf, tenantHostOf, type Ats } from "../src/lib/ats";
 import { ensureApplicantAlias } from "../src/lib/applicant-email";
 import { ensureSiteAccount } from "../src/lib/site-accounts";
-import { buildAndDispatchRun, type SupportedAts } from "../src/lib/arm-dispatch";
+import { buildAndDispatchRun } from "../src/lib/arm-dispatch";
 import { cancelRun } from "../src/lib/arm";
 import { armRunQuota, canFullAuto, effectivePlan, meterKey } from "../src/lib/plans";
 import type { SubscriptionRow } from "../src/lib/plans";
@@ -54,11 +54,14 @@ async function main() {
   if (!app) throw new Error("application not found");
   const job = app.jobs as unknown as {
     url: string;
-    ats: SupportedAts;
+    ats: Ats;
     title: string;
     company: string;
     description: string;
   };
+  // Same mapping the retry route makes: untuned boards dispatch the generic
+  // best-effort adapter, which never touches the account path.
+  const dispatchAts = dispatchAtsOf(job.ats);
   console.log(`app: ${job.title} @ ${job.company} (${job.ats})`);
   console.log("usage before:", await usage(app.user_id));
 
@@ -138,13 +141,13 @@ async function main() {
   // rather than creating a second candidate profile on the employer tenant.
   const tenantHost = tenantHostOf(job.url);
   let account: { email: string; password: string } | null = null;
-  if (ACCOUNT_REQUIRED_ATS.has(job.ats as SupportedAts) && tenantHost) {
+  if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(job.ats) && tenantHost) {
     const alias = await ensureApplicantAlias(service, app.user_id);
     const siteAccount = alias
       ? await ensureSiteAccount(service, {
           userId: app.user_id,
           tenantHost,
-          ats: job.ats as SupportedAts,
+          ats: job.ats,
           email: alias
         })
       : null;
@@ -187,7 +190,7 @@ async function main() {
     applicationId: appId,
     userId: app.user_id,
     jobUrl: job.url,
-    ats: job.ats,
+    ats: dispatchAts,
     autonomy,
     jobTitle: job.title,
     jobCompany: job.company,

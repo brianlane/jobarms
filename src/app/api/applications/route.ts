@@ -5,8 +5,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import {
   ACCOUNT_REQUIRED_ATS,
   detectAts,
+  dispatchAtsOf,
   normalizeJobUrl,
-  SUPPORTED_ATS,
   tenantHostOf
 } from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
@@ -25,14 +25,19 @@ import { randomUUID } from "node:crypto";
 import { tailorResume } from "@/lib/tailor";
 import { renderResumePdf } from "@/lib/resume-pdf";
 import { parsedResumeSchema } from "@/lib/resume-parse";
-import { buildAndDispatchRun, type SupportedAts } from "@/lib/arm-dispatch";
+import { buildAndDispatchRun } from "@/lib/arm-dispatch";
 
 export const maxDuration = 60;
 
 const bodySchema = z.object({
   url: z.string().max(2000),
   mode: z.enum(["arm", "track_only"]).default("arm"),
-  tailor: z.boolean().default(false)
+  tailor: z.boolean().default(false),
+  /**
+   * Required for boards without a tuned adapter (the generic best-effort
+   * path): the user confirmed the attempt may fail and still consume a run.
+   */
+  accept_best_effort: z.boolean().default(false)
 });
 
 /**
@@ -128,13 +133,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ application_id: applicationId });
   }
 
-  // --- arm mode: supported ATS? ---
-  if (!SUPPORTED_ATS.has(ats)) {
+  // --- arm mode: tuned adapter, or the generic best-effort path ---
+  // Generic dispatch is a contract, not a default: the user must acknowledge
+  // up front that an untuned board may fail and still consume a run. The flag
+  // is enforced here (not just in the UI) so a direct API call cannot skip it.
+  const dispatchAts = dispatchAtsOf(ats);
+  if (dispatchAts === "generic" && !parsed.data.accept_best_effort) {
     return NextResponse.json(
       {
-        error: "ats_unsupported",
+        error: "best_effort_ack_required",
         application_id: applicationId,
-        hint: "The arm can't drive this job board yet. The job was saved to your tracker."
+        hint: "This job board isn't one the arm is tuned for. It can try in review mode, but the attempt may fail and can still use one of your runs. Confirm to continue; the job was saved to your tracker either way."
       },
       { status: 422 }
     );
@@ -251,9 +260,11 @@ export async function POST(request: Request) {
   }
 
   // Full-auto is a paid feature: free plans always get the review gate,
-  // whatever their profile toggle says.
+  // whatever their profile toggle says. Generic runs are review-gate only on
+  // ANY plan: an untuned board must never submit without a human look.
   const requestedAutonomy = (profile.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate";
-  const autonomy = canFullAuto(plan) ? requestedAutonomy : "review_gate";
+  const autonomy =
+    dispatchAts === "generic" || !canFullAuto(plan) ? "review_gate" : requestedAutonomy;
 
   // --- account-gated ATSes: provision the managed mailbox + tenant credentials ---
   // Workday gives every employer its own tenant and its own candidate database,
@@ -261,7 +272,10 @@ export async function POST(request: Request) {
   // alias and the password are generated and stored; the user never sees either.
   const tenantHost = tenantHostOf(jobUrl);
   let account: { email: string; password: string } | null = null;
-  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+  // The generic guard is defense in depth: an ATS added to ACCOUNT_REQUIRED_ATS
+  // before it earns a tuned adapter must never create accounts on the
+  // best-effort path.
+  if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     if (!alias) {
       await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
@@ -322,7 +336,7 @@ export async function POST(request: Request) {
     applicationId,
     userId: user.id,
     jobUrl,
-    ats: ats as SupportedAts,
+    ats: dispatchAts,
     autonomy,
     jobTitle: meta.title,
     jobCompany: meta.company,

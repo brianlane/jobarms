@@ -236,6 +236,33 @@ describe("applyStrategy", () => {
     }
   });
 
+  it("takes any iframe with a src for the generic ATS (no provider to anchor on)", async () => {
+    const embed = loc({
+      count: vi.fn(async () => 1),
+      getAttribute: vi.fn(async () => "https://forms.example.com/apply")
+    });
+    const page = fakePage({ locators: { "iframe[src]": embed } });
+    await applyStrategy(asPage(page), "form", { action: "iframe" }, "generic");
+    expect((page.locator as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("iframe[src]");
+    expect(page.goto).toHaveBeenCalledWith("https://forms.example.com/apply", {
+      waitUntil: "domcontentloaded"
+    });
+  });
+
+  it("refuses to navigate into an unsafe embed src", async () => {
+    // The embed src comes from the PAGE, not the caller, so a loopback or
+    // metadata target here would turn the recovery into an SSRF vector.
+    const embed = loc({
+      count: vi.fn(async () => 1),
+      getAttribute: vi.fn(async () => "http://169.254.169.254/latest/meta-data/")
+    });
+    const page = fakePage({ locators: { "iframe[src]": embed } });
+    await applyStrategy(asPage(page), "form", { action: "iframe" }, "generic");
+    expect(page.goto).not.toHaveBeenCalled();
+    // The unsafe embed is skipped and the scroll-and-look loop runs out.
+    expect(page.mouse.wheel).toHaveBeenCalledTimes(5);
+  });
+
   it("scrolls looking for a lazy embed, then gives up", async () => {
     const page = fakePage();
     await applyStrategy(asPage(page), "form", { action: "iframe" }, "lever");
