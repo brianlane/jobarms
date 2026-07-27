@@ -37,6 +37,30 @@ describe("POST /api/runs/[id]/cancel", () => {
     expect((await POST(req(), ctx)).status).toBe(409);
   });
 
+  // Without this a run parked on an employer email the user no longer wants
+  // could only be escaped by inbound mail or the workflow timeout.
+  it("lets a user cancel while waiting on account verification", async () => {
+    holder.server = fakeClient({
+      user: { id: "u1" },
+      from: fakeFrom({
+        application_runs: [
+          {
+            data: {
+              id: "run-1",
+              status: "needs_account_verification",
+              answers: null,
+              application_id: "a1"
+            }
+          }
+        ]
+      })
+    });
+    holder.service = fakeClient({ rpc: fakeRpc({}) });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(cancelRun).toHaveBeenCalledWith("run-1");
+  });
+
   it("consumes the slot when canceling working machinery (no refund)", async () => {
     holder.server = fakeClient({
       user: { id: "u1" },

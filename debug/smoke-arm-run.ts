@@ -83,8 +83,14 @@ async function ensureSmokeUser(): Promise<string> {
   return userId;
 }
 
-function atsOf(url: string): "greenhouse" | "lever" {
-  return new URL(url).hostname.endsWith("lever.co") ? "lever" : "greenhouse";
+function atsOf(url: string): "greenhouse" | "lever" | "workday" {
+  const host = new URL(url).hostname;
+  if (host.endsWith("lever.co")) return "lever";
+  // Everything-else-is-greenhouse sent Workday postings through the
+  // Greenhouse adapter, so the smoke run drove the wrong automation against a
+  // real page.
+  if (host.endsWith("myworkdayjobs.com") || host.endsWith("myworkday.com")) return "workday";
+  return "greenhouse";
 }
 
 async function pickJob(argUrl?: string) {

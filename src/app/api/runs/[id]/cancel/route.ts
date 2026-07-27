@@ -26,7 +26,17 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     .maybeSingle();
   if (!run) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  const cancellable = ["queued", "running", "needs_review", "approved"];
+  // `needs_account_verification` is included because a run parked there is
+  // waiting on an employer email that may never arrive. Without it the only
+  // ways out were inbound mail or the workflow timeout, so a user who changed
+  // their mind had to sit and wait.
+  const cancellable = [
+    "queued",
+    "running",
+    "needs_review",
+    "approved",
+    "needs_account_verification"
+  ];
   if (!cancellable.includes(run.status)) {
     return NextResponse.json({ error: "not_cancellable", status: run.status }, { status: 409 });
   }

@@ -81,6 +81,19 @@ describe("pickVerificationRun", () => {
     );
   });
 
+  // The sidecar cannot be driven without a host, so a run missing one is not
+  // a candidate at all. Returning it and letting the caller bail meant a
+  // usable run could be passed over for an unusable one.
+  it("treats a run with no tenant as no candidate rather than the answer", () => {
+    const blank = { id: "run-blank", tenant_host: null };
+    expect(pickVerificationRun([blank], fromSender("myworkday.com"))).toEqual({
+      run: null,
+      ambiguous: false
+    });
+    // And the usable one still wins when it is the only real candidate.
+    expect(pickVerificationRun([blank, acme], fromSender("myworkday.com")).run).toBe(acme);
+  });
+
   // A code-only mail comes from a generic sender that can never equal a
   // tenant host. Treating that as "matches nothing" would strand every parked
   // run, which is worse than the wrong-tenant bug it was meant to prevent.

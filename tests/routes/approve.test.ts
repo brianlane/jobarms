@@ -55,6 +55,21 @@ describe("POST /api/runs/[id]/approve", () => {
     expect((await POST(post({}), ctx)).status).toBe(503);
   });
 
+  // Persisting first left the run at needs_review with the database showing
+  // answers the worker never received, so the UI called them saved.
+  it("does not persist edits when the worker rejects the approval", async () => {
+    approveRun.mockResolvedValueOnce({ ok: false, reason: "arm_offline" });
+    holder.server = fakeClient({ user: { id: "u1" }, from: fakeFrom({ application_runs: [reviewRun()] }) });
+    const from = fakeFrom({});
+    holder.service = fakeClient({ from });
+    const res = await POST(
+      post({ answers: [{ name: "phone", label: "Phone", value: "555" }] }),
+      ctx
+    );
+    expect(res.status).toBe(503);
+    expect(from).not.toHaveBeenCalledWith("application_runs");
+  });
+
   it("approves with edits and captures memory + platform stats", async () => {
     holder.server = fakeClient({
       user: { id: "u1" },
