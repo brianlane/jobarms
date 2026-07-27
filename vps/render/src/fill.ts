@@ -108,13 +108,32 @@ export const checkboxLabelInPage = (node: any): string => {
  * counts, while a plain visible input has no widget to satisfy and holding the
  * file is all there is. Exported so tests can drive it against a fake document.
  */
+/**
+ * A widget complaining. Checked because a filename on screen is NOT proof of an
+ * upload: Greenhouse renders the name straight off `input.files[0]` and only then
+ * hands it to its uploader, so a failure leaves the name sitting next to
+ * "Cannot read properties of undefined (reading 'uploadFile')" and a required
+ * field with nothing in it. Reading the name alone called that a success.
+ */
+const UPLOAD_COMPLAINT = /cannot|could ?n[o']t|unable to|failed|error|try again/i;
+
 export const resumeAcceptedInPage = (fileName: string): boolean => {
   const doc = (globalThis as any).document;
+  const complaining = (el: any): boolean =>
+    UPLOAD_COMPLAINT.test((el?.textContent ?? "").replace(/\s+/g, " "));
+
   const input = doc.querySelector('input[type="file"]');
   if (!input) {
-    // The widget replaced its own input; the rendered name is the only evidence.
+    // The widget replaced its own input, which the working ones do once they have
+    // the file. The rendered name is the only evidence left, so scope the
+    // complaint check to whatever is showing it rather than the whole page.
+    const shown = [...doc.querySelectorAll('[class*="upload"], [class*="file"]')].find((el: any) =>
+      (el.textContent ?? "").includes(fileName)
+    );
+    if (shown && complaining(shown)) return false;
     return (doc.body?.textContent ?? "").includes(fileName);
   }
+
   const rect = input.getBoundingClientRect();
   const style = (globalThis as any).getComputedStyle(input);
   const widgetOwned =
@@ -127,7 +146,31 @@ export const resumeAcceptedInPage = (fileName: string): boolean => {
 
   const container =
     input.closest('[class*="upload"], [role="group"], fieldset, [class*="field"]') ?? doc.body;
+  if (complaining(container)) return false;
   return (container.textContent ?? "").includes(fileName);
+};
+
+/**
+ * Runs IN THE PAGE. Is the file input hidden behind a widget of the site's own?
+ *
+ * Such a widget owns the upload: writing to its input behind its back fires a
+ * change event into a handler whose uploader was never built, because that only
+ * happens on the path a real click takes. A plain visible input has no such
+ * machinery and is best left alone.
+ */
+export const fileInputIsWidgetOwnedInPage = (): boolean => {
+  const doc = (globalThis as any).document;
+  const input = doc.querySelector('input[type="file"]');
+  if (!input) return false;
+  const rect = input.getBoundingClientRect();
+  const style = (globalThis as any).getComputedStyle(input);
+  return (
+    rect.width < 8 ||
+    rect.height < 8 ||
+    style.display === "none" ||
+    style.visibility === "hidden" ||
+    style.opacity === "0"
+  );
 };
 
 /** Runs IN THE PAGE. The element facts the filler branches on. */
@@ -431,6 +474,16 @@ export type ResumeOutcome = "not_requested" | "attached" | "failed";
 const RESUME_ATTEMPTS = 4;
 const RESUME_SETTLE_MS = 1200;
 
+/** How long a widget gets to open its file chooser before we stop waiting. */
+const CHOOSER_TIMEOUT_MS = 8000;
+
+/** The in-memory file both attach paths hand over. */
+interface ResumeFile {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+}
+
 /**
  * Attach the resume to the form's file input.
  *
@@ -459,7 +512,16 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
     const input = page.locator('input[type="file"]').first();
     // No input left and not yet accepted means there is nowhere to put it.
     if ((await input.count()) === 0) break;
-    await input.setInputFiles(file).catch(() => {});
+
+    // A hidden input belongs to a widget, and the widget has to be the one to
+    // take the file. Writing to the input directly fires a change event into a
+    // handler whose uploader was never constructed, which is how a Greenhouse
+    // upload died on "reading 'uploadFile'" while still showing the filename.
+    const widgetOwned = await page.evaluate(fileInputIsWidgetOwnedInPage).catch(() => false);
+    if (!widgetOwned || !(await attachThroughWidget(page, file))) {
+      await input.setInputFiles(file).catch(() => {});
+    }
+
     await page.waitForTimeout(RESUME_SETTLE_MS);
     if (await resumeAccepted(page, name)) break;
   }
@@ -469,6 +531,37 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
   // autofill cannot overwrite what the arm is about to type.
   await page.waitForTimeout(3000);
   return "attached";
+}
+
+/**
+ * Hand the file to the widget the way a person would: click its own control and
+ * answer the file chooser it opens.
+ *
+ * Deliberately narrow about which control. These uploaders sit next to buttons
+ * offering Dropbox, Google Drive, and "Enter manually", and clicking one of those
+ * leads somewhere with no chooser and no way back.
+ *
+ * Returns false when there is nothing to click or the click opened no chooser, so
+ * the caller can fall back rather than skip the resume entirely.
+ */
+async function attachThroughWidget(page: Page, file: ResumeFile): Promise<boolean> {
+  const control = page
+    .getByRole("button", { name: /attach|upload|choose file|select file|browse/i })
+    .first();
+  if ((await control.count().catch(() => 0)) === 0) return false;
+
+  try {
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser", { timeout: CHOOSER_TIMEOUT_MS }),
+      control.click({ timeout: CHOOSER_TIMEOUT_MS })
+    ]);
+    await chooser.setFiles(file);
+    return true;
+  } catch {
+    // A control that opens no chooser tells us nothing about the file; the plain
+    // input is still worth a try.
+    return false;
+  }
 }
 
 /** Ask the page whether the upload took, never assuming from a lack of throw. */
