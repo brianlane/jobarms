@@ -3,7 +3,7 @@ import {
   checkboxLabelInPage,
   comboboxValueInPage,
   elementInfoInPage,
-  fileInputHasFileInPage
+  resumeAcceptedInPage
 } from "../src/fill";
 import { visibleTextInPage } from "../src/account";
 import { num } from "../src/config";
@@ -213,11 +213,139 @@ describe("num", () => {
   });
 });
 
-describe("fileInputHasFileInPage", () => {
-  it("is true only when the input holds at least one file", () => {
-    expect(fileInputHasFileInPage({ files: { length: 1 } })).toBe(true);
-    expect(fileInputHasFileInPage({ files: { length: 0 } })).toBe(false);
-    // A widget that re-rendered the input away leaves no files collection at all.
-    expect(fileInputHasFileInPage({})).toBe(false);
+describe("resumeAcceptedInPage", () => {
+  const withDoc = (doc: unknown, styles: Record<string, string> = {}) => {
+    (globalThis as unknown as { document: unknown }).document = doc;
+    (globalThis as unknown as { getComputedStyle: unknown }).getComputedStyle = () => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      ...styles
+    });
+  };
+  const rect = (w: number, h: number) => () => ({ width: w, height: h });
+
+  it("trusts the file list only when the input is a plain visible one", () => {
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(200, 30),
+        files: { length: 1 },
+        closest: () => null
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+  });
+
+  it("is false for a plain input holding nothing", () => {
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(200, 30),
+        files: { length: 0 },
+        closest: () => null
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("is false for a plain input with no file list at all", () => {
+    withDoc({
+      querySelector: () => ({ getBoundingClientRect: rect(200, 30), closest: () => null }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("is false when the container has no text to read", () => {
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(1, 1),
+        files: { length: 0 },
+        closest: () => ({ textContent: null })
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("ignores the file list when a widget owns a hidden input", () => {
+    // The failure that hid: the file sits on the node and the widget refused it.
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(1, 1),
+        files: { length: 1 },
+        closest: () => ({ textContent: "Attach Dropbox Enter manually" })
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("accepts a hidden input once the widget renders the name", () => {
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(1, 1),
+        files: { length: 0 },
+        closest: () => ({ textContent: "Resume/CV* cv.pdf" })
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+  });
+
+  it("falls back to the whole page when the hidden input has no container", () => {
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(1, 1),
+        files: { length: 0 },
+        closest: () => null
+      }),
+      body: { textContent: "cv.pdf uploaded" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+  });
+
+  it("reads the rendered name after the widget removed its own input", () => {
+    withDoc({ querySelector: () => null, body: { textContent: "Resume/CV* cv.pdf" } });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+
+    withDoc({ querySelector: () => null, body: { textContent: "Attach" } });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+
+    withDoc({ querySelector: () => null, body: null });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("treats a display:none input as widget-owned", () => {
+    withDoc(
+      {
+        querySelector: () => ({
+          getBoundingClientRect: rect(200, 30),
+          files: { length: 1 },
+          closest: () => ({ textContent: "no name here" })
+        }),
+        body: { textContent: "" }
+      },
+      { display: "none" }
+    );
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("treats visibility:hidden and opacity:0 as widget-owned too", () => {
+    for (const style of [{ visibility: "hidden" }, { opacity: "0" }]) {
+      withDoc(
+        {
+          querySelector: () => ({
+            getBoundingClientRect: rect(200, 30),
+            files: { length: 1 },
+            closest: () => ({ textContent: "cv.pdf" })
+          }),
+          body: { textContent: "" }
+        },
+        style
+      );
+      expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    }
   });
 });
