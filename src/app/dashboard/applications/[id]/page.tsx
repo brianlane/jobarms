@@ -27,7 +27,9 @@ export default async function ApplicationDetailPage(props: { params: Promise<{ i
   const [{ data: runs }, { data: sub }] = await Promise.all([
     supabase
       .from("application_runs")
-      .select("id, status, autonomy, steps, answers, form_fields, error, slot_refunded, created_at")
+      .select(
+        "id, status, autonomy, steps, answers, fill_mismatches, form_fields, error, slot_refunded, created_at"
+      )
       .eq("application_id", id)
       .order("created_at", { ascending: false }),
     supabase

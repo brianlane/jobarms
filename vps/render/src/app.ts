@@ -45,11 +45,12 @@ import { ADAPTERS } from "./adapters.js";
 import { FormNotFoundError, reachForm } from "./reach.js";
 import { filterApplicationFields } from "./field-filter.js";
 import { attachResume, fillAnswers } from "./fill.js";
-import { collectFields } from "./extract.js";
+import { collectFields, readFilledState } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
-import type { Answer, Ats, FormField, SubmitOutcome } from "./types.js";
+import { blocksSubmit, findMismatches } from "./verify.js";
+import type { Answer, Ats, FormField, Mismatch, SubmitOutcome } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
 
@@ -65,6 +66,24 @@ function appError(res: Response, error: string, detail = ""): Response {
 /** The same structured error, as a job result rather than a response body. */
 function errorPayload(error: string, detail: string): JobPayload {
   return { error, detail: detail.slice(0, 400) };
+}
+
+/** Read the form back and report the answers it does not agree with. */
+async function checkFill(page: Page, scope: string, answers: Answer[]): Promise<Mismatch[]> {
+  return findMismatches(answers, await readFilledState(page, scope));
+}
+
+/**
+ * Should the interlock stop this submit? Re-reads the page rather than trusting
+ * the earlier snapshot, since filling later pages can disturb earlier ones.
+ */
+async function submitBlocked(
+  page: Page,
+  scope: string,
+  answers: Answer[],
+  mismatches: Mismatch[]
+): Promise<boolean> {
+  return blocksSubmit(mismatches, await readFilledState(page, scope));
 }
 
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
@@ -391,6 +410,11 @@ export function createApp(deps: AppDeps = {}): Express {
             const resumeOutcome = await attachResume(page, resume);
             await fillAnswers(page, reached.scope, answers);
 
+            // Read the page back and compare it to what was approved. Checked
+            // BEFORE advancing, because a wizard page's state is gone once we
+            // leave it, so this is the only moment it can be seen.
+            const mismatches = await checkFill(page, reached.scope, answers);
+
             // Multi-page: fill each page, then advance. The same answer list is
             // applied per page; fillField no-ops on names this page does not have.
             let pages = 1;
@@ -400,6 +424,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 if (!(await adapter.nextPage(page))) break;
                 pages++;
                 await fillAnswers(page, reached.scope, answers);
+                mismatches.push(...(await checkFill(page, reached.scope, answers)));
               }
             }
 
@@ -407,6 +432,20 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "filled" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches,
+                pages,
+                screenshotBase64: await shot(page)
+              };
+            }
+
+            // The interlock. A choice field that disagrees is a factual
+            // misstatement made on the user's behalf, so this refuses to send it
+            // and hands the run to a human instead of failing it outright.
+            if (await submitBlocked(page, reached.scope, answers, mismatches)) {
+              return {
+                outcome: "verification_failed" as SubmitOutcome,
+                resume: resumeOutcome,
+                mismatches,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -434,6 +473,7 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "submitted" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -454,6 +494,7 @@ export function createApp(deps: AppDeps = {}): Express {
                   return {
                     outcome: "submitted" as SubmitOutcome,
                     resume: resumeOutcome,
+                    mismatches,
                     pages,
                     screenshotBase64: await shot(page)
                   };
@@ -465,6 +506,7 @@ export function createApp(deps: AppDeps = {}): Express {
               return {
                 outcome: "captcha_blocked" as SubmitOutcome,
                 resume: resumeOutcome,
+                mismatches,
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -473,6 +515,7 @@ export function createApp(deps: AppDeps = {}): Express {
             return {
               outcome: "unconfirmed" as SubmitOutcome,
               resume: resumeOutcome,
+              mismatches,
               pages,
               screenshotBase64: await shot(page)
             };
