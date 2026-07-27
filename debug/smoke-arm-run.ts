@@ -12,7 +12,9 @@
  *   npx tsx debug/smoke-arm-run.ts [job-url]
  */
 import { createClient } from "@supabase/supabase-js";
-import { detectAts, SUPPORTED_ATS } from "../src/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, detectAts, SUPPORTED_ATS, tenantHostOf } from "../src/lib/ats";
+import { ensureApplicantAlias } from "../src/lib/applicant-email";
+import { ensureSiteAccount } from "../src/lib/site-accounts";
 import type { SupportedAts } from "../src/lib/arm-dispatch";
 import { findAuthUserByEmail } from "./lib/auth-users";
 
@@ -139,6 +141,26 @@ async function main() {
     .single();
   if (appErr || !app) throw appErr ?? new Error("application upsert failed");
 
+  // Account-gated ATSes need their credentials set up before dispatch, the
+  // same as the real apply and retry routes. This script previously labelled
+  // every non-Lever posting Greenhouse, so it never reached this path; now
+  // that it detects Workday properly, a Workday smoke run without the account
+  // would drive a sign-in the arm has no credentials for.
+  const ats = atsOf(job.url);
+  const tenantHost = tenantHostOf(job.url);
+  let account: { email: string; password: string } | null = null;
+  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+    const alias = await ensureApplicantAlias(supabase, userId);
+    const siteAccount = alias
+      ? await ensureSiteAccount(supabase, { userId, tenantHost, ats, email: alias })
+      : null;
+    if (!siteAccount) {
+      throw new Error(`could not set up the ${ats} account for ${tenantHost}`);
+    }
+    account = { email: siteAccount.email, password: siteAccount.password };
+    console.log(`site account: ${siteAccount.email} @ ${tenantHost}`);
+  }
+
   const monthKey = new Date().toISOString().slice(0, 7);
   const { data: run, error: runErr } = await supabase
     .from("application_runs")
@@ -146,7 +168,8 @@ async function main() {
       application_id: app.id,
       user_id: userId,
       autonomy: "review_gate",
-      month_key: monthKey
+      month_key: monthKey,
+      tenant_host: tenantHost
     })
     .select("id")
     .single();
@@ -162,13 +185,14 @@ async function main() {
       applicationId: app.id,
       userId,
       jobUrl: job.url,
-      ats: atsOf(job.url),
+      ats,
       autonomy: "review_gate",
       jobTitle: job.title ?? "",
       jobCompany: job.company ?? "",
       jobDescription: job.description ?? "",
       profile: SMOKE_PROFILE,
-      resume: { signedUrl: null, fileName: "resume.pdf", mimeType: "application/pdf" }
+      resume: { signedUrl: null, fileName: "resume.pdf", mimeType: "application/pdf" },
+      account
     })
   });
   console.log(`dispatch: ${dispatch.status} ${await dispatch.text()}`);
