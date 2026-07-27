@@ -4,6 +4,7 @@ import {
   getFillTactics,
   getPlaybook,
   recordFillTactic,
+  recordFillTacticFailure,
   logStep,
   recordPlaybook,
   recordPlaybookFailure,
@@ -172,10 +173,27 @@ describe("fill tactics", () => {
     });
   });
 
+  it("counts a failure through its own RPC", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await recordFillTacticFailure(env, "d.com", "greenhouse", "choice");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/rpc/record_fill_tactic_failure");
+    expect(JSON.parse(init.body)).toEqual({
+      p_domain: "d.com",
+      p_ats: "greenhouse",
+      p_kind: "choice"
+    });
+  });
+
   it("never lets a bookkeeping write break a finished application", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net")));
     await expect(
       recordFillTactic(env, "d.com", "greenhouse", "choice", "label")
+    ).resolves.toBeUndefined();
+    await expect(
+      recordFillTacticFailure(env, "d.com", "greenhouse", "choice")
     ).resolves.toBeUndefined();
   });
 });

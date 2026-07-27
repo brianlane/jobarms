@@ -275,6 +275,20 @@ export async function recordFillTactic(
   }).catch(() => {});
 }
 
+/** Count a stored tactic against itself after it failed to drive the control. */
+export async function recordFillTacticFailure(
+  env: Env,
+  domain: string,
+  ats: string,
+  kind: string
+): Promise<void> {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_fill_tactic_failure`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_domain: domain, p_ats: ats, p_kind: kind })
+  }).catch(() => {});
+}
+
 export async function recordPlaybookFailure(env: Env, domain: string, ats: string): Promise<void> {
   await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_arm_playbook_failure`, {
     method: "POST",

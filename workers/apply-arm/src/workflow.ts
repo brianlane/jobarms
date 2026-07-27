@@ -26,10 +26,12 @@ import {
 import { diagnosePage, generateAnswers } from "./gemini";
 import {
   appendScreenshot,
+  type FillTactics,
   getFillTactics,
   getPlaybook,
   logStep,
   recordFillTactic,
+  recordFillTacticFailure,
   recordPlaybook,
   recordPlaybookFailure,
   releaseArmRunSlot,
@@ -155,6 +157,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
 
       if (params.autonomy === "review_gate") {
         await step.do("fill for review", async () => {
+          const applied = await getFillTactics(env, domain, params.ats);
           const result = await fillForm(env, {
             userId: params.userId,
             runId: params.runId,
@@ -164,7 +167,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             resume: await resumePayload(params),
             submit: false,
             playbook: await getPlaybook(env, domain, params.ats),
-            tactics: await getFillTactics(env, domain, params.ats)
+            tactics: applied
           });
           if (!result.ok) throw renderFailure(result, "fill for review");
 
@@ -181,13 +184,11 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             );
           }
 
+          await learnTactics(env, domain, params.ats, applied, result.data);
+
           // Answers the form did not accept. Advisory here, because the person
           // deciding is about to look at them anyway; the point is that they are
           // told rather than left to spot it in a screenshot.
-          await learnTactics(env, domain, params.ats, result.data.tactics);
-
-          await learnTactics(env, domain, params.ats, result.data.tactics);
-
           const mismatches = result.data.mismatches ?? [];
           if (mismatches.length > 0) {
             await logStep(env, params.runId, "fill_mismatch", describeMismatches(mismatches));
@@ -243,6 +244,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
         { retries: { limit: 0, delay: "30 seconds" } },
         async () => {
           await updateRun(env, params.runId, { status: "submitting" });
+          const applied = await getFillTactics(env, domain, params.ats);
           const result = await fillForm(env, {
             userId: params.userId,
             runId: params.runId,
@@ -252,7 +254,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             resume: await resumePayload(params),
             submit: true,
             playbook: await getPlaybook(env, domain, params.ats),
-            tactics: await getFillTactics(env, domain, params.ats)
+            tactics: applied
           });
           if (!result.ok) throw renderFailure(result, "submit");
 
@@ -264,7 +266,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           } catch {
             // keep the outcome; the confirmation state is what matters
           }
-          await learnTactics(env, domain, params.ats, result.data.tactics);
+          await learnTactics(env, domain, params.ats, applied, result.data);
           return { outcome: result.data.outcome, mismatches: result.data.mismatches ?? [] };
         }
       );
@@ -354,10 +356,23 @@ async function learnTactics(
   env: Env,
   domain: string,
   ats: string,
-  tactics: { kind: string; tactic: string }[] | undefined
+  applied: FillTactics,
+  result: { tactics?: { kind: string; tactic: string }[]; mismatches?: { kind: string }[] }
 ): Promise<void> {
-  for (const won of tactics ?? []) {
+  for (const won of result.tactics ?? []) {
     await recordFillTactic(env, domain, ats, won.kind, won.tactic);
+  }
+
+  // The other half, without which a stored tactic is never allowed to be wrong:
+  // if we led with a remembered way of driving a control and that kind is STILL
+  // disagreeing after the retry, it has stopped working on this site. Counting
+  // that against it is what eventually retires it, the same way a playbook that
+  // keeps failing stops being applied.
+  const stillWrong = new Set((result.mismatches ?? []).map((mismatch) => mismatch.kind));
+  for (const kind of ["choice", "text"] as const) {
+    if (applied[kind] && stillWrong.has(kind)) {
+      await recordFillTacticFailure(env, domain, ats, kind);
+    }
   }
 }
 
