@@ -62,7 +62,11 @@ jobs:
           # surfaces on PR commits as ONE skipped check with the raw
           # unexpanded name (matrix never materializes for a skipped job),
           # which would otherwise block every merge.
-          EXCLUDE_CHECKS: '["label-dependabot"]'
+          # "auto-merge" is this job's own check. Without it the evaluator
+          # sees itself in_progress, decides not everything is green, and
+          # exits without merging, leaving the PR to the two-hourly sweep.
+          # deploy-gate.sh excludes it for the same reason.
+          EXCLUDE_CHECKS: '["label-dependabot", "auto-merge"]'
         run: |
           set -euo pipefail
 
