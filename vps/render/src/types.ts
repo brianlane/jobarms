@@ -64,6 +64,15 @@ export interface Recovery {
 export interface Mismatch {
   name: string;
   label: string;
+  /**
+   * What kind of control disagreed, carried HERE rather than re-derived later.
+   *
+   * A wizard's earlier pages are gone from the DOM by the time submit happens, so
+   * asking the live page "was this a choice field?" answers no for every mismatch
+   * found before the last page, and the interlock would wave through the exact
+   * wrong ticks it exists to stop.
+   */
+  kind: "choice" | "text";
   /** What the user approved. */
   expected: string;
   /** What the form actually holds. */

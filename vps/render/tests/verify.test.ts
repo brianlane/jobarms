@@ -135,7 +135,7 @@ describe("blocksSubmit", () => {
       [answer({ name: "q[]", value: "None of the above" })],
       [choice("q[]", ["Something else"])]
     );
-    expect(blocksSubmit(mismatches, [choice("q[]", ["Something else"])])).toBe(true);
+    expect(blocksSubmit(mismatches)).toBe(true);
   });
 
   it("does not block on an empty text field", () => {
@@ -145,10 +145,31 @@ describe("blocksSubmit", () => {
       [text("email", "")]
     );
     expect(mismatches).toHaveLength(1);
-    expect(blocksSubmit(mismatches, [text("email", "")])).toBe(false);
+    expect(blocksSubmit(mismatches)).toBe(false);
   });
 
   it("does not block when nothing disagrees", () => {
-    expect(blocksSubmit([], [choice("q[]", ["None of the above"])])).toBe(false);
+    expect(blocksSubmit([])).toBe(false);
+  });
+
+  it("still blocks a wizard page that is no longer on screen", () => {
+    // The regression: deciding this from a fresh read of the CURRENT page meant a
+    // choice mismatch found on page one stopped counting the moment we advanced,
+    // and submit went ahead with the wrong ticks.
+    const pageOne = findMismatches(
+      [answer({ name: "q[]", value: "None of the above" })],
+      [choice("q[]", ["Ordinarily a resident of Cuba"])]
+    );
+    expect(pageOne[0].kind).toBe("choice");
+    // Page two is all that remains readable, and it is clean.
+    expect(blocksSubmit([...pageOne])).toBe(true);
+  });
+
+  it("labels each mismatch with the kind of control it came from", () => {
+    const found = findMismatches(
+      [answer({ name: "q[]", value: "Yes" }), answer({ name: "email", value: "a@b.com" })],
+      [choice("q[]", []), text("email", "")]
+    );
+    expect(found.map((m) => m.kind)).toEqual(["choice", "text"]);
   });
 });

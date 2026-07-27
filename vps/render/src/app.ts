@@ -73,19 +73,6 @@ async function checkFill(page: Page, scope: string, answers: Answer[]): Promise<
   return findMismatches(answers, await readFilledState(page, scope));
 }
 
-/**
- * Should the interlock stop this submit? Re-reads the page rather than trusting
- * the earlier snapshot, since filling later pages can disturb earlier ones.
- */
-async function submitBlocked(
-  page: Page,
-  scope: string,
-  answers: Answer[],
-  mismatches: Mismatch[]
-): Promise<boolean> {
-  return blocksSubmit(mismatches, await readFilledState(page, scope));
-}
-
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
 async function shot(page: Page): Promise<string | null> {
   try {
@@ -441,7 +428,11 @@ export function createApp(deps: AppDeps = {}): Express {
             // The interlock. A choice field that disagrees is a factual
             // misstatement made on the user's behalf, so this refuses to send it
             // and hands the run to a human instead of failing it outright.
-            if (await submitBlocked(page, reached.scope, answers, mismatches)) {
+            //
+            // Judged on everything gathered page by page above, NOT on a fresh
+            // read of the page we happen to be standing on: a wizard's earlier
+            // pages are already out of the DOM by now.
+            if (blocksSubmit(mismatches)) {
               return {
                 outcome: "verification_failed" as SubmitOutcome,
                 resume: resumeOutcome,

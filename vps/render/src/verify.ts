@@ -65,6 +65,7 @@ export function findMismatches(answers: Answer[], state: FilledState[]): Mismatc
         mismatches.push({
           name: answer.name,
           label: answer.label,
+          kind: "choice",
           expected: answer.value,
           actual: describe(found.checked)
         });
@@ -76,6 +77,7 @@ export function findMismatches(answers: Answer[], state: FilledState[]): Mismatc
       mismatches.push({
         name: answer.name,
         label: answer.label,
+        kind: "text",
         expected: answer.value,
         actual: "(empty)"
       });
@@ -92,10 +94,12 @@ export function findMismatches(answers: Answer[], state: FilledState[]): Mismatc
  * rather than a blank. An empty text field is visible to a human reviewing the
  * screenshot and, at worst, gets rejected by the employer's own validation; a
  * wrongly ticked compliance box is neither.
+ *
+ * Decided from the mismatches ALONE. An earlier version asked the live page which
+ * fields were choices, which quietly stopped working on a wizard: by submit time
+ * the earlier pages are out of the DOM, so every mismatch found before the last
+ * page looked like a text field and sailed through.
  */
-export function blocksSubmit(mismatches: Mismatch[], state: FilledState[]): boolean {
-  const choiceNames = new Set(
-    state.filter((entry) => entry.kind === "choice").map((entry) => entry.name)
-  );
-  return mismatches.some((mismatch) => choiceNames.has(mismatch.name));
+export function blocksSubmit(mismatches: Mismatch[]): boolean {
+  return mismatches.some((mismatch) => mismatch.kind === "choice");
 }

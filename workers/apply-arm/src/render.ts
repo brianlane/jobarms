@@ -202,6 +202,12 @@ export function extractForm(
 export interface Mismatch {
   name: string;
   label: string;
+  /**
+   * Which kind of control disagreed. Carried on the mismatch because a wizard's
+   * earlier pages are gone from the DOM by submit time, so it cannot be asked of
+   * the live page without silently answering "text" for everything.
+   */
+  kind: "choice" | "text";
   /** What the user approved. */
   expected: string;
   /** What the form actually holds. */
