@@ -80,6 +80,19 @@ export interface Mismatch {
 }
 
 /**
+ * A way of driving a control that worked on a site where the default did not.
+ *
+ * Recorded per domain and ATS by the caller, and handed back in on later runs so
+ * a site that needed the other approach once never pays for the discovery again.
+ * The same shape as the recovery playbooks that already remember how to REACH a
+ * form; this remembers how to OPERATE one.
+ */
+export interface TacticWin {
+  kind: "choice" | "text";
+  tactic: "control" | "label" | "type" | "set";
+}
+
+/**
  * Outcome of a submit attempt.
  * - filled: review-gate fill only (submit was not requested).
  * - submitted: the employer confirmed receipt.

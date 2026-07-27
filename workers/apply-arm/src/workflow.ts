@@ -26,8 +26,10 @@ import {
 import { diagnosePage, generateAnswers } from "./gemini";
 import {
   appendScreenshot,
+  getFillTactics,
   getPlaybook,
   logStep,
+  recordFillTactic,
   recordPlaybook,
   recordPlaybookFailure,
   releaseArmRunSlot,
@@ -161,7 +163,8 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             answers,
             resume: await resumePayload(params),
             submit: false,
-            playbook: await getPlaybook(env, domain, params.ats)
+            playbook: await getPlaybook(env, domain, params.ats),
+            tactics: await getFillTactics(env, domain, params.ats)
           });
           if (!result.ok) throw renderFailure(result, "fill for review");
 
@@ -181,6 +184,10 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           // Answers the form did not accept. Advisory here, because the person
           // deciding is about to look at them anyway; the point is that they are
           // told rather than left to spot it in a screenshot.
+          await learnTactics(env, domain, params.ats, result.data.tactics);
+
+          await learnTactics(env, domain, params.ats, result.data.tactics);
+
           const mismatches = result.data.mismatches ?? [];
           if (mismatches.length > 0) {
             await logStep(env, params.runId, "fill_mismatch", describeMismatches(mismatches));
@@ -244,7 +251,8 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             answers: approvedAnswers,
             resume: await resumePayload(params),
             submit: true,
-            playbook: await getPlaybook(env, domain, params.ats)
+            playbook: await getPlaybook(env, domain, params.ats),
+            tactics: await getFillTactics(env, domain, params.ats)
           });
           if (!result.ok) throw renderFailure(result, "submit");
 
@@ -256,6 +264,7 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           } catch {
             // keep the outcome; the confirmation state is what matters
           }
+          await learnTactics(env, domain, params.ats, result.data.tactics);
           return { outcome: result.data.outcome, mismatches: result.data.mismatches ?? [] };
         }
       );
@@ -335,15 +344,23 @@ function hostOf(jobUrl: string): string {
 }
 
 /**
- * Turn a sidecar failure into a retryable error.
+ * Remember how this site wanted its controls driven.
  *
- * Only TRANSIENT failures reach here (a tunnel blip, a crashed context), so they
- * get the retry budget the step was given. The two deterministic outcomes are
- * handled where they occur, because each needs to do more than throw:
- * `form_not_found` first spends the vision budget in `reachWithVision`, and
- * `login_failed` logs the account step before giving up. Both raise
- * NonRetryableError there.
+ * Best effort, and `recordFillTactic` is what makes it so: the application
+ * already worked by the time this runs, and failing a run over a bookkeeping
+ * write would trade a real outcome for a nicety.
  */
+async function learnTactics(
+  env: Env,
+  domain: string,
+  ats: string,
+  tactics: { kind: string; tactic: string }[] | undefined
+): Promise<void> {
+  for (const won of tactics ?? []) {
+    await recordFillTactic(env, domain, ats, won.kind, won.tactic);
+  }
+}
+
 /**
  * Name the fields the form disagreed with, for the timeline and the run error.
  *
@@ -356,6 +373,16 @@ function describeMismatches(mismatches: { name: string; label: string }[]): stri
   return `${named.slice(0, 3).join(", ")} and ${named.length - 3} more`;
 }
 
+/**
+ * Turn a sidecar failure into a retryable error.
+ *
+ * Only TRANSIENT failures reach here (a tunnel blip, a crashed context), so they
+ * get the retry budget the step was given. The two deterministic outcomes are
+ * handled where they occur, because each needs to do more than throw:
+ * `form_not_found` first spends the vision budget in `reachWithVision`, and
+ * `login_failed` logs the account step before giving up. Both raise
+ * NonRetryableError there.
+ */
 function renderFailure(result: RenderResult<unknown> & { ok: false }, phase: string): Error {
   const detail = result.detail ? `: ${result.detail}` : "";
   return new Error(`${result.error} during ${phase}${detail}`);

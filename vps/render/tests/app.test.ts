@@ -432,6 +432,99 @@ describe("POST /fill", () => {
     expect(res.body.mismatches[0].actual).toBe("(nothing)");
   });
 
+  describe("trying the other way when a field does not take", () => {
+    /** Fields first, then a read-back that disagrees until the retry lands. */
+    function stubbornPage(fixedOnRetry: boolean) {
+      let call = 0;
+      return fakePage({
+        url: JOB_URL,
+        eval$$: () => {
+          call++;
+          if (call === 1) {
+            // Must look like a real application form or reachForm keeps looking,
+            // which would consume the reads this stub is counting.
+            return [
+              ...goodFields(),
+              { name: "q[]", label: "Sanctions", type: "checkbox", required: true, options: [] }
+            ];
+          }
+          // call 2 = first read-back (wrong), call 3 = after the retry.
+          const checked = call >= 3 && fixedOnRetry ? ["None of the above"] : [];
+          return [{ name: "q[]", kind: "choice", checked, value: "", count: 4 }];
+        },
+        locators: { "text=/": loc() }
+      });
+    }
+    const choiceAnswer = [{ name: "q[]", label: "Sanctions", value: "None of the above" }];
+
+    it("reports which way worked, so the site can be remembered", async () => {
+      const { app } = appWith(stubbornPage(true));
+      const res = await phase(app, "/fill", {
+        userId: "u1",
+        jobUrl: JOB_URL,
+        ats: "lever",
+        answers: choiceAnswer
+      });
+
+      expect(res.body.mismatches).toEqual([]);
+      // The default drives the input; clicking the label is the other way.
+      expect(res.body.tactics).toEqual([{ kind: "choice", tactic: "label" }]);
+    });
+
+    it("learns the text tactic too, not just the choice one", async () => {
+      let call = 0;
+      const page = fakePage({
+        url: JOB_URL,
+        eval$$: () => {
+          call++;
+          if (call === 1) return goodFields();
+          // The email never takes until the retry sets it in one go.
+          const value = call >= 3 ? "a@b.com" : "";
+          return [{ name: "email", kind: "text", checked: [], value, count: 1 }];
+        }
+      });
+      const { app } = appWith(page);
+
+      const res = await phase(app, "/fill", {
+        userId: "u1",
+        jobUrl: JOB_URL,
+        ats: "lever",
+        answers: [{ name: "email", label: "Email", value: "a@b.com" }]
+      });
+
+      expect(res.body.mismatches).toEqual([]);
+      expect(res.body.tactics).toEqual([{ kind: "text", tactic: "set" }]);
+    });
+
+    it("teaches nothing when the other way did not work either", async () => {
+      const { app } = appWith(stubbornPage(false));
+      const res = await phase(app, "/fill", {
+        userId: "u1",
+        jobUrl: JOB_URL,
+        ats: "lever",
+        answers: choiceAnswer
+      });
+
+      expect(res.body.mismatches).toHaveLength(1);
+      expect(res.body.tactics).toEqual([]);
+    });
+
+    it("leads with the tactic the caller already learned", async () => {
+      const { app } = appWith(formPage());
+      const res = await phase(app, "/fill", {
+        userId: "u1",
+        jobUrl: JOB_URL,
+        ats: "lever",
+        answers,
+        tactics: { choice: "label", text: "set" }
+      });
+
+      // Nothing disagreed, so nothing new was learned and nothing was retried.
+      expect(res.body.outcome).toBe("filled");
+      expect(res.body.tactics).toEqual([]);
+    });
+  });
+
   it("lets a later page's read-back supersede an earlier failure", async () => {
     // A Workday-style wizard where a control could not be driven on the first
     // pass and was driven correctly on the second. Appending every page's

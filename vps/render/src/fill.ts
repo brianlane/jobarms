@@ -20,6 +20,32 @@ import { scopedSelector } from "./scope.js";
 /** Above this length, type instantly - per-char typing gets too slow. */
 const REALISTIC_TYPING_MAX = 40;
 
+/**
+ * How to drive a control. Sites disagree about which way works, so when the
+ * read-back says a field did not take, the other way is tried and whichever one
+ * worked is remembered per site (see the worker's fill tactics).
+ *
+ * choice: drive the input, or click the visible label a person would click.
+ * text:   type it like a person, or set the value in one go.
+ */
+export type ChoiceTactic = "control" | "label";
+export type TextTactic = "type" | "set";
+
+export interface Tactics {
+  choice: ChoiceTactic;
+  text: TextTactic;
+}
+
+export const DEFAULT_TACTICS: Tactics = { choice: "control", text: "type" };
+
+/** The other way of driving each kind, for a second attempt. */
+export function alternativeTactics(current: Tactics): Tactics {
+  return {
+    choice: current.choice === "control" ? "label" : "control",
+    text: current.text === "type" ? "set" : "type"
+  };
+}
+
 /** Escape a string for use inside a CSS id selector. */
 export function cssEscape(value: string): string {
   return value.replace(/([^a-zA-Z0-9_-])/g, "\\$1");
@@ -172,14 +198,15 @@ export async function fillCombobox(page: Page, el: Locator, value: string): Prom
 export async function fillCheckboxGroup(
   page: Page,
   escapedName: string,
-  value: string
+  value: string,
+  tactic: ChoiceTactic = "control"
 ): Promise<void> {
   const boxes = page.locator(`input[type="checkbox"][name="${escapedName}"]`);
   const n = await boxes.count();
   if (n === 0) return;
   if (n === 1) {
     if (/^(true|yes|checked|on|1)$/i.test(value.trim())) {
-      await boxes.first().check().catch(() => {});
+      await setBox(page, boxes.first(), true, tactic);
     }
     return;
   }
@@ -193,11 +220,44 @@ export async function fillCheckboxGroup(
     const label = await box.evaluate(checkboxLabelInPage).catch(() => "");
     // Drive the group to EXACTLY the wanted set: tick matches, clear the rest
     // (corrects any stray or pre-checked box so the final state is truthful).
-    if (label && checkboxLabelMatches(label, wanted)) {
-      await box.check().catch(() => box.click().catch(() => {}));
-    } else {
-      await box.uncheck().catch(() => {});
+    await setBox(page, box, Boolean(label && checkboxLabelMatches(label, wanted)), tactic);
+  }
+}
+
+/**
+ * Put one box into the wanted state.
+ *
+ * Two ways, because sites disagree about which one works. "control" drives the
+ * input directly, which is what a plain form wants. "label" clicks the visible
+ * `<label>` instead, which is what a person does and what some widgets are the
+ * only thing they listen to: a custom control can leave its real input hidden and
+ * wire all its behaviour to the label.
+ */
+async function setBox(
+  page: Page,
+  box: Locator,
+  wanted: boolean,
+  tactic: ChoiceTactic
+): Promise<void> {
+  if (tactic === "label") {
+    const id = await box.getAttribute("id").catch(() => null);
+    const already = await box.isChecked().catch(() => null);
+    // Clicking a label TOGGLES, so only click when the state is actually wrong.
+    if (id && already !== null && already !== wanted) {
+      await page
+        .locator(`label[for="${attrEscape(id)}"]`)
+        .first()
+        .click()
+        .catch(() => {});
+      return;
     }
+    if (id) return;
+    // No label to click; fall through to the control rather than do nothing.
+  }
+  if (wanted) {
+    await box.check().catch(() => box.click().catch(() => {}));
+  } else {
+    await box.uncheck().catch(() => {});
   }
 }
 
@@ -260,7 +320,12 @@ async function resolveControl(
 }
 
 /** Put one answer onto the form. Never throws. */
-export async function fillField(page: Page, scope: string, answer: Answer): Promise<void> {
+export async function fillField(
+  page: Page,
+  scope: string,
+  answer: Answer,
+  tactics: Tactics = DEFAULT_TACTICS
+): Promise<void> {
   const esc = attrEscape(answer.name);
   const el = await resolveControl(page, scope, answer);
   if (!el) return;
@@ -291,7 +356,7 @@ export async function fillField(page: Page, scope: string, answer: Answer): Prom
       return;
     }
     if (info.type === "checkbox") {
-      await fillCheckboxGroup(page, esc, answer.value);
+      await fillCheckboxGroup(page, esc, answer.value, tactics.choice);
       return;
     }
     if (info.type === "radio") {
@@ -309,7 +374,7 @@ export async function fillField(page: Page, scope: string, answer: Answer): Prom
           : null;
         const value = await radio.getAttribute("value");
         if ((label ?? "").trim() === answer.value || value === answer.value) {
-          await radio.check().catch(() => {});
+          await setBox(page, radio, true, tactics.choice);
           break;
         }
       }
@@ -321,7 +386,7 @@ export async function fillField(page: Page, scope: string, answer: Answer): Prom
     await el.fill("");
     // Keystroke realism helps invisible-captcha scoring, but a long cover letter
     // typed character by character is slow, so cap it.
-    if (answer.value.length <= REALISTIC_TYPING_MAX) {
+    if (tactics.text === "type" && answer.value.length <= REALISTIC_TYPING_MAX) {
       await el.pressSequentially(answer.value, { delay: 30 + Math.floor(Math.random() * 40) });
     } else {
       await el.fill(answer.value);
@@ -332,10 +397,15 @@ export async function fillField(page: Page, scope: string, answer: Answer): Prom
 }
 
 /** Fill every answered field in order, with a human-like dwell between them. */
-export async function fillAnswers(page: Page, scope: string, answers: Answer[]): Promise<void> {
+export async function fillAnswers(
+  page: Page,
+  scope: string,
+  answers: Answer[],
+  tactics: Tactics = DEFAULT_TACTICS
+): Promise<void> {
   for (const answer of answers) {
     if (answer.skipped || answer.value === "") continue;
-    await fillField(page, scope, answer);
+    await fillField(page, scope, answer, tactics);
     await page.waitForTimeout(150 + Math.floor(Math.random() * 350));
   }
 }

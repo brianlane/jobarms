@@ -13,6 +13,8 @@ const db = vi.hoisted(() => ({
   updateRun: vi.fn(async () => {}),
   logStep: vi.fn(async () => {}),
   getPlaybook: vi.fn(async () => null as unknown),
+  getFillTactics: vi.fn(async () => ({}) as Record<string, string>),
+  recordFillTactic: vi.fn(async () => {}),
   recordPlaybook: vi.fn(async () => {}),
   recordPlaybookFailure: vi.fn(async () => {}),
   uploadScreenshot: vi.fn(async (..._args: unknown[]) => "shot/path.png"),
@@ -237,6 +239,35 @@ describe("the happy paths", () => {
       (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
     )?.[2] as { error: string };
     expect(patch.error).toContain("question_99[]");
+  });
+
+  it("remembers the tactic that worked, and leads with it next time", async () => {
+    db.getFillTactics.mockResolvedValueOnce({ choice: "label" });
+    render.fillForm.mockResolvedValueOnce(
+      ok({ outcome: "submitted", pages: 1, tactics: [{ kind: "text", tactic: "set" }] })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    // What we already knew went in...
+    expect(render.fillForm).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ tactics: { choice: "label" } })
+    );
+    // ...and what this run discovered came back out.
+    expect(db.recordFillTactic).toHaveBeenCalledWith(
+      env,
+      "jobs.lever.co",
+      "lever",
+      "text",
+      "set"
+    );
+  });
+
+  it("learns nothing from a run where the defaults just worked", async () => {
+    render.fillForm.mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+    await run(params(), async () => ({ payload: {} }));
+    expect(db.recordFillTactic).not.toHaveBeenCalled();
   });
 
   it("tells the reviewer when the resume never attached", async () => {

@@ -212,6 +212,69 @@ export async function recordPlaybook(
   }).catch(() => {});
 }
 
+/** How a control wants to be driven on a given site. */
+export interface FillTactics {
+  choice?: "control" | "label";
+  text?: "type" | "set";
+}
+
+/**
+ * What has worked on this site before.
+ *
+ * The other half of a playbook: that one remembers how to REACH a form, this
+ * remembers how to OPERATE one. Sites disagree about whether a control listens to
+ * its input or only to its visible label, so leading with the known answer saves
+ * every later run the rediscovery.
+ */
+export async function getFillTactics(
+  env: Env,
+  domain: string,
+  ats: string
+): Promise<FillTactics> {
+  try {
+    const res = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/arm_fill_tactics?domain=eq.${encodeURIComponent(domain)}&ats=eq.${encodeURIComponent(ats)}&select=kind,tactic,success_count,failure_count`,
+      { headers: headers(env) }
+    );
+    if (!res.ok) return {};
+    const rows = (await res.json()) as Array<{
+      kind: "choice" | "text";
+      tactic: "control" | "label" | "type" | "set";
+      success_count: number;
+      failure_count: number;
+    }>;
+    const tactics: FillTactics = {};
+    for (const row of rows) {
+      // A tactic that keeps failing has gone stale, same rule as playbooks.
+      if (row.failure_count > row.success_count) continue;
+      if (row.kind === "choice" && (row.tactic === "control" || row.tactic === "label")) {
+        tactics.choice = row.tactic;
+      }
+      if (row.kind === "text" && (row.tactic === "type" || row.tactic === "set")) {
+        tactics.text = row.tactic;
+      }
+    }
+    return tactics;
+  } catch {
+    return {};
+  }
+}
+
+/** Remember a way of driving a control that worked where the default did not. */
+export async function recordFillTactic(
+  env: Env,
+  domain: string,
+  ats: string,
+  kind: string,
+  tactic: string
+): Promise<void> {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_fill_tactic`, {
+    method: "POST",
+    headers: headers(env),
+    body: JSON.stringify({ p_domain: domain, p_ats: ats, p_kind: kind, p_tactic: tactic })
+  }).catch(() => {});
+}
+
 export async function recordPlaybookFailure(env: Env, domain: string, ats: string): Promise<void> {
   await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/record_arm_playbook_failure`, {
     method: "POST",
