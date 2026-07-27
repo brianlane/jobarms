@@ -242,17 +242,20 @@ async function setBox(
   if (tactic === "label") {
     const id = await box.getAttribute("id").catch(() => null);
     const already = await box.isChecked().catch(() => null);
-    // Clicking a label TOGGLES, so only click when the state is actually wrong.
-    if (id && already !== null && already !== wanted) {
-      await page
-        .locator(`label[for="${attrEscape(id)}"]`)
-        .first()
-        .click()
-        .catch(() => {});
+    if (id && already !== null) {
+      // Clicking a label TOGGLES, so only click when the state is actually wrong.
+      if (already !== wanted) {
+        await page
+          .locator(`label[for="${attrEscape(id)}"]`)
+          .first()
+          .click()
+          .catch(() => {});
+      }
       return;
     }
-    if (id) return;
-    // No label to click; fall through to the control rather than do nothing.
+    // No label to click, or a state we could not read. Fall through and drive the
+    // control: doing nothing would leave a stray tick standing, and clearing the
+    // boxes we do not want is half of what makes the final state truthful.
   }
   if (wanted) {
     await box.check().catch(() => box.click().catch(() => {}));

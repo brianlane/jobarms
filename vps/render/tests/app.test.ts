@@ -496,6 +496,47 @@ describe("POST /fill", () => {
       expect(res.body.tactics).toEqual([{ kind: "text", tactic: "set" }]);
     });
 
+    it("teaches nothing while a field of that kind is wrong on another page", async () => {
+      // The regression: judging a win from the CURRENT page's read-back let a
+      // clean second page teach a tactic while page one was still broken, which
+      // is how you learn the wrong lesson confidently.
+      let call = 0;
+      const page = fakePage({
+        url: WD_URL,
+        eval$$: () => {
+          call++;
+          if (call === 1) {
+            return [
+              ...goodFields(),
+              { name: "q1", label: "One", type: "checkbox", required: true, options: [] }
+            ];
+          }
+          // Page one never comes right; page two is clean from the start.
+          const onPageTwo = call >= 4;
+          return onPageTwo
+            ? [{ name: "q2", kind: "choice", checked: ["Yes"], value: "", count: 2 }]
+            : [{ name: "q1", kind: "choice", checked: [], value: "", count: 2 }];
+        }
+      });
+      let advanced = false;
+      page.getByRole = vi.fn(() => loc({ count: vi.fn(async () => (advanced ? 0 : 1)) }));
+
+      const { app } = appWith(page);
+      const res = await phase(app, "/fill", {
+        userId: "u1",
+        jobUrl: WD_URL,
+        ats: "workday",
+        answers: [
+          { name: "q1", label: "One", value: "None of the above" },
+          { name: "q2", label: "Two", value: "Yes" }
+        ]
+      });
+      advanced = true;
+
+      expect(res.body.mismatches.map((m: { name: string }) => m.name)).toEqual(["q1"]);
+      expect(res.body.tactics).toEqual([]);
+    });
+
     it("teaches nothing when the other way did not work either", async () => {
       const { app } = appWith(stubbornPage(false));
       const res = await phase(app, "/fill", {

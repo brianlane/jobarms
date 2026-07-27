@@ -615,7 +615,7 @@ describe("driving a choice the other way", () => {
     expect(label.click).toHaveBeenCalled();
   });
 
-  it("treats an unreadable checked state as a reason not to guess", async () => {
+  it("still clears a stray tick when the checked state cannot be read", async () => {
     const target = box({
       isChecked: vi.fn(async () => {
         throw new Error("detached");
@@ -627,7 +627,26 @@ describe("driving a choice the other way", () => {
     const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
 
     await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    // Clicking a label blind could flip a correct box, but doing nothing would
+    // leave a stray tick standing, so it drives the control instead.
     expect(label.click).not.toHaveBeenCalled();
+    expect(target.check).toHaveBeenCalled();
+  });
+
+  it("clears the boxes it does not want, not just ticks the ones it does", async () => {
+    const wrong = loc({
+      evaluate: vi.fn(async () => "Some other option"),
+      getAttribute: vi.fn(async () => "opt-9"),
+      isChecked: vi.fn(async () => true)
+    });
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => wrong);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    // Ticked but unwanted, so the label click unticks it.
+    expect(label.click).toHaveBeenCalled();
   });
 });
 

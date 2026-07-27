@@ -118,9 +118,8 @@ async function retryWithAlternative(
   answers: Answer[],
   failed: Mismatch[],
   tactics: Tactics
-): Promise<{ check: FillCheck; worked: TacticWin[] }> {
+): Promise<{ check: FillCheck; tried: TacticWin[] }> {
   const other = alternativeTactics(tactics);
-  const kinds = new Set(failed.map((mismatch) => mismatch.kind));
   const failedNames = new Set(failed.map((mismatch) => mismatch.name));
 
   // Walked in answer order rather than looked up per mismatch: every mismatch
@@ -130,15 +129,16 @@ async function retryWithAlternative(
     if (failedNames.has(answer.name)) await fillField(page, scope, answer, other);
   }
 
-  const check = await checkFill(page, scope, answers);
-  const stillWrong = new Set(check.mismatches.map((mismatch) => mismatch.kind));
-  // A kind counts as solved only if NOTHING of that kind is still wrong, so one
-  // lucky field cannot teach a tactic the rest of the form disagrees with.
-  const worked: TacticWin[] = [...kinds]
-    .filter((kind) => !stillWrong.has(kind))
-    .map((kind) => ({ kind, tactic: kind === "choice" ? other.choice : other.text }));
+  // What was ATTEMPTED, not what worked. Whether it worked cannot be judged here:
+  // on a wizard this page's read-back says nothing about a field still wrong two
+  // pages back, and teaching a tactic while that field is broken is how you learn
+  // the wrong lesson confidently. The caller decides, once it has seen everything.
+  const tried: TacticWin[] = [...new Set(failed.map((mismatch) => mismatch.kind))].map((kind) => ({
+    kind,
+    tactic: kind === "choice" ? other.choice : other.text
+  }));
 
-  return { check, worked };
+  return { check: await checkFill(page, scope, answers), tried };
 }
 
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
@@ -472,15 +472,30 @@ export function createApp(deps: AppDeps = {}): Express {
             // BEFORE advancing, because a wizard page's state is gone once we
             // leave it, so this is the only moment it can be seen.
             const verdicts = fillVerdicts();
-            const learned: TacticWin[] = [];
+            const attempted: TacticWin[] = [];
 
             /** Check, and if something did not take, try the other way once. */
             const settle = async (target: Page, scope: string, list: Answer[]) => {
               const first = await checkFill(target, scope, list);
               if (first.mismatches.length === 0) return first;
               const retry = await retryWithAlternative(target, scope, list, first.mismatches, tactics);
-              learned.push(...retry.worked);
+              attempted.push(...retry.tried);
               return retry.check;
+            };
+
+            /**
+             * The tactics worth remembering, judged against the WHOLE form.
+             *
+             * A kind only counts as solved when nothing of that kind is still
+             * wrong anywhere, so neither one lucky field nor one clean wizard page
+             * can teach a tactic the rest of the form disagrees with.
+             */
+            const learnedTactics = (): TacticWin[] => {
+              const stillWrong = new Set(verdicts.mismatches().map((m) => m.kind));
+              const byKind = new Map(
+                attempted.filter((win) => !stillWrong.has(win.kind)).map((win) => [win.kind, win])
+              );
+              return [...byKind.values()];
             };
 
             verdicts.record(await settle(page, reached.scope, answers));
@@ -503,7 +518,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "filled" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -521,7 +536,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "verification_failed" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -550,7 +565,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "submitted" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -572,7 +587,7 @@ export function createApp(deps: AppDeps = {}): Express {
                     outcome: "submitted" as SubmitOutcome,
                     resume: resumeOutcome,
                     mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
                     pages,
                     screenshotBase64: await shot(page)
                   };
@@ -585,7 +600,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "captcha_blocked" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -595,7 +610,7 @@ export function createApp(deps: AppDeps = {}): Express {
               outcome: "unconfirmed" as SubmitOutcome,
               resume: resumeOutcome,
               mismatches: verdicts.mismatches(),
-              tactics: learned,
+              tactics: learnedTactics(),
               pages,
               screenshotBase64: await shot(page)
             };
