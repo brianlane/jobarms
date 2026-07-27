@@ -172,7 +172,12 @@ async function main() {
     })
     .select("id")
     .single();
-  if (!newRun) throw new Error("run insert failed");
+  if (!newRun) {
+    // Same as the retry route: hand the slot back rather than leaving a
+    // reservation held by a run that does not exist.
+    await service.rpc("release_arm_run", { p_user_id: app.user_id, p_month_key: mk });
+    throw new Error("run insert failed (reserved slot released)");
+  }
   console.log(
     `new run: ${newRun.id} (autonomy=${autonomy}${doSubmit ? " - WILL SUBMIT" : " for smoke"}; profile wanted ${profileAutonomy})`
   );
@@ -192,7 +197,18 @@ async function main() {
     account
   });
   console.log("dispatch:", dispatch);
-  if (!dispatch.ok) throw new Error("dispatch failed");
+  if (!dispatch.ok) {
+    // The run row exists, so refund BY RUN ID exactly as the route does. That
+    // sets slot_refunded, which is what stops a later retry of this failed run
+    // from decrementing the counter a second time. Releasing by month key
+    // here would refund without the marker and double-credit later.
+    await service
+      .from("application_runs")
+      .update({ status: "failed", error: dispatch.reason })
+      .eq("id", newRun.id);
+    await service.rpc("refund_arm_run", { p_run_id: newRun.id });
+    throw new Error(`dispatch failed: ${dispatch.reason} (run marked failed, slot refunded)`);
+  }
   await service.from("applications").update({ status: "applying" }).eq("id", appId);
 
   // Poll to a terminal-or-review state.
