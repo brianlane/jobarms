@@ -35,12 +35,14 @@ const entry = { context, inUse: 1, lastUsed: 0, doomed: false, ctx: Promise.reso
 const acquireSession = vi.fn(async () => entry);
 const finishSession = vi.fn();
 const saveStorageState = vi.fn(async () => true);
+const removeStorageState = vi.fn(async () => {});
 
 vi.mock("playwright", () => ({ chromium: { launch: vi.fn() } }));
 vi.mock("../src/sessions", () => ({
   acquireSession: (...a: unknown[]) => acquireSession(...(a as [])),
   finishSession: (...a: unknown[]) => finishSession(...(a as [])),
   saveStorageState: (...a: unknown[]) => saveStorageState(...(a as [])),
+  removeStorageState: (...a: unknown[]) => removeStorageState(...(a as [])),
   sessionKey: (u: string, h: string) => `${u}:${h}`,
   sessionCount: () => 0
 }));
@@ -87,6 +89,23 @@ describe("real runPhase", () => {
     expect(res.status).toBe(200);
     expect(saveStorageState).not.toHaveBeenCalled();
     expect(finishSession).toHaveBeenCalledWith("u1:jobs.lever.co", entry, false);
+  });
+
+  it("undoes a save that raced a disconnect landing mid-write", async () => {
+    // doomed is false when the finally checks it, so the save runs, but the
+    // disconnect lands while the file is being written (flip doomed here). The
+    // revived file must then be removed so the last op on it is a delete.
+    saveStorageState.mockImplementationOnce(async () => {
+      entry.doomed = true;
+      return true;
+    });
+    const app = createApp();
+
+    const res = await post(app, "/extract");
+
+    expect(res.status).toBe(200);
+    expect(saveStorageState).toHaveBeenCalled();
+    expect(removeStorageState).toHaveBeenCalledWith("u1:jobs.lever.co");
   });
 
   it("poisons the cached context when the phase throws", async () => {

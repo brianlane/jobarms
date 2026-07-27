@@ -39,6 +39,7 @@ import {
   evictStale,
   finishSession,
   getBrowser,
+  removeStorageState,
   saveStorageState,
   sessionCount,
   sessionKey,
@@ -216,6 +217,18 @@ describe("dropSession", () => {
   it("tolerates a failed file removal", async () => {
     rm.mockRejectedValueOnce(new Error("permission denied"));
     await expect(dropSession("u1:acme.com")).resolves.toBeUndefined();
+  });
+});
+
+describe("removeStorageState", () => {
+  it("deletes only the cookie file for a key", async () => {
+    await removeStorageState("u1:acme.com");
+    expect(rm).toHaveBeenCalledWith(storageStatePath("u1:acme.com"), { force: true });
+  });
+
+  it("tolerates a failed removal without throwing", async () => {
+    rm.mockRejectedValueOnce(new Error("permission denied"));
+    await expect(removeStorageState("u1:acme.com")).resolves.toBeUndefined();
   });
 });
 

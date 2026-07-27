@@ -38,6 +38,7 @@ import {
   acquireSession,
   dropSession,
   finishSession,
+  removeStorageState,
   saveStorageState,
   sessionCount,
   sessionKey
@@ -281,11 +282,16 @@ export function createApp(deps: AppDeps = {}): Express {
         throw err;
       } finally {
         // Save BEFORE closing the page so a just-completed login persists, but
-        // NOT if the session was dropped mid-phase (a disconnect): dropSession
-        // deletes the cookie file, and re-saving here would revive the login the
-        // user just asked us to forget. `doomed` is set synchronously by
-        // dropSession before it deletes the file, so this check cannot race it.
-        if (!entry.doomed) await saveStorageState(key, context);
+        // NOT if the session was dropped (a disconnect): dropSession deletes the
+        // cookie file, and re-saving would revive the login the user asked us to
+        // forget. Writing the file takes long enough that a disconnect can land
+        // AFTER this check yet before the write finishes, so re-check afterwards
+        // and undo the revival: the last operation on the file is then always a
+        // delete, whichever order the two landed in.
+        if (!entry.doomed) {
+          await saveStorageState(key, context);
+          if (entry.doomed) await removeStorageState(key);
+        }
         if (page) await page.close().catch(() => {});
         finishSession(key, entry, poisoned);
       }

@@ -195,6 +195,18 @@ export async function dropSession(key: string): Promise<void> {
     sessions.delete(key);
     if (entry.inUse === 0) closeEntry(entry);
   }
+  await removeStorageState(key);
+}
+
+/**
+ * Delete just the persisted cookies for a key, leaving any live context alone.
+ *
+ * Separate from dropSession so a phase that saved cookies AFTER a disconnect had
+ * already deleted them (a save can outlast the `doomed` check by the time it
+ * takes to write the file) can undo that revival. Best-effort: a missing file is
+ * not an error.
+ */
+export async function removeStorageState(key: string): Promise<void> {
   await rm(storageStatePath(key), { force: true }).catch(() => {});
 }
 
