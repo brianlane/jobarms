@@ -28,6 +28,13 @@ export function parseLeverUrl(url: URL): { company: string; postingId: string } 
   return null;
 }
 
+export function parseAshbyUrl(url: URL): { org: string; jobId: string } | null {
+  // https://jobs.ashbyhq.com/<org>/<job-uuid>[/application]
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length >= 2) return { org: parts[0], jobId: parts[1] };
+  return null;
+}
+
 const HTML_ENTITIES: Record<string, string> = {
   "&nbsp;": " ",
   "&lt;": "<",
@@ -106,6 +113,32 @@ export async function fetchJobMeta(rawUrl: string): Promise<JobMeta> {
         company: parsed.company,
         title: job.text ?? "",
         location: job.categories?.location ?? "",
+        description: (job.descriptionPlain ?? "").slice(0, 20_000),
+        ats
+      };
+    }
+
+    if (ats === "ashby") {
+      const parsed = parseAshbyUrl(url);
+      if (!parsed) return fallback;
+      // Ashby's posting API is board-wide (the same endpoint ingest polls);
+      // there is no public single-posting endpoint, so match the job by the
+      // UUID in the URL, which is the posting's `id`.
+      const res = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${parsed.org}`, {
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!res.ok) return fallback;
+      const body = (await res.json()) as {
+        jobs?: Array<{ id?: string; title?: string; location?: string; descriptionPlain?: string }>;
+      };
+      const job = (body.jobs ?? []).find((j) => j.id === parsed.jobId);
+      if (!job) return fallback;
+      return {
+        // The board API carries no organization name; the URL's org slug is
+        // the best public identifier, same trade-off as Lever.
+        company: decodeURIComponent(parsed.org),
+        title: job.title ?? "",
+        location: job.location ?? "",
         description: (job.descriptionPlain ?? "").slice(0, 20_000),
         ats
       };

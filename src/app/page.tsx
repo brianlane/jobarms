@@ -65,7 +65,7 @@ const faqs = [
   },
   {
     q: "Which job sites can the arms handle?",
-    a: "Arms currently drive Greenhouse and Lever applications, which cover a large share of startup and tech hiring. Anything else is saved to your tracker so nothing falls through."
+    a: "Arms currently drive Greenhouse, Lever, Workday, and Ashby applications, which cover a large share of startup and tech hiring. Anything else is saved to your tracker so nothing falls through."
   },
   {
     q: "Is it really free?",

@@ -33,7 +33,7 @@ export interface Env {
 }
 
 /** ATSes the arm can drive. */
-export type Ats = "greenhouse" | "lever" | "workday";
+export type Ats = "greenhouse" | "lever" | "workday" | "ashby";
 
 /** Everything a run needs, snapshotted at dispatch time by the app. */
 export interface RunParams {

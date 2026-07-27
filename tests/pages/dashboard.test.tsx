@@ -169,7 +169,7 @@ describe("DiscoverPage", () => {
       jobs: [
         { data: [
           { id: "j1", company: "Acme", title: "TypeScript Engineer", location: "Phoenix", url: "https://jobs.lever.co/acme/1", ats: "lever", description: "typescript role", created_at: "2026-07-03" },
-          { id: "j2", company: "Beta", title: "Ashby Role", location: "Phoenix", url: "https://beta.ashbyhq.com/x", ats: "ashby", description: "typescript", created_at: "2026-07-02" },
+          { id: "j2", company: "Beta", title: "Workable Role", location: "Phoenix", url: "https://apply.workable.com/beta/j/X/", ats: "workable", description: "typescript", created_at: "2026-07-02" },
           { id: "j3", company: "Gamma", title: "Already Applied", location: "Phoenix", url: "https://jobs.lever.co/gamma/1", ats: "lever", description: "typescript", created_at: "2026-07-01" },
           { id: "j4", company: "Delta", title: "Elsewhere", location: "Austin", url: "https://jobs.lever.co/delta/1", ats: "lever", description: "typescript", created_at: "2026-07-04" }
         ] }

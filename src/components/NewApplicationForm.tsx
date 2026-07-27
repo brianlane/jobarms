@@ -57,7 +57,8 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
           className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-arm-500 focus:outline-none"
         />
         <p className="mt-1 text-xs text-slate-400">
-          The arm currently drives Greenhouse and Lever postings. Anything else is saved to your tracker.
+          The arm currently drives Greenhouse, Lever, Workday, and Ashby postings. Anything else is
+          saved to your tracker.
         </p>
       </div>
 
