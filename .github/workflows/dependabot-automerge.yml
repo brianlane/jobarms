@@ -29,6 +29,9 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The evaluator reads repos/.../actions/runs to confirm the security
+  # workflows have finished before merging.
+  actions: read
 
 jobs:
   auto-merge:
@@ -129,6 +132,28 @@ jobs:
             if [ -n "$NOT_SUCCESS" ]; then
               echo "Strict gate failed. Checks not green (success):"
               echo "$NOT_SUCCESS" | jq -r '"  - \(.name): \(.conclusion // "n/a")"'
+              return 0
+            fi
+
+            # Required security workflows must have started AND finished.
+            # Everything above judges the checks that already exist, so a
+            # workflow yet to register is invisible and the evaluator could
+            # squash-merge while CodeQL or the audit matrix had not begun.
+            # Same requirement deploy-gate.sh enforces. Dependabot PRs target
+            # main, where both workflows apply.
+            local WF_RUNS WF_PENDING
+            WF_RUNS=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" --paginate \
+              --jq '.workflow_runs[] | {id, name, status, conclusion}' | jq -s '.')
+            # Newest run per name, so a re-run does not trip over its history.
+            WF_PENDING=$(jq -rn --argjson req '["CodeQL","Dependency Audit"]' --argjson runs "$WF_RUNS" '
+              $req[] | . as $w
+              | ([ $runs[] | select(.name == $w) ] | sort_by(.id) | last) as $latest
+              | if $latest == null then "\($w): not started"
+                elif $latest.status != "completed" then "\($w): \($latest.status)"
+                else empty end')
+            if [ -n "$WF_PENDING" ]; then
+              echo "Security workflows not finished; will re-evaluate when they complete:"
+              echo "$WF_PENDING"
               return 0
             fi
 
