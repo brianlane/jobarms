@@ -12,6 +12,7 @@
  *   npx tsx debug/smoke-arm-run.ts [job-url]
  */
 import { createClient } from "@supabase/supabase-js";
+import { findAuthUserByEmail } from "./lib/auth-users";
 
 const SMOKE_EMAIL = "smoke@jobarms.com";
 
@@ -66,8 +67,7 @@ const SMOKE_PROFILE = {
 };
 
 async function ensureSmokeUser(): Promise<string> {
-  const { data: list } = await supabase.auth.admin.listUsers({ perPage: 200 });
-  const existing = list?.users.find((u) => u.email === SMOKE_EMAIL);
+  const existing = await findAuthUserByEmail(supabase, SMOKE_EMAIL);
   const userId =
     existing?.id ??
     (

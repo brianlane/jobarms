@@ -6,6 +6,7 @@
  *   npx tsx debug/normalize-profile.ts <email>
  */
 import { createClient } from "@supabase/supabase-js";
+import { findAuthUserByEmail } from "./lib/auth-users";
 import {
   fixShoutyField,
   fixShoutyProse,
@@ -39,16 +40,7 @@ interface Edu {
 }
 
 async function main() {
-  // Paged, because reading only the first 200 auth users reported "user not
-  // found" for anyone created after them, which looks identical to a typo.
-  const wanted = email.toLowerCase();
-  let user: { id: string } | undefined;
-  for (let page = 1; !user; page += 1) {
-    const { data } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
-    if (!data?.users?.length) break;
-    user = data.users.find((u) => u.email?.toLowerCase() === wanted);
-    if (data.users.length < 200) break;
-  }
+  const user = await findAuthUserByEmail(supabase, email);
   if (!user) throw new Error("user not found");
 
   const { data: profile, error } = await supabase
