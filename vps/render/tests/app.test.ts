@@ -67,6 +67,35 @@ describe("health and auth", () => {
   });
 });
 
+describe("DELETE /session", () => {
+  it("400s when either the userId or tenantHost is missing", async () => {
+    const { app } = appWith(formPage());
+    // No body at all (req.body undefined), then each half missing on its own.
+    const res = await auth(request(app).delete("/session"));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "invalid_body" });
+    for (const body of [{ userId: "u1" }, { tenantHost: "www.linkedin.com" }]) {
+      expect((await auth(request(app).delete("/session").send(body))).status).toBe(400);
+    }
+  });
+
+  it("forgets the session and reports ok", async () => {
+    const { app } = appWith(formPage());
+    const res = await auth(
+      request(app).delete("/session").send({ userId: "u1", tenantHost: "www.linkedin.com" })
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("requires the bearer", async () => {
+    const { app } = appWith(formPage());
+    if (!TOKEN) return;
+    const res = await request(app).delete("/session").send({ userId: "u1", tenantHost: "h" });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("request validation", () => {
   it("400s on a body with no userId or a bad ats", async () => {
     const { app } = appWith(formPage());

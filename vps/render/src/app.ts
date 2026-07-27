@@ -36,6 +36,7 @@ import { CONFIG } from "./config.js";
 import { safeUrl } from "./ssrf.js";
 import {
   acquireSession,
+  dropSession,
   finishSession,
   saveStorageState,
   sessionCount,
@@ -367,6 +368,18 @@ export function createApp(deps: AppDeps = {}): Express {
     } catch (err) {
       return void appError(res, "render_failed", String(err));
     }
+  });
+
+  // Forget a stored session on disconnect. Synchronous and tiny: it evicts the
+  // cached context and deletes the cookie file, so the user's next run starts
+  // logged out. Not a browser phase, so it never takes a concurrency slot.
+  app.delete("/session", async (req, res) => {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const tenantHost = typeof body.tenantHost === "string" ? body.tenantHost.trim() : "";
+    if (!userId || !tenantHost) return void res.status(400).json({ error: "invalid_body" });
+    await dropSession(sessionKey(userId, tenantHost));
+    return void res.json({ ok: true });
   });
 
   // ------------------------------------------------------------------ extract

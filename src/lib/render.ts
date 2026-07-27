@@ -40,13 +40,17 @@ export type RenderResult<T> =
 /** One navigation plus the tenant's response, well inside Cloudflare's cap. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-async function renderPost<T>(path: string, body: unknown): Promise<RenderResult<T>> {
+async function renderSend<T>(
+  method: string,
+  path: string,
+  body: unknown
+): Promise<RenderResult<T>> {
   const base = renderUrl();
   if (!base) return { ok: false, error: "render_unconfigured" };
 
   try {
     const res = await fetch(`${base}${path}`, {
-      method: "POST",
+      method,
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${requireEnv("RENDER_TOKEN")}`
@@ -86,5 +90,20 @@ export function completeRenderVerification(args: {
   link?: string | null;
   code?: string | null;
 }): Promise<RenderResult<VerifyResponse>> {
-  return renderPost("/verify", args);
+  return renderSend("POST", "/verify", args);
+}
+
+/**
+ * Drop the cached browser session and its stored cookies for one user+tenant.
+ *
+ * Called on disconnect so a signed-in session (LinkedIn especially, since those
+ * are the user's real credentials) does not linger on the box after the user
+ * asked us to forget it. Best-effort by contract: this never throws, and a
+ * sidecar that is unreachable just means the cookies age out on their own TTL.
+ */
+export function clearRenderSession(args: {
+  userId: string;
+  tenantHost: string;
+}): Promise<RenderResult<{ ok: true }>> {
+  return renderSend("DELETE", "/session", args);
 }

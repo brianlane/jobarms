@@ -1,6 +1,9 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { getAuthUser } from "@/lib/supabase/auth";
+import { getLinkedInAccount } from "@/lib/linkedin";
 import { AutonomyToggle } from "@/components/AutonomyToggle";
+import { LinkedInConnect } from "@/components/LinkedInConnect";
 
 export const metadata = { title: "Settings" };
 
@@ -14,6 +17,10 @@ export default async function SettingsPage() {
     .eq("id", user!.id)
     .single();
 
+  // site_accounts is service-role only (deny-all RLS), so the connected LinkedIn
+  // email is read through the service client, never the user's scoped one.
+  const linkedin = await getLinkedInAccount(createSupabaseServiceClient(), user!.id);
+
   const alias = (profile?.applicant_alias as string | null) ?? null;
 
   return (
@@ -21,6 +28,8 @@ export default async function SettingsPage() {
       <h1 className="mb-1 text-2xl font-bold text-slate-900">Settings</h1>
       <p className="mb-8 text-slate-500">Control how autonomous your arms are.</p>
       <AutonomyToggle initial={(profile?.arm_autonomy as "review_gate" | "full_auto") ?? "review_gate"} />
+
+      <LinkedInConnect initialEmail={linkedin?.email ?? null} />
 
       <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6">
         <h2 className="text-lg font-semibold text-slate-900">Application inbox</h2>
