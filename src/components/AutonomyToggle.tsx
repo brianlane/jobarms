@@ -11,7 +11,7 @@ const options = [
   {
     value: "full_auto" as const,
     title: "Full auto",
-    body: "The arm submits without waiting for you. You'll still see everything it submitted in the tracker. Requires Premium or Max; free plans always get the review gate."
+    body: "The arm submits without waiting for you, and you'll still see everything it submitted in the tracker. The one time it stops to ask is when it catches an answer the form didn't accept, because it won't send something wrong on your behalf. Requires Premium or Max; free plans always get the review gate."
   }
 ];
 

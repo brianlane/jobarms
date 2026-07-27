@@ -275,8 +275,10 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
             <p className="mt-3 rounded-lg bg-red-100 p-3 text-sm text-red-800">
               Your arm filled the form, then read it back and found{" "}
               {rejected.size === 1 ? "an answer" : `${rejected.size} answers`} the form did not
-              accept, marked below. Nothing is sent until you approve, and the arm will refuse to
-              submit a choice it could not set correctly.
+              accept, marked below.{" "}
+              {run.autonomy === "full_auto"
+                ? "Your arm normally submits without asking, and stopped here rather than send an answer it could not set correctly."
+                : "Nothing is sent until you approve, and the arm will refuse to submit a choice it could not set correctly."}
             </p>
           )}
           <div className="mt-4 space-y-3">

@@ -140,6 +140,68 @@ export async function forwardInboundEmail(args: ForwardArgs): Promise<SendOutcom
   }
 }
 
+export interface ReviewNeededArgs {
+  to: string;
+  firstName: string;
+  company: string;
+  jobTitle: string;
+  applicationId: string;
+  /** Question labels the form did not accept. */
+  fields: string[];
+}
+
+/**
+ * Tell a user their arm stopped and needs them.
+ *
+ * Sent when the arm filled an application, read the form back, and found it was
+ * not holding an answer the user approved, so it refused to submit rather than
+ * send something wrong. This mail is what makes that wait worth having: a
+ * full-auto user chose not to be asked, so nothing else would bring them back to
+ * the dashboard before the run expires.
+ *
+ * Written for someone who did NOT expect to be interrupted, so it leads with why
+ * it is asking rather than with what to do.
+ */
+export async function sendReviewNeededEmail(args: ReviewNeededArgs): Promise<SendOutcome> {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return unattempted("email_unconfigured");
+  if (!args.to) return unattempted("no_recipient_on_file");
+
+  const role = [args.jobTitle, args.company].filter(Boolean).join(" at ") || "an application";
+
+  const lines = [
+    `Hi${args.firstName ? ` ${args.firstName}` : ""},`,
+    "",
+    `Your arm filled out ${role}, then checked its work and found the form was not holding one of the answers you approved. Rather than submit something wrong on your behalf, it stopped and saved everything.`,
+    ""
+  ];
+  if (args.fields.length > 0) {
+    const noun = args.fields.length === 1 ? "question" : "questions";
+    lines.push(`The ${noun} it could not set: ${args.fields.join(", ")}.`, "");
+  }
+  lines.push(
+    "Open the application to fix that answer and approve it, and your arm will finish the job:",
+    `https://jobarms.com/dashboard/applications/${args.applicationId}`,
+    "",
+    "Nothing has been sent to this employer. If you do nothing, the run ends on its own in 7 days.",
+    "",
+    "- JobArms"
+  );
+
+  try {
+    const resend = new Resend(key);
+    const result = await resend.emails.send({
+      from: "JobArms <hello@jobarms.com>",
+      to: args.to,
+      subject: `Your arm needs you: ${role}`,
+      text: lines.join("\n")
+    });
+    return outcomeOf("review needed email", result);
+  } catch (err) {
+    return unattempted(String(err).slice(0, REASON_MAX));
+  }
+}
+
 /**
  * Welcome mail. Still a boolean: nothing persists the reason for this one, and
  * a rejection is logged by `outcomeOf` either way.

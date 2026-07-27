@@ -257,3 +257,114 @@ describe("forwardInboundEmail", () => {
     logged.mockRestore();
   });
 });
+
+describe("sendReviewNeededEmail", () => {
+  const args = {
+    to: "user@example.com",
+    firstName: "Brian",
+    company: "Databricks",
+    jobTitle: "Staff Engineer",
+    applicationId: "app-1",
+    fields: ["Sanctions and export controls"]
+  };
+
+  beforeEach(() => {
+    sendMock.mockReset();
+    process.env.RESEND_API_KEY = "re_test";
+  });
+  afterEach(() => {
+    delete process.env.RESEND_API_KEY;
+  });
+
+  it("explains why an arm that never asks is asking", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_9"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    expect(await sendReviewNeededEmail(args)).toEqual({ ok: true });
+
+    const sent = sendMock.mock.calls[0][0];
+    expect(sent.to).toBe("user@example.com");
+    expect(sent.subject).toBe("Your arm needs you: Staff Engineer at Databricks");
+    expect(sent.text).toContain("Hi Brian,");
+    expect(sent.text).toContain("checked its work");
+    expect(sent.text).toContain("Sanctions and export controls");
+    // The two things a surprised reader most needs to know.
+    expect(sent.text).toContain("Nothing has been sent to this employer");
+    expect(sent.text).toContain("7 days");
+    expect(sent.text).toContain("/dashboard/applications/app-1");
+  });
+
+  it("keeps its paragraphs when there are no field names to give", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_10"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    await sendReviewNeededEmail({ ...args, fields: [] });
+
+    const text = sendMock.mock.calls[0][0].text as string;
+    expect(text).not.toContain("could not set");
+    expect(text).toContain("Hi Brian,\n\nYour arm filled out");
+  });
+
+  it("counts the questions it names", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_11"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    await sendReviewNeededEmail({ ...args, fields: ["One", "Two"] });
+
+    expect(sendMock.mock.calls[0][0].text).toContain("The questions it could not set: One, Two.");
+  });
+
+  it("still reads properly with no name, and no job to name either", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_12"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    await sendReviewNeededEmail({ ...args, firstName: "", company: "", jobTitle: "" });
+
+    const sent = sendMock.mock.calls[0][0];
+    expect(sent.subject).toBe("Your arm needs you: an application");
+    expect(sent.text).toContain("Hi,");
+  });
+
+  it("names the company alone when there is no title", async () => {
+    sendMock.mockResolvedValueOnce(acceptedBy("e_13"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    await sendReviewNeededEmail({ ...args, jobTitle: "" });
+
+    expect(sendMock.mock.calls[0][0].subject).toBe("Your arm needs you: Databricks");
+  });
+
+  it("reports why the provider refused it", async () => {
+    sendMock.mockResolvedValueOnce(rejectedWith("daily_quota_exceeded", "too many"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    expect(await sendReviewNeededEmail(args)).toEqual({
+      ok: false,
+      reason: "daily_quota_exceeded: too many"
+    });
+  });
+
+  it("reports a thrown transport failure instead of pretending", async () => {
+    sendMock.mockRejectedValueOnce(new Error("socket hang up"));
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    const outcome = await sendReviewNeededEmail(args);
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("does not attempt a send it cannot make", async () => {
+    const { sendReviewNeededEmail } = await import("@/lib/email");
+
+    expect(await sendReviewNeededEmail({ ...args, to: "" })).toEqual({
+      ok: false,
+      reason: "no_recipient_on_file"
+    });
+
+    delete process.env.RESEND_API_KEY;
+    expect(await sendReviewNeededEmail(args)).toEqual({
+      ok: false,
+      reason: "email_unconfigured"
+    });
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+});
