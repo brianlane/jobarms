@@ -71,10 +71,38 @@ export const checkboxLabelInPage = (node: any): string => {
 };
 
 /**
- * Runs IN THE PAGE. True when a file input actually holds a file. Exported so
- * tests can drive it against a fake node, like the other in-page callbacks.
+ * Runs IN THE PAGE. Did the form actually TAKE the file?
+ *
+ * `input.files.length` is not the answer, and on Greenhouse it is the opposite of
+ * the answer: their widget owns a `visually-hidden` input, and on success it
+ * consumes the file and re-renders showing the name, leaving no input behind. A
+ * file still sitting on the node is what a REJECTED upload looks like there.
+ *
+ * So a hidden input means a widget owns the upload and only the rendered name
+ * counts, while a plain visible input has no widget to satisfy and holding the
+ * file is all there is. Exported so tests can drive it against a fake document.
  */
-export const fileInputHasFileInPage = (node: any): boolean => (node.files?.length ?? 0) > 0;
+export const resumeAcceptedInPage = (fileName: string): boolean => {
+  const doc = (globalThis as any).document;
+  const input = doc.querySelector('input[type="file"]');
+  if (!input) {
+    // The widget replaced its own input; the rendered name is the only evidence.
+    return (doc.body?.textContent ?? "").includes(fileName);
+  }
+  const rect = input.getBoundingClientRect();
+  const style = (globalThis as any).getComputedStyle(input);
+  const widgetOwned =
+    rect.width < 8 ||
+    rect.height < 8 ||
+    style.display === "none" ||
+    style.visibility === "hidden" ||
+    style.opacity === "0";
+  if (!widgetOwned) return (input.files?.length ?? 0) > 0;
+
+  const container =
+    input.closest('[class*="upload"], [role="group"], fieldset, [class*="field"]') ?? doc.body;
+  return (container.textContent ?? "").includes(fileName);
+};
 
 /** Runs IN THE PAGE. The element facts the filler branches on. */
 export const elementInfoInPage = (node: any) => ({
@@ -319,6 +347,18 @@ const RESUME_MAX_BYTES = 15 * 1024 * 1024;
 export type ResumeOutcome = "not_requested" | "attached" | "failed";
 
 /**
+ * Attaching races the employer's own uploader.
+ *
+ * Measured on Greenhouse: handing the file over the instant the document is
+ * ready is silently ignored, and from roughly a quarter second later it is
+ * accepted every time. Their script has to mount before it can take anything.
+ * Rather than guess a sleep that is too short on a slow box and wasted on a fast
+ * one, hand it over and ask the widget, then hand it over again.
+ */
+const RESUME_ATTEMPTS = 4;
+const RESUME_SETTLE_MS = 1200;
+
+/**
  * Attach the resume to the form's file input.
  *
  * Runs BEFORE typed answers because some ATSes autofill fields from the resume,
@@ -339,34 +379,29 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
   // Base64 decoding is lenient, so an empty result means the payload was junk.
   if (buffer.length === 0 || buffer.length > RESUME_MAX_BYTES) return "failed";
 
-  const fileInput = page.locator('input[type="file"]').first();
-  if ((await fileInput.count()) === 0) return "failed";
-  try {
-    await fileInput.setInputFiles({
-      name: resume.fileName || "resume.pdf",
-      mimeType: resume.mimeType || "application/pdf",
-      buffer
-    });
-    // Give ATS-side resume parsing a moment before typed answers land.
-    await page.waitForTimeout(3000);
-  } catch {
-    // Upload widget is not a plain input; fall through to the check below, which
-    // is the only thing that actually knows whether a file landed.
+  const name = resume.fileName || "resume.pdf";
+  const file = { name, mimeType: resume.mimeType || "application/pdf", buffer };
+
+  for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
+    const input = page.locator('input[type="file"]').first();
+    // No input left and not yet accepted means there is nowhere to put it.
+    if ((await input.count()) === 0) break;
+    await input.setInputFiles(file).catch(() => {});
+    await page.waitForTimeout(RESUME_SETTLE_MS);
+    if (await resumeAccepted(page, name)) break;
   }
-  return (await resumeIsPresent(page)) ? "attached" : "failed";
+
+  if (!(await resumeAccepted(page, name))) return "failed";
+  // Give ATS-side resume parsing a moment before typed answers land, so their
+  // autofill cannot overwrite what the arm is about to type.
+  await page.waitForTimeout(3000);
+  return "attached";
 }
 
-/**
- * Does the form hold a file now? Asked of the live input, because the widget may
- * have been re-rendered or removed underneath us.
- */
-async function resumeIsPresent(page: Page): Promise<boolean> {
-  const present = await page
-    .locator('input[type="file"]')
-    .first()
-    .evaluate(fileInputHasFileInPage)
-    .catch(() => false);
-  // Strict: anything but a definite yes is treated as no, because the cost of a
-  // false "attached" is a required field silently empty.
-  return present === true;
+/** Ask the page whether the upload took, never assuming from a lack of throw. */
+async function resumeAccepted(page: Page, fileName: string): Promise<boolean> {
+  const accepted = await page.evaluate(resumeAcceptedInPage, fileName).catch(() => false);
+  // Strict: anything but a definite yes is a no, because the cost of a false
+  // "attached" is a required field the user never knew was empty.
+  return accepted === true;
 }
