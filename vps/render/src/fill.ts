@@ -108,19 +108,25 @@ export const checkboxLabelInPage = (node: any): string => {
  * counts, while a plain visible input has no widget to satisfy and holding the
  * file is all there is. Exported so tests can drive it against a fake document.
  */
-/**
- * A widget complaining. Checked because a filename on screen is NOT proof of an
- * upload: Greenhouse renders the name straight off `input.files[0]` and only then
- * hands it to its uploader, so a failure leaves the name sitting next to
- * "Cannot read properties of undefined (reading 'uploadFile')" and a required
- * field with nothing in it. Reading the name alone called that a success.
- */
-const UPLOAD_COMPLAINT = /cannot|could ?n[o']t|unable to|failed|error|try again/i;
-
 export const resumeAcceptedInPage = (fileName: string): boolean => {
   const doc = (globalThis as any).document;
+
+  /**
+   * A widget complaining. Checked because a filename on screen is NOT proof of an
+   * upload: Greenhouse renders the name straight off `input.files[0]` and only
+   * then hands it to its uploader, so a failure leaves the name sitting next to
+   * "Cannot read properties of undefined (reading 'uploadFile')" and a required
+   * field with nothing in it. Reading the name alone called that a success.
+   *
+   * The pattern is declared HERE, not at module scope. This function is
+   * serialized and re-created inside the browser, which leaves every module-level
+   * name behind: referencing one throws a ReferenceError in the page, the caller
+   * catches it, and a perfectly good upload reads as a failure.
+   */
   const complaining = (el: any): boolean =>
-    UPLOAD_COMPLAINT.test((el?.textContent ?? "").replace(/\s+/g, " "));
+    /cannot|could ?n[o']t|unable to|failed|error|try again/i.test(
+      (el?.textContent ?? "").replace(/\s+/g, " ")
+    );
 
   const input = doc.querySelector('input[type="file"]');
   if (!input) {
