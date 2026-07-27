@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isUniqueViolation,
   pickVerificationRun,
-  verificationHost
+  verificationOrigin
 } from "@/lib/inbound-verification";
 
 describe("isUniqueViolation", () => {
@@ -19,72 +19,86 @@ describe("isUniqueViolation", () => {
   });
 });
 
-describe("verificationHost", () => {
-  it("prefers the link, which names the tenant directly", () => {
+describe("verificationOrigin", () => {
+  it("takes the host from the link and says it names a tenant", () => {
     expect(
-      verificationHost("https://ACME.wd1.myworkdayjobs.com/verify?t=1", "myworkday.com")
-    ).toBe("acme.wd1.myworkdayjobs.com");
+      verificationOrigin("https://ACME.wd1.myworkdayjobs.com/verify?t=1", "myworkday.com")
+    ).toEqual({ host: "acme.wd1.myworkdayjobs.com", namesTenant: true });
   });
 
-  it("falls back to the sending domain when the link will not parse", () => {
-    expect(verificationHost("not a url", "Mail.Workday.com")).toBe("mail.workday.com");
+  it("falls back to the sending domain, which names no tenant", () => {
+    expect(verificationOrigin("not a url", "Mail.Workday.com")).toEqual({
+      host: "mail.workday.com",
+      namesTenant: false
+    });
+    expect(verificationOrigin(null, "workday.com")).toEqual({
+      host: "workday.com",
+      namesTenant: false
+    });
   });
 
-  it("falls back to the sending domain when there is no link", () => {
-    expect(verificationHost(null, "workday.com")).toBe("workday.com");
-  });
-
-  it("returns null with nothing to go on", () => {
-    expect(verificationHost(null, null)).toBeNull();
-    expect(verificationHost("also not a url", null)).toBeNull();
+  it("returns nothing to go on when there is neither", () => {
+    expect(verificationOrigin(null, null)).toEqual({ host: null, namesTenant: false });
   });
 });
 
 describe("pickVerificationRun", () => {
   const acme = { id: "run-acme", tenant_host: "acme.wd1.myworkdayjobs.com" };
   const globex = { id: "run-globex", tenant_host: "globex.wd5.myworkdayjobs.com" };
+  const fromLink = (host: string) => ({ host, namesTenant: true });
+  const fromSender = (host: string | null) => ({ host, namesTenant: false });
 
   it("returns nothing when no run is parked", () => {
-    expect(pickVerificationRun([], "acme.wd1.myworkdayjobs.com")).toEqual({
+    expect(pickVerificationRun([], fromLink("acme.wd1.myworkdayjobs.com"))).toEqual({
       run: null,
       ambiguous: false
     });
   });
 
-  it("matches the run whose tenant the mail names", () => {
-    expect(pickVerificationRun([globex, acme], "acme.wd1.myworkdayjobs.com").run).toBe(acme);
+  it("takes the lone parked run whatever the mail says", () => {
+    expect(pickVerificationRun([acme], fromLink("unrelated.example.com")).run).toBe(acme);
+    expect(pickVerificationRun([acme], fromSender(null)).run).toBe(acme);
+  });
+
+  it("matches the run whose tenant the link names", () => {
+    expect(pickVerificationRun([globex, acme], fromLink("acme.wd1.myworkdayjobs.com")).run).toBe(
+      acme
+    );
   });
 
   it("matches a subdomain in either direction", () => {
-    expect(pickVerificationRun([acme], "mail.acme.wd1.myworkdayjobs.com").run).toBe(acme);
-    expect(pickVerificationRun([{ tenant_host: "a.b.example.com" }], "example.com").run).toEqual({
-      tenant_host: "a.b.example.com"
-    });
+    expect(pickVerificationRun([acme, globex], fromLink("mail.acme.wd1.myworkdayjobs.com")).run).toBe(
+      acme
+    );
+    const nested = { tenant_host: "a.b.example.com" };
+    expect(pickVerificationRun([nested, globex], fromLink("example.com")).run).toBe(nested);
   });
 
   it("ignores a parked run with no tenant recorded", () => {
     const blank = { id: "run-blank", tenant_host: null };
-    expect(pickVerificationRun([blank, acme], "acme.wd1.myworkdayjobs.com").run).toBe(acme);
+    expect(pickVerificationRun([blank, acme], fromLink("acme.wd1.myworkdayjobs.com")).run).toBe(
+      acme
+    );
   });
 
-  it("takes the lone parked run when the tenant cannot be matched", () => {
-    expect(pickVerificationRun([acme], "unrelated.example.com").run).toBe(acme);
-    expect(pickVerificationRun([acme], null).run).toBe(acme);
+  // A code-only mail comes from a generic sender that can never equal a
+  // tenant host. Treating that as "matches nothing" would strand every parked
+  // run, which is worse than the wrong-tenant bug it was meant to prevent.
+  it("falls back to the newest run when the mail names no tenant", () => {
+    expect(pickVerificationRun([acme, globex], fromSender("myworkday.com")).run).toBe(acme);
+    expect(pickVerificationRun([acme, globex], fromSender(null)).run).toBe(acme);
   });
 
-  // Driving the wrong tenant's browser session is worse than letting the
-  // intended run time out honestly.
-  it("refuses to guess between several unmatched runs", () => {
-    expect(pickVerificationRun([acme, globex], "unrelated.example.com")).toEqual({
+  it("refuses to guess when a link names a tenant it cannot pin down", () => {
+    expect(pickVerificationRun([acme, globex], fromLink("unrelated.example.com"))).toEqual({
       run: null,
       ambiguous: true
     });
-    expect(pickVerificationRun([acme, globex], null)).toEqual({ run: null, ambiguous: true });
   });
 
   it("refuses to guess when several runs share the named tenant", () => {
     const dupe = { id: "run-dupe", tenant_host: "acme.wd1.myworkdayjobs.com" };
-    expect(pickVerificationRun([acme, dupe], "acme.wd1.myworkdayjobs.com")).toEqual({
+    expect(pickVerificationRun([acme, dupe], fromLink("acme.wd1.myworkdayjobs.com"))).toEqual({
       run: null,
       ambiguous: true
     });
