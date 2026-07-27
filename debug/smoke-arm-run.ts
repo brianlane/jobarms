@@ -83,8 +83,23 @@ async function ensureSmokeUser(): Promise<string> {
   return userId;
 }
 
-function atsOf(url: string): "greenhouse" | "lever" {
-  return new URL(url).hostname.endsWith("lever.co") ? "lever" : "greenhouse";
+/**
+ * Exact host or a true subdomain of it. A bare `endsWith` would also accept
+ * `notlever.co` and `evilmyworkdayjobs.com`, since nothing forces the match to
+ * begin at a label boundary.
+ */
+function hostIs(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function atsOf(url: string): "greenhouse" | "lever" | "workday" {
+  const host = new URL(url).hostname.toLowerCase();
+  if (hostIs(host, "lever.co")) return "lever";
+  // Everything-else-is-greenhouse sent Workday postings through the
+  // Greenhouse adapter, so the smoke run drove the wrong automation against a
+  // real page.
+  if (hostIs(host, "myworkdayjobs.com") || hostIs(host, "myworkday.com")) return "workday";
+  return "greenhouse";
 }
 
 async function pickJob(argUrl?: string) {

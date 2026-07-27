@@ -127,7 +127,10 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
+    # Deliberately NOT continue-on-error. vercel-deploy lists this job in
+    # `needs`, and with the error swallowed the job reported success no matter
+    # what the audit found, so a high-severity dependency finding shipped to
+    # production behind a green gate. A gate that cannot fail is not a gate.
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -283,6 +286,18 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           PR: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/deploy-gate.sh
+
+      # A push has no PR to gate against, so the wait above is skipped and
+      # `needs:` only covers jobs inside this workflow. CodeQL and the audit
+      # workflows run on the same commit separately and used to finish after
+      # production was already live.
+      - name: Wait for the security analyses on this commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash .github/scripts/security-gate.sh
 
       - name: Setup Supabase CLI
         if: github.event_name == 'push'

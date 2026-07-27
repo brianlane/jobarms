@@ -50,13 +50,17 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const generated = (run.answers ?? []) as AnswerLike[];
   const approved = (parsed.data.answers ?? generated) as AnswerLike[];
 
-  if (parsed.data.answers) {
-    await service.from("application_runs").update({ answers: parsed.data.answers }).eq("id", id);
-  }
-
+  // The worker goes first. Persisting the edits before it accepted them left
+  // the run at needs_review with the database already showing answers that
+  // were never forwarded, so the UI displayed them as saved and a retry could
+  // disagree with what the worker held.
   const result = await approveRun(id, parsed.data.answers);
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 503 });
+  }
+
+  if (parsed.data.answers) {
+    await service.from("application_runs").update({ answers: parsed.data.answers }).eq("id", id);
   }
 
   // Learning capture (best-effort; never blocks the approval): the user's

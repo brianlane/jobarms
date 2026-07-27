@@ -161,13 +161,27 @@ function createGate(limit: number) {
   let active = 0;
   const queue: Array<() => void> = [];
   return async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
-    active++;
+    if (active >= limit) {
+      // Woken by a finishing job that handed its slot straight over, so the
+      // count already includes this caller and must not be incremented again.
+      await new Promise<void>((resolve) => queue.push(resolve));
+    } else {
+      active++;
+    }
     try {
       return await fn();
     } finally {
-      active--;
-      queue.shift()?.();
+      // Hand the slot to the next waiter rather than releasing it and waking
+      // them. Releasing first left a window where `active` had dropped but the
+      // woken waiter had not resumed, so a fresh caller could walk straight
+      // through the check and take the same slot, putting two jobs on one
+      // permit and pushing past RENDER_MAX_CONCURRENCY.
+      const next = queue.shift();
+      if (next) {
+        next();
+      } else {
+        active--;
+      }
     }
   };
 }

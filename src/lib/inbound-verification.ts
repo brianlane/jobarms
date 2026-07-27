@@ -73,17 +73,21 @@ export interface VerificationRunPick<T> {
  * wrong browser session is worse than letting a run time out honestly.
  */
 export function pickVerificationRun<T extends { tenant_host?: string | null }>(
-  runs: T[],
+  allRuns: T[],
   origin: VerificationOrigin
 ): VerificationRunPick<T> {
+  // A run with no tenant recorded cannot be driven: the sidecar needs the
+  // host. Filtering those out here rather than returning one and letting the
+  // caller bail keeps a usable run from being passed over in favour of an
+  // unusable one.
+  const runs = allRuns.filter((run) => Boolean(run.tenant_host));
   if (runs.length === 0) return { run: null, ambiguous: false };
   if (runs.length === 1) return { run: runs[0], ambiguous: false };
 
   const { host, namesTenant } = origin;
   if (host && namesTenant) {
     const matched = runs.filter((run) => {
-      const tenant = run.tenant_host?.toLowerCase();
-      if (!tenant) return false;
+      const tenant = (run.tenant_host as string).toLowerCase();
       return tenant === host || host.endsWith(`.${tenant}`) || tenant.endsWith(`.${host}`);
     });
     if (matched.length === 1) return { run: matched[0], ambiguous: false };
