@@ -3,6 +3,7 @@ import {
   checkboxLabelInPage,
   comboboxValueInPage,
   elementInfoInPage,
+  fileInputIsWidgetOwnedInPage,
   resumeAcceptedInPage
 } from "../src/fill";
 import { visibleTextInPage } from "../src/account";
@@ -215,7 +216,10 @@ describe("num", () => {
 
 describe("resumeAcceptedInPage", () => {
   const withDoc = (doc: unknown, styles: Record<string, string> = {}) => {
-    (globalThis as unknown as { document: unknown }).document = doc;
+    // Default the collection query so every case does not have to declare one.
+    // A real document always has it; only these stubs need reminding.
+    (globalThis as unknown as { document: unknown }).document =
+      doc && typeof doc === "object" ? { querySelectorAll: () => [], ...doc } : doc;
     (globalThis as unknown as { getComputedStyle: unknown }).getComputedStyle = () => ({
       display: "block",
       visibility: "visible",
@@ -317,6 +321,65 @@ describe("resumeAcceptedInPage", () => {
     expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
   });
 
+  it("does NOT call a filename beside an error an upload", () => {
+    // The exact state a real Greenhouse run produced: the name is rendered off
+    // input.files before their uploader throws, so it sits next to the error
+    // with nothing uploaded. Reading the name alone reported this as attached.
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(0, 0),
+        files: { length: 1 },
+        closest: () => ({
+          textContent:
+            "Resume/CV* cv.pdf Cannot read properties of undefined (reading 'uploadFile')"
+        })
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+  });
+
+  it("is not put off by the widget's own help text", () => {
+    // "Accepted file types: pdf, doc..." sits in the same container on a healthy
+    // upload, so the complaint check must not fire on ordinary wording.
+    withDoc({
+      querySelector: () => ({
+        getBoundingClientRect: rect(0, 0),
+        files: { length: 1 },
+        closest: () => ({
+          textContent: "Resume/CV* cv.pdf Accepted file types: pdf, doc, docx, txt, rtf"
+        })
+      }),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+  });
+
+  it("catches an error left behind after the widget removed its input", () => {
+    withDoc({
+      querySelector: () => null,
+      querySelectorAll: () => [{ textContent: "cv.pdf Upload failed, try again" }],
+      body: { textContent: "cv.pdf Upload failed, try again" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+
+    // The same shape, but the complaining node is about something else entirely.
+    withDoc({
+      querySelector: () => null,
+      querySelectorAll: () => [{ textContent: "cv.pdf" }],
+      body: { textContent: "cv.pdf" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+
+    // A node carrying no text at all is not evidence of anything.
+    withDoc({
+      querySelector: () => null,
+      querySelectorAll: () => [{}],
+      body: { textContent: "cv.pdf" }
+    });
+    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+  });
+
   it("treats a display:none input as widget-owned", () => {
     withDoc(
       {
@@ -347,5 +410,49 @@ describe("resumeAcceptedInPage", () => {
       );
       expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
     }
+  });
+});
+
+describe("fileInputIsWidgetOwnedInPage", () => {
+  const withDoc = (doc: unknown, styles: Record<string, string> = {}) => {
+    (globalThis as unknown as { document: unknown }).document = doc;
+    (globalThis as unknown as { getComputedStyle: unknown }).getComputedStyle = () => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      ...styles
+    });
+  };
+  const input = (w: number, h: number) => ({
+    getBoundingClientRect: () => ({ width: w, height: h })
+  });
+
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+    delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+  });
+
+  it("calls a hidden input a widget's, because something else is driving it", () => {
+    withDoc({ querySelector: () => input(0, 0) });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(true);
+
+    withDoc({ querySelector: () => input(200, 30) }, { display: "none" });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(true);
+
+    withDoc({ querySelector: () => input(200, 30) }, { visibility: "hidden" });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(true);
+
+    withDoc({ querySelector: () => input(200, 30) }, { opacity: "0" });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(true);
+  });
+
+  it("leaves a plain visible input to be filled directly", () => {
+    withDoc({ querySelector: () => input(200, 30) });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(false);
+  });
+
+  it("has nothing to say when there is no file input", () => {
+    withDoc({ querySelector: () => null });
+    expect(fileInputIsWidgetOwnedInPage()).toBe(false);
   });
 });

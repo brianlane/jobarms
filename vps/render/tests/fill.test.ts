@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import {
   alternativeTactics,
   attachResume,
+  fileInputIsWidgetOwnedInPage,
   fillAnswers,
   fillCheckboxGroup,
   fillCombobox,
@@ -442,7 +443,10 @@ describe("attachResume", () => {
     const input = loc({ count: vi.fn(async () => 1) });
     const page = fakePage({
       locators: { 'input[type="file"]': input },
-      evaluate: () => {
+      evaluate: (fn) => {
+        // A plain visible input, so the widget path is skipped and this stays a
+        // test about the retry rather than about which control gets clicked.
+        if (fn === fileInputIsWidgetOwnedInPage) return false;
         const now = accepted;
         accepted = true; // the widget finishes mounting between attempts
         return now;
@@ -697,5 +701,89 @@ describe("driving a choice when the element misbehaves", () => {
     await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
     // No id means no label, so it falls back to driving the control.
     expect(target.check).toHaveBeenCalled();
+  });
+});
+
+describe("handing the resume to a widget that owns its own input", () => {
+  const ref = () => ({
+    contentBase64: Buffer.from("%PDF-1.7 fake").toString("base64"),
+    fileName: "cv.pdf",
+    mimeType: "application/pdf"
+  });
+
+  /** A page whose file input is hidden behind a custom uploader. */
+  function widgetPage(over: { chooser?: boolean; attachControl?: boolean; accepts?: boolean } = {}) {
+    const setFiles = vi.fn(async () => {});
+    const control = loc({ count: vi.fn(async () => (over.attachControl === false ? 0 : 1)) });
+    const input = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'input[type="file"]': input },
+      getByRole: () => control,
+      evaluate: (fn) => (fn === fileInputIsWidgetOwnedInPage ? true : (over.accepts ?? true)),
+      ...(over.chooser === false ? {} : { waitForEvent: () => ({ setFiles }) })
+    });
+    return { page, input, control, setFiles };
+  }
+
+  it("clicks the widget's own control instead of writing to the hidden input", async () => {
+    // Writing to the input behind the widget's back is what left a Greenhouse
+    // upload dead on "reading 'uploadFile'" while still showing the filename.
+    const { page, input, control, setFiles } = widgetPage();
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+
+    expect(control.click).toHaveBeenCalled();
+    expect(setFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "cv.pdf", mimeType: "application/pdf" })
+    );
+    expect(input.setInputFiles).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the input when the widget offers nothing to click", async () => {
+    const { page, input } = widgetPage({ attachControl: false });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(input.setInputFiles).toHaveBeenCalled();
+  });
+
+  it("falls back when the click opens no chooser at all", async () => {
+    // A control that opens nothing says nothing about the file, so the plain
+    // input is still worth a try rather than skipping the resume entirely.
+    const { page, input } = widgetPage({ chooser: false });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(input.setInputFiles).toHaveBeenCalled();
+  });
+
+  it("falls back when the widget cannot even be counted", async () => {
+    const input = loc({ count: vi.fn(async () => 1) });
+    const control = loc({
+      count: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({
+      locators: { 'input[type="file"]': input },
+      getByRole: () => control,
+      evaluate: (fn) => (fn === fileInputIsWidgetOwnedInPage ? true : true)
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(input.setInputFiles).toHaveBeenCalled();
+  });
+
+  it("leaves a plain visible input alone", async () => {
+    // No widget to drive, so there is nothing to be clever about.
+    const input = loc({ count: vi.fn(async () => 1) });
+    const control = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'input[type="file"]': input },
+      getByRole: () => control,
+      evaluate: (fn) => (fn === fileInputIsWidgetOwnedInPage ? false : true)
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(input.setInputFiles).toHaveBeenCalled();
+    expect(control.click).not.toHaveBeenCalled();
   });
 });

@@ -48,8 +48,18 @@ export interface FakePageConfig {
   getByRole?: () => ReturnType<typeof loc>;
   /** Drives page.$$eval, i.e. field extraction. */
   eval$$?: (selector: string) => unknown;
-  /** Drives page.evaluate, i.e. the visible-text read in account.ts. */
-  evaluate?: () => unknown;
+  /**
+   * Drives page.evaluate. Receives the in-page FUNCTION being evaluated, so a
+   * test can answer differently per call: several code paths now evaluate more
+   * than one thing, and a stub that cannot tell them apart silently answers the
+   * wrong question.
+   */
+  evaluate?: (fn?: unknown, arg?: unknown) => unknown;
+  /**
+   * Drives page.waitForEvent, i.e. the file chooser a custom uploader opens when
+   * its own control is clicked. Absent means nothing opens one.
+   */
+  waitForEvent?: (event: string) => unknown;
   screenshot?: () => Buffer;
   /** Throw from screenshot() to exercise the best-effort fallback. */
   screenshotThrows?: boolean;
@@ -90,11 +100,15 @@ export function fakePage(cfg: FakePageConfig = {}) {
       return { locator: vi.fn((sel: string) => pick(inner, sel)) };
     }),
     getByRole: cfg.getByRole ?? vi.fn(() => loc()),
+    waitForEvent: vi.fn(async (event: string) => {
+      if (!cfg.waitForEvent) throw new Error(`nothing opened a ${event}`);
+      return cfg.waitForEvent(event);
+    }),
     getByPlaceholder: vi.fn(() => loc()),
     mouse: { wheel: vi.fn(async () => {}), move: vi.fn(async () => {}) },
     keyboard: { press: vi.fn(async () => {}) },
     fill: vi.fn(async () => {}),
-    evaluate: vi.fn(async () => cfg.evaluate?.() ?? ""),
+    evaluate: vi.fn(async (fn: unknown, arg?: unknown) => cfg.evaluate?.(fn, arg) ?? ""),
     $$eval: vi.fn(async (selector: string) => (cfg.eval$$ ? cfg.eval$$(selector) : []))
   };
   return page;
