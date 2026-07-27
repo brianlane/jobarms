@@ -78,7 +78,15 @@ while true; do
   # could open before CodeQL or the audit matrix had begun. Requiring the runs
   # by name closes it: a workflow that has not started is a blocker, not an
   # absence. Conclusions are still judged by the check-run logic above.
-  required_workflows='["CodeQL", "Dependency Audit"]'
+  # CodeQL is configured for pushes to main and PRs based on main only (see
+  # codeql.yml), so requiring it on a PR with any other base would hold the
+  # gate open until timeout waiting for a run that is never going to start.
+  # Dependency Audit has no branch filter and always applies.
+  if [ -z "${GITHUB_BASE_REF:-}" ] || [ "${GITHUB_BASE_REF}" = "main" ]; then
+    required_workflows='["CodeQL", "Dependency Audit"]'
+  else
+    required_workflows='["Dependency Audit"]'
+  fi
   workflow_runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" --paginate -q '
     .workflow_runs[] | {id, name, status, conclusion}' | jq -s '.')
   # Newest run per name, so a re-run does not trip over its own history.
