@@ -90,6 +90,19 @@ while true; do
   workflow_runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" --paginate -q '
     .workflow_runs[] | {id, name, status, conclusion}' | jq -s '.')
   # Newest run per name, so a re-run does not trip over its own history.
+  # A completed run that failed is a hard stop, not merely "finished". Judging
+  # status alone let a failed workflow stop blocking the gate during the window
+  # before its failed check runs appear on the commit.
+  workflows_failed=$(jq -rn --argjson req "$required_workflows" --argjson runs "$workflow_runs" '
+    $req[] | . as $w
+    | ([ $runs[] | select(.name == $w) ] | sort_by(.id) | last) as $latest
+    | select($latest != null and $latest.status == "completed"
+             and ($latest.conclusion | IN("success","neutral","skipped") | not))
+    | "\($w): \($latest.conclusion // "unknown")"')
+  if [ -n "$workflows_failed" ]; then
+    echo "::error::deploy gate: security workflow(s) failed - $(tr '\n' ' ' <<<"$workflows_failed")"
+    exit 1
+  fi
   workflows_pending=$(jq -rn --argjson req "$required_workflows" --argjson runs "$workflow_runs" '
     $req[] | . as $w
     | ([ $runs[] | select(.name == $w) ] | sort_by(.id) | last) as $latest
