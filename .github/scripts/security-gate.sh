@@ -32,7 +32,7 @@ while :; do
   # --paginate emits one object per line, so slurp into a single array before
   # filtering. Every run for this commit, no per_page ceiling to fall off.
   RUNS=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq '.workflow_runs[] | {name: .name, status: .status, conclusion: .conclusion}' \
+    --jq '.workflow_runs[] | {id: .id, name: .name, status: .status, conclusion: .conclusion}' \
     | jq -s '.')
 
   MISSING=()
@@ -40,21 +40,24 @@ while :; do
   FAILED=()
 
   for wf in "${REQUIRED_WORKFLOWS[@]}"; do
-    MATCHING=$(echo "$RUNS" | jq --arg n "$wf" '[.[] | select(.name == $n)]')
-    COUNT=$(echo "$MATCHING" | jq 'length')
+    # Newest run only. Re-running a workflow leaves the old failed run on the
+    # same commit, and counting every run would let a failure that has since
+    # been re-run green block the deploy forever.
+    LATEST=$(echo "$RUNS" | jq -c --arg n "$wf" '[.[] | select(.name == $n)] | sort_by(.id) | last // null')
 
-    if [ "$COUNT" -eq 0 ]; then
+    if [ "$LATEST" = "null" ]; then
       MISSING+=("$wf")
       continue
     fi
-    if [ "$(echo "$MATCHING" | jq '[.[] | select(.status != "completed")] | length')" -gt 0 ]; then
+    if [ "$(echo "$LATEST" | jq -r '.status')" != "completed" ]; then
       RUNNING+=("$wf")
       continue
     fi
     # neutral and skipped are passes: a run with nothing to do found nothing.
-    if [ "$(echo "$MATCHING" | jq '[.[] | select(.conclusion | IN("success","neutral","skipped") | not)] | length')" -gt 0 ]; then
-      FAILED+=("$wf")
-    fi
+    case "$(echo "$LATEST" | jq -r '.conclusion // ""')" in
+      success|neutral|skipped) ;;
+      *) FAILED+=("$wf") ;;
+    esac
   done
 
   if [ ${#FAILED[@]} -gt 0 ]; then
