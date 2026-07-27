@@ -262,6 +262,23 @@ describe("answers the form did not accept", () => {
     expect(screen.getByText(/found an answer the form did not accept/)).toBeInTheDocument();
   });
 
+  it("tells a full-auto user why their arm stopped at all", () => {
+    // They chose not to be asked, so a review request needs to explain itself.
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          autonomy: "full_auto",
+          answers: [{ name: "q[]", label: "Sanctions", value: "None of the above" }],
+          fill_mismatches: [mismatch]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/normally submits without asking/)).toBeInTheDocument();
+  });
+
   it("counts them when several disagree", () => {
     stubFetch();
     render(

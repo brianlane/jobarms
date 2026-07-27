@@ -76,6 +76,29 @@ describe("runFunnel", () => {
     expect(review).toMatchObject({ reached: 1, reachedPct: 100 });
   });
 
+  it("counts a full-auto run that WAS sent to review", () => {
+    // The interlock can refuse to submit a full-auto run and hand it back to its
+    // owner. Judging eligibility on autonomy alone dropped those from the count
+    // while they sat in the timeline, understating a stage they plainly reached.
+    const stages = runFunnel([
+      {
+        autonomy: "full_auto",
+        steps: steps(
+          ["navigate", "2026-07-15T10:00:00Z"],
+          ["review_requested", "2026-07-15T10:01:10Z"],
+          ["approved", "2026-07-15T11:00:00Z"]
+        )
+      },
+      // A full-auto run that was never asked stays out of the denominator, so
+      // this still cannot read as a review drop-off.
+      { autonomy: "full_auto", steps: steps(["submitted", "2026-07-15T10:02:00Z"]) }
+    ]);
+
+    const byStep = new Map(stages.map((stage) => [stage.step, stage]));
+    expect(byStep.get("review_requested")).toMatchObject({ reached: 1, reachedPct: 100 });
+    expect(byStep.get("approved")).toMatchObject({ reached: 1, reachedPct: 100 });
+  });
+
   it("reports zeroes with no runs at all", () => {
     const stages = runFunnel([]);
     expect(stages.every((stage) => stage.reached === 0 && stage.reachedPct === 0)).toBe(true);

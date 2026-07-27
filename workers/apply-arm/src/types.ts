@@ -24,6 +24,12 @@ export interface Env {
    * captcha tile picks and nothing else.
    */
   SOLVER_SHARED_SECRET?: string;
+  /**
+   * The app, for the one call that goes the other way: asking it to email a user
+   * whose run is parked waiting on them. A plain var rather than a secret, since
+   * it is the same public URL the emails already link to.
+   */
+  APP_BASE_URL?: string;
 }
 
 /** ATSes the arm can drive. */

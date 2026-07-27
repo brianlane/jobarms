@@ -21,9 +21,11 @@ import {
   fetchResumeBase64,
   fillForm,
   type ExtractResponse,
+  type Mismatch,
   type RenderResult
 } from "./render";
 import { diagnosePage, generateAnswers } from "./gemini";
+import { notifyReviewNeeded } from "./notify";
 import {
   appendScreenshot,
   type FillTactics,
@@ -233,16 +235,81 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
         });
       }
 
+      /**
+       * The interlock refused to submit. Hand the run to the user instead of
+       * failing it, and wait for corrected answers.
+       *
+       * Returns the corrected answers, or null when the wait expired (in which
+       * case the run has already been closed out).
+       *
+       * Waits on the SAME `approval` event type as the review gate, so the app's
+       * existing approve endpoint and review UI work untouched: both key off
+       * `status = needs_review` and neither asks about autonomy. Only the step
+       * NAMES differ, because those are cache keys.
+       */
+      const parkForCorrection = async (mismatches: Mismatch[]): Promise<Answer[] | null> => {
+        await step.do("request correction", async () => {
+          await updateRun(env, params.runId, {
+            status: "needs_review",
+            error: null,
+            fill_mismatches: mismatches
+          });
+          await updateApplication(env, params.applicationId, { status: "needs_review" });
+          await logStep(
+            env,
+            params.runId,
+            "review_requested",
+            `the form did not accept ${describeMismatches(mismatches)}, so nothing was submitted`
+          );
+          // A full-auto user is not watching for a review request, so telling
+          // them is what makes the wait worth having. Best effort: a mail that
+          // does not send must not cost them the run.
+          await notifyReviewNeeded(env, params, mismatches);
+        });
+
+        let approval: { payload?: { answers?: Answer[] } };
+        try {
+          approval = await step.waitForEvent<{ answers?: Answer[] }>("await correction", {
+            type: "approval",
+            timeout: "7 days"
+          });
+        } catch {
+          // Nobody corrected it. Ends exactly where this run ended before the
+          // fallback existed, so ignoring the mail is never worse than not
+          // being asked. Real work happened, so the run is CONSUMED.
+          await step.do("correction timeout", async () => {
+            await updateRun(env, params.runId, {
+              status: "failed",
+              error: `verification_failed: the form did not accept your answer for ${describeMismatches(mismatches)}, and the correction was never made, so nothing was submitted`
+            });
+            await updateApplication(env, params.applicationId, { status: "failed" });
+            await logStep(env, params.runId, "fill_mismatch", describeMismatches(mismatches));
+          });
+          return null;
+        }
+
+        const corrected = approval.payload?.answers?.length
+          ? approval.payload.answers
+          : approvedAnswers;
+        await step.do("record correction", async () => {
+          await updateRun(env, params.runId, { status: "approved", answers: corrected });
+          await logStep(env, params.runId, "approved");
+        });
+        return corrected;
+      };
+
       // ------------------------------------------------ submit
       // NO retries: the submit phase clicks the employer's real submit control
       // and is not idempotent. A retry after a partial failure could send the
       // SAME application twice (the first attempt may have landed even when a
       // later await threw). A submit crash fails the run honestly and refunds
       // via the outer catch; the user can retry with a fresh arm.
-      const outcome = await step.do(
-        "submit",
-        { retries: { limit: 0, delay: "30 seconds" } },
-        async () => {
+      //
+      // `stepName` is a PARAMETER because a step name is the Workflows cache key:
+      // calling this twice under one name would hand back the first attempt's
+      // result and silently skip the second submit.
+      const submitAttempt = (stepName: string) =>
+        step.do(stepName, { retries: { limit: 0, delay: "30 seconds" } }, async () => {
           await updateRun(env, params.runId, { status: "submitting" });
           const applied = await getFillTactics(env, domain, params.ats);
           const result = await fillForm(env, {
@@ -268,8 +335,23 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           }
           await learnTactics(env, domain, params.ats, applied, result.data);
           return { outcome: result.data.outcome, mismatches: result.data.mismatches ?? [] };
-        }
-      );
+        });
+
+      let outcome = await submitAttempt("submit");
+
+      // A refused submit is not the end of the road for a full-auto run. The
+      // fill is done and the application is one edit from correct, so ask the
+      // user rather than throwing the work away. Review-gate runs do NOT come
+      // back here: they already had their review, and the sidecar already tried
+      // the alternative tactic, so asking the same person for the same answers
+      // would only spend another week to reach the same place.
+      if (outcome.outcome === "verification_failed" && params.autonomy === "full_auto") {
+        const corrected = await parkForCorrection(outcome.mismatches);
+        // Expired. The run is already closed out, and nothing was submitted.
+        if (!corrected) return;
+        approvedAnswers = corrected;
+        outcome = await submitAttempt("submit after correction");
+      }
 
       await step.do("finalize", async () => {
         if (outcome.outcome === "verification_failed") {

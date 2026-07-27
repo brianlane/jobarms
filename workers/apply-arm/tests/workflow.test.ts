@@ -9,6 +9,7 @@ const render = vi.hoisted(() => ({
   decodeScreenshot: vi.fn(() => new Uint8Array([1]) as Uint8Array | null)
 }));
 const gemini = vi.hoisted(() => ({ generateAnswers: vi.fn(), diagnosePage: vi.fn() }));
+const notify = vi.hoisted(() => ({ notifyReviewNeeded: vi.fn(async () => {}) }));
 const db = vi.hoisted(() => ({
   updateRun: vi.fn(async () => {}),
   logStep: vi.fn(async () => {}),
@@ -26,6 +27,7 @@ const db = vi.hoisted(() => ({
 vi.mock("../src/render", () => render);
 vi.mock("../src/gemini", () => gemini);
 vi.mock("../src/db", () => db);
+vi.mock("../src/notify", () => notify);
 
 import { ApplyRunWorkflow } from "../src/workflow";
 
@@ -41,19 +43,37 @@ const fail = (error: string, extra: Record<string, unknown> = {}) => ({
 });
 
 /**
- * Mock WorkflowStep: runs each step body immediately. `waitForEvent(name, opts)`
- * takes the event options as its SECOND argument, so the per-test handler is
- * given `opts` and can branch on which wait it is.
+ * Mock WorkflowStep: runs each step body immediately.
+ *
+ * Names are RECORDED, not ignored. A step name is the real Workflows cache key,
+ * so two steps sharing one name make the second return the first's cached result,
+ * which in production looks like a step that silently did not run. Recording them
+ * is the only way a test here can see that.
+ *
+ * The wait handler receives the step NAME as well as the event options, because
+ * every wait in this workflow listens for the same `approval` event type and the
+ * name is the only thing that tells them apart.
  */
-function makeStep(waitForEvent: (opts: { type: string }) => Promise<unknown>) {
+function makeStep(waitForEvent: (opts: { type: string }, name: string) => Promise<unknown>) {
+  const doNames: string[] = [];
+  const waitNames: string[] = [];
   return {
-    do: vi.fn(async (_name: string, optsOrFn: unknown, maybeFn?: unknown) => {
+    doNames,
+    waitNames,
+    do: vi.fn(async (name: string, optsOrFn: unknown, maybeFn?: unknown) => {
+      doNames.push(name);
       const fn = (typeof optsOrFn === "function" ? optsOrFn : maybeFn) as () => Promise<unknown>;
       return fn();
     }),
-    waitForEvent: vi.fn(async (_name: string, opts: { type: string }) => waitForEvent(opts))
+    waitForEvent: vi.fn(async (name: string, opts: { type: string }) => {
+      waitNames.push(name);
+      return waitForEvent(opts, name);
+    })
   };
 }
+
+/** The harness from the most recent `run()`, for asserting on step names. */
+let lastStep: ReturnType<typeof makeStep>;
 
 function params(over: Partial<RunParams> = {}): RunParams {
   return {
@@ -80,10 +100,13 @@ const WD = {
 
 function run(
   p: RunParams,
-  waitForEvent: (opts: { type: string }) => Promise<unknown> = async () => ({ payload: {} })
+  waitForEvent: (opts: { type: string }, name: string) => Promise<unknown> = async () => ({
+    payload: {}
+  })
 ) {
   const wf = new ApplyRunWorkflow({} as never, env);
-  return wf.run({ payload: p }, makeStep(waitForEvent) as never);
+  lastStep = makeStep(waitForEvent);
+  return wf.run({ payload: p }, lastStep as never);
 }
 
 beforeEach(() => {
@@ -141,46 +164,119 @@ describe("the happy paths", () => {
     });
   });
 
-  it("refuses to submit and says which fields the form rejected", async () => {
-    // The interlock. Real work happened, so this consumes the run like
-    // captcha_blocked does, but nothing was sent.
-    render.fillForm.mockResolvedValueOnce(
-      ok({
-        outcome: "verification_failed",
-        pages: 1,
-        mismatches: [
-          {
-            name: "q[]",
-            label: "Sanctions and export controls",
-            expected: "None of the above",
-            actual: "Ordinarily a resident of Cuba"
-          }
-        ]
-      })
+  const SANCTIONS = [
+    {
+      name: "q[]",
+      label: "Sanctions and export controls",
+      kind: "choice",
+      expected: "None of the above",
+      actual: "Ordinarily a resident of Cuba"
+    }
+  ];
+  const refused = () =>
+    ok({ outcome: "verification_failed", pages: 1, mismatches: SANCTIONS });
+
+  it("asks a full-auto user to fix a refused answer instead of failing the run", async () => {
+    // The interlock refused to send a wrong answer. The fill is done and the
+    // application is one edit from correct, so the run parks rather than dying.
+    render.fillForm.mockResolvedValueOnce(refused());
+
+    await run(params(), async () => ({ payload: {} }));
+
+    const parked = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "needs_review"
+    )?.[2] as { fill_mismatches: unknown[] };
+    expect(parked.fill_mismatches).toHaveLength(1);
+    expect(db.updateApplication).toHaveBeenCalledWith(env, "a1", { status: "needs_review" });
+    // Named by LABEL, since the field name means nothing to a person.
+    expect(db.logStep).toHaveBeenCalledWith(
+      env,
+      "r1",
+      "review_requested",
+      expect.stringContaining("Sanctions and export controls")
     );
+    // A full-auto user is not watching for a review request.
+    expect(notify.notifyReviewNeeded).toHaveBeenCalledWith(env, expect.anything(), SANCTIONS);
+  });
+
+  it("submits the corrected answers, and only asks once", async () => {
+    render.fillForm.mockResolvedValueOnce(refused());
+    const corrected = [{ name: "q[]", label: "Sanctions", value: "None of the above" }];
+
+    await run(params(), async () => ({ payload: { answers: corrected } }));
+
+    expect(render.fillForm).toHaveBeenCalledTimes(2);
+    expect(render.fillForm.mock.calls[1][1].answers).toEqual(corrected);
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "submitted", error: null });
+    // One ask, so a form that keeps disagreeing cannot loop the user forever.
+    expect(lastStep.waitNames).toEqual(["await correction"]);
+  });
+
+  it("gives up when the corrected answers are refused too", async () => {
+    render.fillForm.mockResolvedValueOnce(refused()).mockResolvedValueOnce(refused());
 
     await run(params(), async () => ({ payload: {} }));
 
     const patch = db.updateRun.mock.calls.find(
       (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
-    )?.[2] as { error: string; fill_mismatches: unknown[] };
+    )?.[2] as { error: string };
     expect(patch.error).toContain("verification_failed:");
-    // Named by LABEL, since the field name means nothing to a person.
-    expect(patch.error).toContain("Sanctions and export controls");
     expect(patch.error).toContain("nothing was submitted");
-    expect(patch.fill_mismatches).toHaveLength(1);
-    expect(db.logStep).toHaveBeenCalledWith(
-      env,
-      "r1",
-      "fill_mismatch",
-      expect.stringContaining("Sanctions")
+    expect(db.releaseArmRunSlot).not.toHaveBeenCalled();
+  });
+
+  it("closes the run where it would have ended if the fix never comes", async () => {
+    // Ignoring the mail lands exactly where the run landed before it was ever
+    // asked, so being asked is never worse than not being asked.
+    render.fillForm.mockResolvedValueOnce(refused());
+
+    await run(params(), async () => {
+      throw new Error("timeout");
+    });
+
+    const patch = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
+    )?.[2] as { error: string };
+    expect(patch.error).toContain("verification_failed:");
+    expect(patch.error).toContain("never made");
+    expect(db.updateApplication).toHaveBeenCalledWith(env, "a1", { status: "failed" });
+    // Real work happened, so the run is CONSUMED.
+    expect(db.releaseArmRunSlot).not.toHaveBeenCalled();
+    // Nothing was sent: the second attempt never ran.
+    expect(render.fillForm).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a corrected submit built from nothing", async () => {
+    // Approval with no edits reuses the answers already held, rather than
+    // submitting an empty list.
+    render.fillForm.mockResolvedValueOnce(refused());
+
+    await run(params(), async () => ({ payload: { answers: [] } }));
+
+    expect(render.fillForm.mock.calls[1][1].answers).toEqual(
+      render.fillForm.mock.calls[0][1].answers
     );
+  });
+
+  it("never reuses a step name, because a name is a cache key", async () => {
+    // Two steps sharing a name make the second return the FIRST one's cached
+    // result, so a duplicate reads as a step that silently did not run. This is
+    // the run with the most steps, including both submits.
+    render.fillForm.mockResolvedValueOnce(refused());
+
+    await run(params(), async () => ({ payload: {} }));
+
+    expect(lastStep.doNames).toContain("submit");
+    expect(lastStep.doNames).toContain("submit after correction");
+    expect(new Set(lastStep.doNames).size).toBe(lastStep.doNames.length);
+    expect(new Set(lastStep.waitNames).size).toBe(lastStep.waitNames.length);
   });
 
   it("summarizes rather than listing every rejected field", async () => {
     const many = ["One", "Two", "Three", "Four", "Five"].map((label) => ({
       name: label,
       label,
+      kind: "choice",
       expected: "x",
       actual: "y"
     }));
@@ -188,12 +284,32 @@ describe("the happy paths", () => {
       ok({ outcome: "verification_failed", pages: 1, mismatches: many })
     );
 
-    await run(params(), async () => ({ payload: {} }));
+    await run(params(), async () => {
+      throw new Error("timeout");
+    });
 
     const patch = db.updateRun.mock.calls.find(
       (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
     )?.[2] as { error: string };
     expect(patch.error).toContain("One, Two, Three and 2 more");
+  });
+
+  it("leaves a review-gate refusal as a single honest failure", async () => {
+    // That user already reviewed these answers and the sidecar already tried the
+    // other tactic, so asking again would spend another week to reach the same
+    // place.
+    render.fillForm
+      .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1 }))
+      .mockResolvedValueOnce(refused());
+
+    await run(params({ autonomy: "review_gate" }), async () => ({ payload: {} }));
+
+    const patch = db.updateRun.mock.calls.find(
+      (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
+    )?.[2] as { error: string };
+    expect(patch.error).toContain("verification_failed:");
+    expect(render.fillForm).toHaveBeenCalledTimes(2);
+    expect(lastStep.waitNames).toEqual(["await approval"]);
   });
 
   it("flags a review-gate fill the form disagreed with, without blocking it", async () => {
@@ -230,11 +346,13 @@ describe("the happy paths", () => {
       ok({
         outcome: "verification_failed",
         pages: 1,
-        mismatches: [{ name: "question_99[]", label: "  ", expected: "x", actual: "y" }]
+        mismatches: [{ name: "question_99[]", label: "  ", kind: "choice", expected: "x", actual: "y" }]
       })
     );
 
-    await run(params(), async () => ({ payload: {} }));
+    await run(params(), async () => {
+      throw new Error("timeout");
+    });
 
     const patch = db.updateRun.mock.calls.find(
       (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"

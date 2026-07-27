@@ -346,13 +346,13 @@ section for the posture.
       `fill_mismatches` on the run and mark the field in RunPanel (PR #44)
 - [x] Retry a field that did not take with the other tactic, and remember what
       worked per domain+ats in `arm_fill_tactics` (PR #47)
-- [ ] **Let a refused full-auto run fall back into the review gate.** Today it
-      records as `failed` with a `verification_failed:` prefix, because that
-      run's workflow ends at the submit step, so nothing is listening for an
-      approval event and parking it at `needs_review` would leave Approve doing
-      nothing forever. Review is what the run deserves: the fill is done and it
-      is one edit from correct. Needs the full-auto path to `waitForEvent`
-      instead of finalizing, with the metering and timeout story thought through.
+- [x] **Let a refused full-auto run fall back into the review gate.** Parks at
+      `needs_review`, waits on the same `approval` event the review gate uses
+      (so the approve endpoint and review UI needed no changes), and submits once
+      more with the corrections. One ask only; a second refusal or an expired wait
+      ends exactly where these runs ended before, so being asked is never worse
+      than not being asked. Emails the user, since a full-auto user is not
+      watching for a review request. Consumes the run on every path.
 
 ## Later / parked
 

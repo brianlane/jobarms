@@ -84,7 +84,8 @@ which keeps the logged-in session alive between them.
    answers** (below), submits, and verifies the ATS confirmation (screenshot).
    Tracker flips to `applied`, or `failed` with an honest `captcha_blocked` /
    `submit_unconfirmed` / `verification_failed` error, never a silent maybe.
-   Full-auto users skip step 3.
+   Full-auto users skip step 3, unless the read-back catches an answer the form
+   did not accept, in which case the run falls BACK to step 3 rather than send it.
 
 Two things span the boundary the same way, because the sidecar has the page and
 the worker has the AI credentials:
@@ -149,13 +150,45 @@ every reply, land in `application_runs.fill_mismatches`, and
 [RunPanel](src/components/RunPanel.tsx) marks the specific answer with what the
 form actually shows rather than a vague banner.
 
-A refused full-auto run is recorded as `failed` with a `verification_failed:`
-prefix rather than parked at `needs_review`, even though review is what it
-deserves: that run's workflow ENDS at the submit step, so nothing would be
-listening for the approval event and the Approve button would do nothing forever.
-Metering follows `captcha_blocked` (the arm did the full application, so the run
-is consumed). Letting full auto fall back into the review gate is the better
-answer and is tracked in [todo.md](todo.md).
+### A refused full-auto run falls back into the review gate
+
+Refusing to submit is only half an answer: the fill is done and the application
+is one edit from correct, so the run asks its owner rather than throwing the work
+away. It parks at `needs_review` exactly as a review-gate run does, waits 7 days,
+and on approval submits ONCE more with the corrected answers.
+
+Three things make that work, and each is load-bearing:
+
+- **The wait listens for the same `approval` event type** as the review gate, so
+  [the approve endpoint](src/app/api/runs/[id]/approve/route.ts) and the review UI
+  need no changes: both key off `status = needs_review` and neither asks about
+  autonomy. Only the step NAMES differ.
+- **Step names are Workflows cache keys.** The second submit is a separately
+  named step (`submit after correction`), because reusing `submit` would return
+  the first attempt's cached `verification_failed` and never resubmit at all. The
+  test harness records step names for exactly this reason, and a test asserts no
+  two collide, since the mock cannot otherwise see the bug.
+- **The user is told.** A full-auto user is not watching for a review request, so
+  the worker asks the app to email them
+  ([/api/internal/run-needs-review](src/app/api/internal/run-needs-review/route.ts),
+  authenticated with `ARM_WORKER_SHARED_SECRET` running the other way). The send
+  lives in the app because it owns the only Resend client and the From-header
+  rules; the worker holds no email credentials. Best effort throughout: a mail
+  that will not send must never cost someone their run.
+
+Exactly one ask, so a form that keeps disagreeing cannot loop somebody forever. A
+second refusal, or a correction that never comes, ends the run as `failed` with a
+`verification_failed:` prefix, which is precisely where these runs ended before
+the fallback existed. Being asked is therefore never worse than not being asked.
+
+**Review-gate runs do not come back here.** That user already reviewed these
+answers and the sidecar already tried the alternative tactic, so a second ask
+would spend another week to reach the same place.
+
+Metering follows `captcha_blocked` on every path, including a user cancelling a
+parked run: the arm did the full application, so the run is consumed. The slot is
+released in exactly one place, the outer catch for terminal system failures, and a
+test asserts it is never released here.
 
 ## Arm learning
 
@@ -661,6 +694,9 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
 (`ARM_WORKER_SHARED_SECRET`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
 `GEMINI_API_KEY`, `RENDER_URL`, `RENDER_TOKEN` for apply-arm;
 `INTERNAL_CRON_SECRET` for ingest; `EMAIL_INBOUND_SECRET` for email-inbound).
+Not a secret and therefore committed in
+[wrangler.jsonc](workers/apply-arm/wrangler.jsonc): `APP_BASE_URL`, the app origin
+apply-arm calls when a parked run needs its owner emailed.
 
 ## Production checklist (high level)
 

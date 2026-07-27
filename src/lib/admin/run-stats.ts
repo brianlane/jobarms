@@ -53,6 +53,11 @@ export const RUN_ERROR_CODES = [
   "submit_unconfirmed",
   "review_timeout",
   "account_required",
+  // The interlock refused to send an answer the form was not holding. Its own
+  // bucket because it is the one failure where the arm decided NOT to act: it
+  // says the verification is working, not that anything is broken, and it would
+  // otherwise land in "workflow_error" and read as a crash to go debug.
+  "verification_failed",
   // Transport and browser-side failures, which are about OUR infrastructure
   // rather than the employer's site. Without them a sidecar outage buckets as
   // "workflow_error" and reads as a crash to go debug, when the real answer is
@@ -85,6 +90,7 @@ export const RUN_ERROR_MEANING: Record<RunErrorCode, string> = {
   submit_unconfirmed: "submit fired but the ATS never confirmed",
   review_timeout: "the review gate expired after 7 days",
   account_required: "the ATS wanted a candidate account",
+  verification_failed: "the form would not hold an approved answer, so nothing was sent",
   render_unreachable: "the browser sidecar never answered, so the phase never ran",
   render_failed: "the sidecar answered but the phase died part way through",
   job_not_found: "the sidecar forgot the phase, which usually means it restarted",
@@ -246,23 +252,31 @@ export interface FunnelStage {
 }
 
 /**
- * How far runs get. Full-auto runs never log `review_requested` or `approved`,
- * so those two stages count only the review-gate runs that could reach them,
- * which keeps a full-auto fleet from reading as a 100% review drop-off.
+ * How far runs get.
+ *
+ * The two review stages count only the runs that could reach them, which keeps a
+ * full-auto fleet from reading as a 100% review drop-off. That population is
+ * review-gate runs PLUS any full-auto run that was actually sent to review, which
+ * happens when the fill interlock refuses to submit and hands the run back to its
+ * owner. Judging eligibility on autonomy alone would drop those from the numerator
+ * while they sat in the timeline, understating a stage they demonstrably reached.
  */
+function couldReachReview(run: { steps?: unknown; autonomy?: string }): boolean {
+  if (run.autonomy !== "full_auto") return true;
+  return runSteps(run.steps).some((entry) => entry.step === "review_requested");
+}
+
 export function runFunnel(runs: { steps?: unknown; autonomy?: string }[]): FunnelStage[] {
   const total = runs.length;
-  const reviewGateTotal = runs.filter((run) => run.autonomy !== "full_auto").length;
+  const reviewable = runs.filter(couldReachReview);
 
   const stages: FunnelStage[] = [];
   let previousReached = total;
 
   for (const stage of FUNNEL_STEPS) {
     const gateOnly = stage.step === "review_requested" || stage.step === "approved";
-    const population = gateOnly ? reviewGateTotal : total;
-    const eligible = gateOnly
-      ? runs.filter((run) => run.autonomy !== "full_auto")
-      : runs;
+    const population = gateOnly ? reviewable.length : total;
+    const eligible = gateOnly ? reviewable : runs;
     const reached = eligible.filter((run) =>
       runSteps(run.steps).some((entry) => entry.step === stage.step)
     ).length;

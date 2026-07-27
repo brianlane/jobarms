@@ -18,6 +18,12 @@
   ],
   // Secrets (wrangler secret put): ARM_WORKER_SHARED_SECRET, SUPABASE_URL,
   // SUPABASE_SECRET_KEY, GEMINI_API_KEY, RENDER_URL, RENDER_TOKEN.
+  //
+  // Not a secret: the app's public origin, used for the one call that goes back
+  // the other way (asking the app to email a user whose run is parked).
+  "vars": {
+    "APP_BASE_URL": "https://jobarms.com"
+  },
   "observability": {
     "enabled": true
   }
