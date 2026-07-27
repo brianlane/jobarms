@@ -338,6 +338,22 @@ section for the posture.
       `/admin/engagement` (active users by day/week/month, activation funnel from
       signup to a landed application, weekly cohorts, segments)
 
+## Fill verification (shipped Jul 26-27)
+
+- [x] Read the form back after filling and compare it to the approved answers;
+      strict on choice fields, empty-only on text (PR #44)
+- [x] Refuse to submit on a choice disagreement (`verification_failed`), surface
+      `fill_mismatches` on the run and mark the field in RunPanel (PR #44)
+- [x] Retry a field that did not take with the other tactic, and remember what
+      worked per domain+ats in `arm_fill_tactics` (PR #47)
+- [ ] **Let a refused full-auto run fall back into the review gate.** Today it
+      records as `failed` with a `verification_failed:` prefix, because that
+      run's workflow ends at the submit step, so nothing is listening for an
+      approval event and parking it at `needs_review` would leave Approve doing
+      nothing forever. Review is what the run deserves: the fill is done and it
+      is one edit from correct. Needs the full-auto path to `waitForEvent`
+      instead of finalizing, with the metering and timeout story thought through.
+
 ## Later / parked
 
 - [ ] Chrome extension (assisted apply in the user's own browser)

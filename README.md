@@ -80,9 +80,10 @@ which keeps the logged-in session alive between them.
    in the dashboard and approves - the app forwards approval to the worker,
    which resumes the workflow.
 4. **Submit**: the sidecar re-fills with the approved answers in the same
-   session, attaches the resume, submits, and verifies the ATS confirmation
-   (screenshot). Tracker flips to `applied`, or `failed` with an honest
-   `captcha_blocked` / `submit_unconfirmed` error, never a silent maybe.
+   session, attaches the resume, **reads the form back and compares it to those
+   answers** (below), submits, and verifies the ATS confirmation (screenshot).
+   Tracker flips to `applied`, or `failed` with an honest `captcha_blocked` /
+   `submit_unconfirmed` / `verification_failed` error, never a silent maybe.
    Full-auto users skip step 3.
 
 Two things span the boundary the same way, because the sidecar has the page and
@@ -99,6 +100,62 @@ the worker has the AI credentials:
 Run state lives in `application_runs` (step log, answers, screenshots) -
 the worker writes it directly to Supabase; the dashboard polls and renders
 the timeline, screenshots (signed URLs), and the review UI.
+
+## The arm checks its own work
+
+Nothing used to compare what the arm INTENDED with what the form actually held.
+A US sanctions question once ended up ticked "Ordinarily a resident of Cuba,
+Iran, North Korea, Syria..." on a run whose approved answer read "None of the
+above". The answers were right, the fill was wrong, and every layer reported
+success; it reached a human only because someone read a screenshot. A separate
+bug hid a missing required resume the same way.
+
+So after filling, the sidecar reads the page back
+([vps/render/src/extract.ts](vps/render/src/extract.ts) `readFilledState`) and
+compares it to the answers it was given
+([vps/render/src/verify.ts](vps/render/src/verify.ts)). The comparison is
+deliberately **uneven**, because the halves have different costs of being wrong:
+
+- **Choice fields (checkbox/radio): strict set equality.** A wrong tick is a
+  factual misstatement made on the user's behalf, and the checked set is
+  unambiguous. Both directions are checked, which is what catches a box ticked
+  that nobody asked for.
+- **Text and dropdowns: flagged only when EMPTY on a field we answered.** Forms
+  legitimately rewrite input: a location autocomplete turns "Phoenix, Arizona"
+  into "Phoenix, Arizona, United States", phone fields reformat. Comparing those
+  strictly would cry wolf on healthy runs, and a warning that is usually noise is
+  one people learn to click past, which costs more than it saves.
+- **Files are left to `attachResume`**, which already confirms the upload against
+  the widget itself.
+
+Three properties are load-bearing and easy to break by accident:
+
+- **Verification runs before advancing a wizard page.** A page's state is gone
+  once you leave it, so that is the only moment it can be seen.
+- **The LAST look at a field wins.** Verdicts are kept per field, not appended,
+  so a control that could not be driven on one page and was driven correctly on
+  the next stops counting as a problem. The comparator returns which answers it
+  could SEE alongside the disagreements, because "I looked and it was fine" is
+  what clears an earlier failure and must be distinguishable from "this page never
+  showed me that field".
+- **`Mismatch.kind` travels with the mismatch**, never re-derived from the live
+  page. By submit time a wizard's earlier pages are out of the DOM, so asking the
+  page "was this a choice field?" answers no for everything found before the last
+  page, and the interlock waves through the exact wrong ticks it exists to stop.
+
+**The interlock**: when a choice field still disagrees, `/fill` returns
+`verification_failed` and does NOT submit. Any remaining mismatches ride back on
+every reply, land in `application_runs.fill_mismatches`, and
+[RunPanel](src/components/RunPanel.tsx) marks the specific answer with what the
+form actually shows rather than a vague banner.
+
+A refused full-auto run is recorded as `failed` with a `verification_failed:`
+prefix rather than parked at `needs_review`, even though review is what it
+deserves: that run's workflow ENDS at the submit step, so nothing would be
+listening for the approval event and the Approve button would do nothing forever.
+Metering follows `captcha_blocked` (the arm did the full application, so the run
+is consumed). Letting full auto fall back into the review gate is the better
+answer and is tracked in [todo.md](todo.md).
 
 ## Arm learning
 
@@ -124,6 +181,26 @@ approve route, retrieval in the dispatch route):
 
 Capture is best-effort after the approval is already forwarded, so learning
 can never block or fail a submission.
+
+A third layer learns something different: not what to answer, but **how to
+operate the widget**.
+
+- **Fill tactics** (`arm_fill_tactics`, RLS-on/no policies, one row per
+  domain+ats+kind): sites disagree about how a control wants to be driven. A
+  custom widget can leave its real input hidden and wire every behaviour to the
+  visible `<label>`, so ticking the input does nothing while clicking the label
+  works. When the read-back says a field did not take, the sidecar retries that
+  field the OTHER way (choice: click the label instead of the input; text:
+  `fill()` instead of typing) and looks again. Whatever worked is recorded via
+  `record_fill_tactic`, and later runs on that domain lead with it. A tactic that
+  starts failing more than it succeeds is dropped by `record_fill_tactic_failure`,
+  the same rule that retires a stale playbook.
+
+Two invariants there are worth keeping. A kind counts as solved only when
+NOTHING of that kind is still wrong anywhere on the form, so neither one lucky
+field nor one clean wizard page can teach a tactic the rest of the form
+disagrees with. And swapping a tactic resets `failure_count`, or the new winner
+inherits the loser's record and is ignored from its first day.
 
 ## The browser sidecar (why the arm can hold a session)
 
@@ -318,6 +395,10 @@ failure ([workers/apply-arm/src/](workers/apply-arm/src/)):
   recorded per domain+ats with success/failure counts, and every future run
   on that domain applies the known fix FIRST. The platform heals itself
   with use.
+- **Fill-tactic retry** (`arm_fill_tactics`, see "Arm learning"): a field the
+  read-back says did not take is retried with the other way of driving that
+  control, then re-verified. The platform learns how to OPERATE a form, where
+  playbooks learn how to REACH one.
 - **Run retry** (`POST /api/applications/:id/retry`, `debug/
   retry-application.ts` mirror): eligible when the latest run is terminal,
   dead-ended at a junk review, or stuck for more than 24h. Refund semantics
@@ -610,10 +691,68 @@ live in the repo-root `.env` (gitignored); Vercel envs are synced from it by
   run: there is no browser anywhere else. It currently shares the internal KVM1
   box (`browser.jobarms.com`, its own `cloudflared-jobarms` unit alongside the
   connector already there), capped at one concurrent phase because that box has
-  a single vCPU.
+  a single vCPU. **The sidecar ships by script, not CI, so "merged" is not
+  "live"**: a change under `vps/render/` is not running until you redeploy. See
+  "Deploying and verifying the sidecar" below.
 - **Cloudflare plan**: the free plan is fine. Workers Paid was only ever needed
   for Browser Rendering minutes; revisit when run volume nears the free tier's
   3,000 workflow steps/day (roughly 300-400 arm runs/day).
+
+## Deploying and verifying the sidecar
+
+CI never touches the box. Anything under `vps/render/` is inert until this runs,
+which is the single easiest thing to forget after a green merge.
+
+**Getting in.** KVM1 accepts **publickey only**; password auth is off, so
+`HOSTINGER_ROOT_PASSWORD` cannot help and `sshpass` is a dead end. No key on the
+laptop is authorized. The working key lives in the **newCoworker** product's
+encrypted `vps_ssh_keys` vault, under business `8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`
+(NOT the clone business id recorded in `debug/.kvm1-smoke.json`, which has no key
+row). Materialize it with newCoworker's own helpers, then delete it afterwards:
+
+```ts
+// throwaway in newCoworker/debug/, run with: npx tsx debug/<name>.ts
+import { loadEnv } from "./_shared.ts";
+loadEnv();
+const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
+const key = await getActiveVpsSshKeyForBusiness("8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d");
+(await import("node:fs")).writeFileSync("/tmp/kvm1_key", key.private_key_pem, { mode: 0o600 });
+```
+
+**Deploying.** `deploy.sh` honours `SSH_KEY`, so no agent juggling:
+
+```bash
+set -a && source .env && set +a
+SSH_KEY=/tmp/kvm1_key RENDER_TOKEN="$RENDER_TOKEN" \
+  RENDER_SOLVER_URL="$ARM_WORKER_URL/internal/solve-captcha" \
+  RENDER_SOLVER_TOKEN="$SOLVER_SHARED_SECRET" RENDER_MAX_CONCURRENCY=1 \
+  bash vps/render/scripts/deploy.sh root@177.7.46.142
+```
+
+It is idempotent and ends with a health check. Confirm the code you expect
+actually landed (`grep` the built `dist/`), not just that the service is up.
+
+**Verifying a browser change is live.** Two levels, and the first is the one that
+catches real bugs:
+
+1. **Drive the deployed build directly on the box.** Import from
+   `/opt/jobarms-render/dist/*.js` in a throwaway `.mjs`, `page.setContent()` a
+   page shaped like the widget you care about, and assert on real behaviour. This
+   is how the fill interlock was proven: a checkbox group that reverts anything
+   not driven by its label showed the read-back catching the miss, the interlock
+   refusing, the label-tactic retry fixing it, and the right box ending up ticked.
+   Delete the probe when done.
+2. **Then a real posting through the live API**, `submit: false`. Start a job
+   (`POST /fill`), poll `GET /jobs/:id`. Check BOTH directions: correct answers
+   must report no mismatches (a check that cries wolf is worse than none), and a
+   deliberately impossible answer must be caught.
+
+**Never test the interlock by actually submitting.** If it failed you would send
+a junk application to a real employer. Prove the decision (`blocksSubmit`, or a
+returned mismatch with `kind: "choice"`) and stop there.
+
+Postings go stale: a URL that 404s or redirect-loops (`ERR_TOO_MANY_REDIRECTS`)
+is a closed req, not a regression. Pull a fresh one from the `jobs` table.
 
 ## Operating scripts
 
