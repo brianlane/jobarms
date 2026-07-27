@@ -13,6 +13,9 @@ const db = vi.hoisted(() => ({
   updateRun: vi.fn(async () => {}),
   logStep: vi.fn(async () => {}),
   getPlaybook: vi.fn(async () => null as unknown),
+  getFillTactics: vi.fn(async () => ({}) as Record<string, string>),
+  recordFillTactic: vi.fn(async () => {}),
+  recordFillTacticFailure: vi.fn(async () => {}),
   recordPlaybook: vi.fn(async () => {}),
   recordPlaybookFailure: vi.fn(async () => {}),
   uploadScreenshot: vi.fn(async (..._args: unknown[]) => "shot/path.png"),
@@ -237,6 +240,79 @@ describe("the happy paths", () => {
       (c: unknown[]) => (c[2] as { status?: string })?.status === "failed"
     )?.[2] as { error: string };
     expect(patch.error).toContain("question_99[]");
+  });
+
+  it("remembers the tactic that worked, and leads with it next time", async () => {
+    db.getFillTactics.mockResolvedValueOnce({ choice: "label" });
+    render.fillForm.mockResolvedValueOnce(
+      ok({ outcome: "submitted", pages: 1, tactics: [{ kind: "text", tactic: "set" }] })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    // What we already knew went in...
+    expect(render.fillForm).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ tactics: { choice: "label" } })
+    );
+    // ...and what this run discovered came back out.
+    expect(db.recordFillTactic).toHaveBeenCalledWith(
+      env,
+      "jobs.lever.co",
+      "lever",
+      "text",
+      "set"
+    );
+  });
+
+  it("records a tactic only once per fill", async () => {
+    render.fillForm
+      .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1, tactics: [{ kind: "choice", tactic: "label" }] }))
+      .mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+
+    await run(params({ autonomy: "review_gate" }), async () => ({ payload: {} }));
+
+    // Learning twice would inflate success_count and quietly corrupt the ranking.
+    expect(db.recordFillTactic).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a remembered tactic against itself once it stops working", async () => {
+    // Without this the staleness rule is decoration: failure_count could only
+    // ever be zero, so a dead tactic would be applied forever.
+    db.getFillTactics.mockResolvedValueOnce({ choice: "label" });
+    render.fillForm.mockResolvedValueOnce(
+      ok({
+        outcome: "submitted",
+        pages: 1,
+        mismatches: [{ name: "q[]", label: "Q", kind: "choice", expected: "a", actual: "b" }]
+      })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    expect(db.recordFillTacticFailure).toHaveBeenCalledWith(env, "jobs.lever.co", "lever", "choice");
+  });
+
+  it("does not blame a tactic for a kind that came out right", async () => {
+    db.getFillTactics.mockResolvedValueOnce({ choice: "label" });
+    render.fillForm.mockResolvedValueOnce(
+      ok({
+        outcome: "submitted",
+        pages: 1,
+        mismatches: [{ name: "email", label: "Email", kind: "text", expected: "a", actual: "" }]
+      })
+    );
+
+    await run(params(), async () => ({ payload: {} }));
+
+    // Only the choice tactic was remembered, and choices were fine.
+    expect(db.recordFillTacticFailure).not.toHaveBeenCalled();
+  });
+
+  it("learns nothing from a run where the defaults just worked", async () => {
+    render.fillForm.mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1 }));
+    await run(params(), async () => ({ payload: {} }));
+    expect(db.recordFillTactic).not.toHaveBeenCalled();
   });
 
   it("tells the reviewer when the resume never attached", async () => {

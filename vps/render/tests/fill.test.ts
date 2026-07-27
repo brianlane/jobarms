@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright";
-import { attachResume, fillAnswers, fillCheckboxGroup, fillCombobox, fillField } from "../src/fill";
+import {
+  alternativeTactics,
+  attachResume,
+  fillAnswers,
+  fillCheckboxGroup,
+  fillCombobox,
+  fillField
+} from "../src/fill";
 import { fakePage, loc } from "./helpers/fake-page";
 
 const asPage = (p: ReturnType<typeof fakePage>) => p as unknown as Page;
@@ -531,5 +538,164 @@ describe("attachResume", () => {
     ).resolves.toBe("failed");
 
     expect(input.setInputFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("driving a choice the other way", () => {
+  const box = (over: Record<string, unknown> = {}) =>
+    loc({
+      evaluate: vi.fn(async () => "None of the above"),
+      getAttribute: vi.fn(async () => "opt-1"),
+      isChecked: vi.fn(async () => false),
+      ...over
+    });
+
+  it("clicks the visible label instead of the hidden input", async () => {
+    // Some widgets leave the real input hidden and wire everything to the label,
+    // so ticking the input does nothing while clicking the label works.
+    const target = box();
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+
+    expect(label.click).toHaveBeenCalled();
+    expect(target.check).not.toHaveBeenCalled();
+  });
+
+  it("shrugs off a label that refuses the click", async () => {
+    const target = box();
+    const label = loc({
+      click: vi.fn(async () => {
+        throw new Error("intercepted");
+      })
+    });
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    // Never throws: the read-back is what decides whether this worked.
+    await expect(
+      fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label")
+    ).resolves.toBeUndefined();
+  });
+
+  it("leaves a box alone when it already reads correctly", async () => {
+    // Clicking a label TOGGLES, so acting on a correct box would break it.
+    const target = box({ isChecked: vi.fn(async () => true) });
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    expect(label.click).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the input when there is no label to click", async () => {
+    const target = box({ getAttribute: vi.fn(async () => null) });
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    expect(target.check).toHaveBeenCalled();
+  });
+
+  it("uses the label for a lone consent box too", async () => {
+    const only = box();
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 1) });
+    boxes.first = vi.fn(() => only);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "agree", "true", "label");
+    expect(label.click).toHaveBeenCalled();
+  });
+
+  it("still clears a stray tick when the checked state cannot be read", async () => {
+    const target = box({
+      isChecked: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    // Clicking a label blind could flip a correct box, but doing nothing would
+    // leave a stray tick standing, so it drives the control instead.
+    expect(label.click).not.toHaveBeenCalled();
+    expect(target.check).toHaveBeenCalled();
+  });
+
+  it("clears the boxes it does not want, not just ticks the ones it does", async () => {
+    const wrong = loc({
+      evaluate: vi.fn(async () => "Some other option"),
+      getAttribute: vi.fn(async () => "opt-9"),
+      isChecked: vi.fn(async () => true)
+    });
+    const label = loc();
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => wrong);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes, "label[for=": label } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    // Ticked but unwanted, so the label click unticks it.
+    expect(label.click).toHaveBeenCalled();
+  });
+});
+
+describe("alternativeTactics", () => {
+  it("is the other way round for each kind, both directions", () => {
+    expect(alternativeTactics({ choice: "control", text: "type" })).toEqual({
+      choice: "label",
+      text: "set"
+    });
+    expect(alternativeTactics({ choice: "label", text: "set" })).toEqual({
+      choice: "control",
+      text: "type"
+    });
+  });
+});
+
+describe("filling text the other way", () => {
+  it("sets the value in one go instead of typing it", async () => {
+    const field = loc({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ tag: "input", type: "text", cls: "", role: "", autocomplete: "" }))
+    });
+    const page = fakePage({ locators: { 'input[name="q"]': field } });
+
+    await fillField(asPage(page), "form", { name: "q", label: "Q", value: "Brian" }, {
+      choice: "control",
+      text: "set"
+    });
+
+    expect(field.fill).toHaveBeenCalledWith("Brian");
+    expect(field.pressSequentially).not.toHaveBeenCalled();
+  });
+});
+
+describe("driving a choice when the element misbehaves", () => {
+  it("does not guess when the id cannot even be read", async () => {
+    const target = loc({
+      evaluate: vi.fn(async () => "None of the above"),
+      getAttribute: vi.fn(async () => {
+        throw new Error("detached");
+      }),
+      isChecked: vi.fn(async () => false)
+    });
+    const boxes = loc({ count: vi.fn(async () => 2) });
+    boxes.nth = vi.fn(() => target);
+    const page = fakePage({ locators: { 'type="checkbox"': boxes } });
+
+    await fillCheckboxGroup(asPage(page), "q[]", "None of the above", "label");
+    // No id means no label, so it falls back to driving the control.
+    expect(target.check).toHaveBeenCalled();
   });
 });

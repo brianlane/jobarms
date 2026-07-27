@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendScreenshot,
+  getFillTactics,
   getPlaybook,
+  recordFillTactic,
+  recordFillTacticFailure,
   logStep,
   recordPlaybook,
   recordPlaybookFailure,
@@ -110,5 +113,87 @@ describe("db writes", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("x")));
     await expect(recordPlaybook(env, "d", "lever", { action: "scroll" })).resolves.toBeUndefined();
     await expect(recordPlaybookFailure(env, "d", "lever")).resolves.toBeUndefined();
+  });
+});
+
+describe("fill tactics", () => {
+  const row = (kind: string, tactic: string, ok = true) => ({
+    kind,
+    tactic,
+    success_count: ok ? 3 : 1,
+    failure_count: ok ? 0 : 9
+  });
+
+  it("returns what has worked on this site", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(ok([row("choice", "label"), row("text", "set")]))
+    );
+    expect(await getFillTactics(env, "d.com", "greenhouse")).toEqual({
+      choice: "label",
+      text: "set"
+    });
+  });
+
+  it("drops a tactic that keeps failing, same rule as playbooks", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([row("choice", "label", false)])));
+    expect(await getFillTactics(env, "d.com", "greenhouse")).toEqual({});
+  });
+
+  it("ignores a row it does not recognise rather than trusting it", async () => {
+    // A value outside what the filler understands would otherwise be handed
+    // straight to the sidecar.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(ok([row("choice", "telepathy"), row("text", "telepathy")]))
+    );
+    expect(await getFillTactics(env, "d.com", "greenhouse")).toEqual({});
+  });
+
+  it("falls back to knowing nothing when the read fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad(404)));
+    expect(await getFillTactics(env, "d.com", "greenhouse")).toEqual({});
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net")));
+    expect(await getFillTactics(env, "d.com", "greenhouse")).toEqual({});
+  });
+
+  it("records a winning tactic through the RPC", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await recordFillTactic(env, "d.com", "greenhouse", "choice", "label");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/rpc/record_fill_tactic");
+    expect(JSON.parse(init.body)).toEqual({
+      p_domain: "d.com",
+      p_ats: "greenhouse",
+      p_kind: "choice",
+      p_tactic: "label"
+    });
+  });
+
+  it("counts a failure through its own RPC", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await recordFillTacticFailure(env, "d.com", "greenhouse", "choice");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/rpc/record_fill_tactic_failure");
+    expect(JSON.parse(init.body)).toEqual({
+      p_domain: "d.com",
+      p_ats: "greenhouse",
+      p_kind: "choice"
+    });
+  });
+
+  it("never lets a bookkeeping write break a finished application", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net")));
+    await expect(
+      recordFillTactic(env, "d.com", "greenhouse", "choice", "label")
+    ).resolves.toBeUndefined();
+    await expect(
+      recordFillTacticFailure(env, "d.com", "greenhouse", "choice")
+    ).resolves.toBeUndefined();
   });
 });

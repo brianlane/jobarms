@@ -230,6 +230,11 @@ export interface FillResponse {
   resume?: "not_requested" | "attached" | "failed";
   /** Answers the form did not accept. Empty means the read-back agreed. */
   mismatches?: Mismatch[];
+  /**
+   * Ways of driving a control that worked where the default did not, worth
+   * remembering per site so the next run leads with them.
+   */
+  tactics?: { kind: "choice" | "text"; tactic: "control" | "label" | "type" | "set" }[];
   screenshotBase64?: string | null;
 }
 
@@ -246,6 +251,8 @@ export function fillForm(
     resume: { contentBase64: string | null; fileName: string; mimeType: string };
     submit: boolean;
     playbook?: RecoveryStrategy | null;
+    /** What already worked on this site, applied before anything is retried. */
+    tactics?: { choice?: "control" | "label"; text?: "type" | "set" };
   }
 ): Promise<RenderResult<FillResponse>> {
   return runPhase(env, "/fill", args);

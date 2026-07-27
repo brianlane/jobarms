@@ -44,13 +44,20 @@ import {
 import { ADAPTERS } from "./adapters.js";
 import { FormNotFoundError, reachForm } from "./reach.js";
 import { filterApplicationFields } from "./field-filter.js";
-import { attachResume, fillAnswers } from "./fill.js";
+import {
+  alternativeTactics,
+  attachResume,
+  DEFAULT_TACTICS,
+  fillAnswers,
+  fillField,
+  type Tactics
+} from "./fill.js";
 import { collectFields, readFilledState } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
-import { blocksSubmit, checkAnswers } from "./verify.js";
-import type { Answer, Ats, FormField, Mismatch, SubmitOutcome } from "./types.js";
+import { blocksSubmit, checkAnswers, type FillCheck } from "./verify.js";
+import type { Answer, Ats, FormField, Mismatch, SubmitOutcome, TacticWin } from "./types.js";
 
 const ATS_VALUES: readonly Ats[] = ["greenhouse", "lever", "workday"];
 
@@ -93,6 +100,45 @@ function fillVerdicts() {
 /** Read the form back and compare it to the answers it was given. */
 async function checkFill(page: Page, scope: string, answers: Answer[]) {
   return checkAnswers(answers, await readFilledState(page, scope));
+}
+
+/**
+ * Try the fields that did not take again, the other way round.
+ *
+ * Sites disagree about how a control wants to be driven: a custom widget can
+ * leave its real input hidden and wire everything to the visible label, so
+ * ticking the input does nothing while clicking the label works. Rather than
+ * guess per ATS, the read-back says which fields failed and this tries the other
+ * way, then looks again. Whatever worked is reported so the caller can remember
+ * it and lead with it next time on this site.
+ */
+async function retryWithAlternative(
+  page: Page,
+  scope: string,
+  answers: Answer[],
+  failed: Mismatch[],
+  tactics: Tactics
+): Promise<{ check: FillCheck; tried: TacticWin[] }> {
+  const other = alternativeTactics(tactics);
+  const failedNames = new Set(failed.map((mismatch) => mismatch.name));
+
+  // Walked in answer order rather than looked up per mismatch: every mismatch
+  // came from this list, so a lookup could only ever add a branch that cannot
+  // happen.
+  for (const answer of answers) {
+    if (failedNames.has(answer.name)) await fillField(page, scope, answer, other);
+  }
+
+  // What was ATTEMPTED, not what worked. Whether it worked cannot be judged here:
+  // on a wizard this page's read-back says nothing about a field still wrong two
+  // pages back, and teaching a tactic while that field is broken is how you learn
+  // the wrong lesson confidently. The caller decides, once it has seen everything.
+  const tried: TacticWin[] = [...new Set(failed.map((mismatch) => mismatch.kind))].map((kind) => ({
+    kind,
+    tactic: kind === "choice" ? other.choice : other.text
+  }));
+
+  return { check: await checkFill(page, scope, answers), tried };
 }
 
 /** Screenshot the page as base64 JPEG. Never throws; null when it fails. */
@@ -396,6 +442,9 @@ export function createApp(deps: AppDeps = {}): Express {
     const runId = typeof body.runId === "string" ? body.runId : "";
     const resume = body.resume ?? { contentBase64: null, fileName: "", mimeType: "" };
     const playbook = body.playbook ?? null;
+    // What worked on this site before, so a known-awkward widget is driven the
+    // right way on the FIRST attempt rather than rediscovered every run.
+    const tactics: Tactics = { ...DEFAULT_TACTICS, ...(body.tactics ?? {}) };
 
     return void startPhase(res, async () => {
       try {
@@ -417,13 +466,39 @@ export function createApp(deps: AppDeps = {}): Express {
             // leaves a REQUIRED field empty, and the review gate can only warn
             // about what it is told.
             const resumeOutcome = await attachResume(page, resume);
-            await fillAnswers(page, reached.scope, answers);
+            await fillAnswers(page, reached.scope, answers, tactics);
 
             // Read the page back and compare it to what was approved. Checked
             // BEFORE advancing, because a wizard page's state is gone once we
             // leave it, so this is the only moment it can be seen.
             const verdicts = fillVerdicts();
-            verdicts.record(await checkFill(page, reached.scope, answers));
+            const attempted: TacticWin[] = [];
+
+            /** Check, and if something did not take, try the other way once. */
+            const settle = async (target: Page, scope: string, list: Answer[]) => {
+              const first = await checkFill(target, scope, list);
+              if (first.mismatches.length === 0) return first;
+              const retry = await retryWithAlternative(target, scope, list, first.mismatches, tactics);
+              attempted.push(...retry.tried);
+              return retry.check;
+            };
+
+            /**
+             * The tactics worth remembering, judged against the WHOLE form.
+             *
+             * A kind only counts as solved when nothing of that kind is still
+             * wrong anywhere, so neither one lucky field nor one clean wizard page
+             * can teach a tactic the rest of the form disagrees with.
+             */
+            const learnedTactics = (): TacticWin[] => {
+              const stillWrong = new Set(verdicts.mismatches().map((m) => m.kind));
+              const byKind = new Map(
+                attempted.filter((win) => !stillWrong.has(win.kind)).map((win) => [win.kind, win])
+              );
+              return [...byKind.values()];
+            };
+
+            verdicts.record(await settle(page, reached.scope, answers));
 
             // Multi-page: fill each page, then advance. The same answer list is
             // applied per page; fillField no-ops on names this page does not have.
@@ -433,8 +508,8 @@ export function createApp(deps: AppDeps = {}): Express {
                 if (await adapter.isLastPage?.(page)) break;
                 if (!(await adapter.nextPage(page))) break;
                 pages++;
-                await fillAnswers(page, reached.scope, answers);
-                verdicts.record(await checkFill(page, reached.scope, answers));
+                await fillAnswers(page, reached.scope, answers, tactics);
+                verdicts.record(await settle(page, reached.scope, answers));
               }
             }
 
@@ -443,6 +518,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "filled" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -460,6 +536,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "verification_failed" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -488,6 +565,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "submitted" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -509,6 +587,7 @@ export function createApp(deps: AppDeps = {}): Express {
                     outcome: "submitted" as SubmitOutcome,
                     resume: resumeOutcome,
                     mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
                     pages,
                     screenshotBase64: await shot(page)
                   };
@@ -521,6 +600,7 @@ export function createApp(deps: AppDeps = {}): Express {
                 outcome: "captcha_blocked" as SubmitOutcome,
                 resume: resumeOutcome,
                 mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
                 pages,
                 screenshotBase64: await shot(page)
               };
@@ -530,6 +610,7 @@ export function createApp(deps: AppDeps = {}): Express {
               outcome: "unconfirmed" as SubmitOutcome,
               resume: resumeOutcome,
               mismatches: verdicts.mismatches(),
+              tactics: learnedTactics(),
               pages,
               screenshotBase64: await shot(page)
             };
