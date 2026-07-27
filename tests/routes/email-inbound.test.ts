@@ -64,6 +64,11 @@ const payload = (over: Record<string, unknown> = {}) => ({
  * `profile` and `insert` are read with `in` so an explicit null (alias nobody
  * owns / duplicate delivery) is honored instead of falling back to the default.
  */
+function asRunList(pendingRun: unknown): unknown[] {
+  if (Array.isArray(pendingRun)) return pendingRun;
+  return pendingRun == null ? [] : [pendingRun];
+}
+
 function serviceWith(
   over: { profile?: unknown; insert?: unknown; pendingRun?: unknown } = {}
 ) {
@@ -76,10 +81,14 @@ function serviceWith(
       ],
       application_runs: [
         {
-          data:
+          // The route reads every parked run now, not just the newest, so it
+          // can match the mail to the right tenant. A single object is still
+          // accepted for readability at the call sites.
+          data: asRunList(
             "pendingRun" in over
               ? over.pendingRun
               : { id: "run-1", tenant_host: "acme.wd1.myworkdayjobs.com" }
+          )
         }
       ]
     })
@@ -144,6 +153,27 @@ describe("messages we accept but do not process", () => {
     const res = await POST(post(payload()));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, skipped: "duplicate" });
+    expect(forwardInboundEmail).not.toHaveBeenCalled();
+  });
+
+  // A transient write failure used to be reported as a duplicate, so the
+  // sender saw 200, never retried, and the message reached neither the user
+  // nor the table.
+  it("asks the sender to retry when the insert fails for any other reason", async () => {
+    holder.service = serviceWith({
+      insert: { data: null, error: { code: "57014", message: "statement timeout" } }
+    });
+    const res = await POST(post(payload()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ ok: false, error: "insert_failed" });
+    expect(forwardInboundEmail).not.toHaveBeenCalled();
+  });
+
+  it("asks the sender to retry when the insert returns no row", async () => {
+    holder.service = serviceWith({ insert: { data: null, error: null } });
+    const res = await POST(post(payload()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ ok: false, error: "insert_unconfirmed" });
     expect(forwardInboundEmail).not.toHaveBeenCalled();
   });
 });
@@ -311,6 +341,47 @@ describe("consuming an account verification", () => {
     holder.service = serviceWith({ pendingRun: { id: "run-1", tenant_host: null } });
     const res = await POST(post(payload()));
     expect(await res.json()).toMatchObject({ consumed: "no_pending_run" });
+  });
+
+  // Two applications parked at once: the mail names one tenant, so it must
+  // drive that run rather than whichever happens to be newest.
+  it("gives the verification to the run whose tenant the mail names", async () => {
+    holder.service = serviceWith({
+      pendingRun: [
+        { id: "run-other", tenant_host: "globex.wd5.myworkdayjobs.com" },
+        { id: "run-1", tenant_host: "acme.wd1.myworkdayjobs.com" }
+      ]
+    });
+    await POST(post(payload()));
+    expect(completeRenderVerification).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantHost: "acme.wd1.myworkdayjobs.com" })
+    );
+  });
+
+  // The lookup itself returning null, as opposed to an empty list of runs.
+  it("does nothing when the parked-run lookup returns nothing at all", async () => {
+    holder.service = fakeClient({
+      from: fakeFrom({
+        profiles: [{ data: { id: "u1", email: "user@gmail.com" } }],
+        inbound_emails: [{ data: { id: "ie-1" } }, { data: null }],
+        application_runs: [{ data: null }]
+      })
+    });
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ consumed: "no_pending_run" });
+    expect(completeRenderVerification).not.toHaveBeenCalled();
+  });
+
+  it("refuses to guess when several runs are parked and none match the mail", async () => {
+    holder.service = serviceWith({
+      pendingRun: [
+        { id: "run-a", tenant_host: "globex.wd5.myworkdayjobs.com" },
+        { id: "run-b", tenant_host: "initech.wd3.myworkdayjobs.com" }
+      ]
+    });
+    const res = await POST(post(payload()));
+    expect(await res.json()).toMatchObject({ consumed: "ambiguous_run" });
+    expect(completeRenderVerification).not.toHaveBeenCalled();
   });
 
   it("leaves the run parked when the tenant rejects the verification", async () => {

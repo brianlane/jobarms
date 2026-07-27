@@ -28,13 +28,28 @@ export function parseLeverUrl(url: URL): { company: string; postingId: string } 
   return null;
 }
 
+const HTML_ENTITIES: Record<string, string> = {
+  "&nbsp;": " ",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&#039;": "'",
+  "&amp;": "&"
+};
+
+// Built from the keys so the pattern cannot drift from the table, which also
+// means every match is guaranteed to have a replacement. None of `&`, `#`, or
+// `;` is a regex metacharacter, so the keys need no escaping.
+const HTML_ENTITY_PATTERN = new RegExp(Object.keys(HTML_ENTITIES).join("|"), "g");
+
 function stripHtml(html: string): string {
   return html
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+    // One pass over the entities, because decoding them in sequence lets an
+    // earlier replacement feed the next one. Turning "&amp;" into "&" first
+    // rewrote the literal text "&amp;lt;" into "<" instead of "&lt;".
+    .replace(HTML_ENTITY_PATTERN, (entity) => HTML_ENTITIES[entity])
     .replace(/\s+/g, " ")
     .trim();
 }

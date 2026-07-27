@@ -63,6 +63,39 @@ describe("fetchJobMeta", () => {
     expect(meta.description).toBe("Build things & ship");
   });
 
+  // Decoding entities in sequence let an earlier replacement feed the next:
+  // turning "&amp;" into "&" first rewrote the literal text "&amp;lt;" into
+  // "<", which is the double-unescaping CodeQL flagged.
+  it("decodes each HTML entity exactly once", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          title: "Engineer",
+          company_name: "Acme",
+          location: { name: "Remote" },
+          content: "<p>Escaped: &amp;lt;script&amp;gt; and &lt;b&gt; &quot;q&quot; &#39;a&#39;</p>"
+        })
+      })
+    );
+    const meta = await fetchJobMeta("https://boards.greenhouse.io/acme/jobs/1");
+    expect(meta.description).toBe(`Escaped: &lt;script&gt; and <b> "q" 'a'`);
+    expect(meta.description).not.toContain("<script>");
+  });
+
+  it("leaves an unknown entity untouched", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ content: "<p>50&deg; &#039;x&#039;</p>" })
+      })
+    );
+    const meta = await fetchJobMeta("https://boards.greenhouse.io/acme/jobs/1");
+    expect(meta.description).toBe("50&deg; 'x'");
+  });
+
   it("falls back to defaults when Greenhouse omits title/company/location/content", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
     const meta = await fetchJobMeta("https://boards.greenhouse.io/acme/jobs/1");
