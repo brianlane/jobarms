@@ -72,6 +72,32 @@ while true; do
   fi
   [ -n "$not_green" ] && blockers+="checks not green:"$'\n'"$not_green"$'\n'
 
+  # --- Required security workflows must have STARTED, not just be green ---
+  # Everything above judges checks that are already on the commit. A workflow
+  # that has not registered its checks yet is invisible to that, so the gate
+  # could open before CodeQL or the audit matrix had begun. Requiring the runs
+  # by name closes it: a workflow that has not started is a blocker, not an
+  # absence. Conclusions are still judged by the check-run logic above.
+  # CodeQL is configured for pushes to main and PRs based on main only (see
+  # codeql.yml), so requiring it on a PR with any other base would hold the
+  # gate open until timeout waiting for a run that is never going to start.
+  # Dependency Audit has no branch filter and always applies.
+  if [ -z "${GITHUB_BASE_REF:-}" ] || [ "${GITHUB_BASE_REF}" = "main" ]; then
+    required_workflows='["CodeQL", "Dependency Audit"]'
+  else
+    required_workflows='["Dependency Audit"]'
+  fi
+  workflow_runs=$(gh api "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" --paginate -q '
+    .workflow_runs[] | {id, name, status, conclusion}' | jq -s '.')
+  # Newest run per name, so a re-run does not trip over its own history.
+  workflows_pending=$(jq -rn --argjson req "$required_workflows" --argjson runs "$workflow_runs" '
+    $req[] | . as $w
+    | ([ $runs[] | select(.name == $w) ] | sort_by(.id) | last) as $latest
+    | if $latest == null then "\($w): not started"
+      elif $latest.status != "completed" then "\($w): \($latest.status)"
+      else empty end')
+  [ -n "$workflows_pending" ] && blockers+="security workflows not finished:"$'\n'"$workflows_pending"$'\n'
+
   # --- Commit statuses (legacy status API - some apps report here) ---
   statuses=$(gh api "repos/${REPO}/commits/${SHA}/status" -q '
     .statuses | map({context, state}) | unique_by(.context)')
