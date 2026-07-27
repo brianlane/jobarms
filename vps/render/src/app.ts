@@ -36,7 +36,9 @@ import { CONFIG } from "./config.js";
 import { safeUrl } from "./ssrf.js";
 import {
   acquireSession,
+  dropSession,
   finishSession,
+  removeStorageState,
   saveStorageState,
   sessionCount,
   sessionKey
@@ -279,8 +281,17 @@ export function createApp(deps: AppDeps = {}): Express {
         poisoned = true;
         throw err;
       } finally {
-        // Save BEFORE closing the page so a just-completed login persists.
-        await saveStorageState(key, context);
+        // Save BEFORE closing the page so a just-completed login persists, but
+        // NOT if the session was dropped (a disconnect): dropSession deletes the
+        // cookie file, and re-saving would revive the login the user asked us to
+        // forget. Writing the file takes long enough that a disconnect can land
+        // AFTER this check yet before the write finishes, so re-check afterwards
+        // and undo the revival: the last operation on the file is then always a
+        // delete, whichever order the two landed in.
+        if (!entry.doomed) {
+          await saveStorageState(key, context);
+          if (entry.doomed) await removeStorageState(key);
+        }
         if (page) await page.close().catch(() => {});
         finishSession(key, entry, poisoned);
       }
@@ -367,6 +378,18 @@ export function createApp(deps: AppDeps = {}): Express {
     } catch (err) {
       return void appError(res, "render_failed", String(err));
     }
+  });
+
+  // Forget a stored session on disconnect. Synchronous and tiny: it evicts the
+  // cached context and deletes the cookie file, so the user's next run starts
+  // logged out. Not a browser phase, so it never takes a concurrency slot.
+  app.delete("/session", async (req, res) => {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const tenantHost = typeof body.tenantHost === "string" ? body.tenantHost.trim() : "";
+    if (!userId || !tenantHost) return void res.status(400).json({ error: "invalid_body" });
+    await dropSession(sessionKey(userId, tenantHost));
+    return void res.json({ ok: true });
   });
 
   // ------------------------------------------------------------------ extract

@@ -5,10 +5,12 @@ import { fakeClient, fakeFrom, type Result } from "../helpers/supabase";
 
 const holder = vi.hoisted(() => ({
   user: { id: "u1", email: "a@b.com" } as { id: string; email: string } | null,
-  client: null as unknown
+  client: null as unknown,
+  service: null as unknown
 }));
 vi.mock("@/lib/supabase/auth", () => ({ getAuthUser: vi.fn(async () => holder.user) }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServerClient: vi.fn(async () => holder.client) }));
+vi.mock("@/lib/supabase/service", () => ({ createSupabaseServiceClient: vi.fn(() => holder.service) }));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -38,6 +40,9 @@ function client(tables: Record<string, Result[]>) {
 beforeEach(() => {
   holder.user = { id: "u1", email: "a@b.com" };
   holder.client = null;
+  // Settings reads the connected LinkedIn account through the service client;
+  // default to "not connected" so the other pages need no setup.
+  holder.service = fakeClient({ from: fakeFrom({ site_accounts: [{ data: null }] }) });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ screenshots: [] }) }));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -247,6 +252,22 @@ describe("SettingsPage", () => {
     holder.client = client({ profiles: [{ data: { arm_autonomy: "review_gate" } }] });
     render(await SettingsPage());
     expect(screen.getByText(/created automatically/)).toBeInTheDocument();
+  });
+
+  it("offers to connect LinkedIn when no account is linked", async () => {
+    holder.client = client({ profiles: [{ data: { arm_autonomy: "review_gate" } }] });
+    render(await SettingsPage());
+    expect(screen.getByText("Connect LinkedIn")).toBeInTheDocument();
+  });
+
+  it("shows the connected LinkedIn email once linked", async () => {
+    holder.client = client({ profiles: [{ data: { arm_autonomy: "review_gate" } }] });
+    holder.service = fakeClient({
+      from: fakeFrom({ site_accounts: [{ data: { email: "me@example.com", status: "verified" } }] })
+    });
+    render(await SettingsPage());
+    expect(screen.getByText("me@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Disconnect")).toBeInTheDocument();
   });
 });
 

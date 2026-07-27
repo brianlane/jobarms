@@ -25,17 +25,21 @@ vi.mock("playwright", () => ({ chromium: { launch: (...a: unknown[]) => launch(.
 const readFile = vi.fn(async () => "{}");
 const mkdir = vi.fn(async () => undefined);
 const writeFile = vi.fn(async () => undefined);
+const rm = vi.fn(async () => undefined);
 vi.mock("node:fs/promises", () => ({
   readFile: (...a: unknown[]) => readFile(...a),
   mkdir: (...a: unknown[]) => mkdir(...a),
-  writeFile: (...a: unknown[]) => writeFile(...a)
+  writeFile: (...a: unknown[]) => writeFile(...a),
+  rm: (...a: unknown[]) => rm(...a)
 }));
 
 import {
   acquireSession,
+  dropSession,
   evictStale,
   finishSession,
   getBrowser,
+  removeStorageState,
   saveStorageState,
   sessionCount,
   sessionKey,
@@ -52,6 +56,8 @@ beforeEach(() => {
   readFile.mockClear();
   readFile.mockResolvedValue("{}");
   mkdir.mockClear();
+  rm.mockClear();
+  rm.mockResolvedValue(undefined);
 });
 afterEach(async () => {
   await shutdown();
@@ -176,6 +182,53 @@ describe("finishSession", () => {
 
     finishSession("u1:acme.com", entry, false);
     await vi.waitFor(() => expect(contexts[0].close).toHaveBeenCalled());
+  });
+});
+
+describe("dropSession", () => {
+  it("evicts an idle session and deletes its cookie file", async () => {
+    const entry = await acquireSession("u1:acme.com");
+    finishSession("u1:acme.com", entry, false);
+
+    await dropSession("u1:acme.com");
+
+    expect(sessionCount()).toBe(0);
+    await vi.waitFor(() => expect(contexts[0].close).toHaveBeenCalled());
+    expect(rm).toHaveBeenCalledWith(storageStatePath("u1:acme.com"), { force: true });
+  });
+
+  it("keeps an in-use context open until the last holder releases it", async () => {
+    const entry = await acquireSession("u1:acme.com");
+
+    await dropSession("u1:acme.com");
+    // Dropped from the map, but not closed while a request still holds it.
+    expect(sessionCount()).toBe(0);
+    expect(contexts[0].close).not.toHaveBeenCalled();
+
+    finishSession("u1:acme.com", entry, false);
+    await vi.waitFor(() => expect(contexts[0].close).toHaveBeenCalled());
+  });
+
+  it("still deletes the cookie file when nothing is cached", async () => {
+    await dropSession("u1:never-loaded.com");
+    expect(rm).toHaveBeenCalledWith(storageStatePath("u1:never-loaded.com"), { force: true });
+  });
+
+  it("tolerates a failed file removal", async () => {
+    rm.mockRejectedValueOnce(new Error("permission denied"));
+    await expect(dropSession("u1:acme.com")).resolves.toBeUndefined();
+  });
+});
+
+describe("removeStorageState", () => {
+  it("deletes only the cookie file for a key", async () => {
+    await removeStorageState("u1:acme.com");
+    expect(rm).toHaveBeenCalledWith(storageStatePath("u1:acme.com"), { force: true });
+  });
+
+  it("tolerates a failed removal without throwing", async () => {
+    rm.mockRejectedValueOnce(new Error("permission denied"));
+    await expect(removeStorageState("u1:acme.com")).resolves.toBeUndefined();
   });
 });
 

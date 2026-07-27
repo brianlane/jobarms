@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { completeRenderVerification, renderUrl } from "@/lib/render";
+import { clearRenderSession, completeRenderVerification, renderUrl } from "@/lib/render";
 
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 
@@ -116,5 +116,35 @@ describe("completeRenderVerification", () => {
     const result = await verify();
     expect(result).toMatchObject({ ok: false, error: "render_unreachable" });
     expect((result as { detail: string }).detail).toContain("RENDER_TOKEN");
+  });
+});
+
+describe("clearRenderSession", () => {
+  const clear = () =>
+    clearRenderSession({ userId: "u1", tenantHost: "www.linkedin.com" });
+
+  it("sends a DELETE to /session with the bearer and the target key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await clear()).toEqual({ ok: true, data: { ok: true } });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://browser.jobarms.com/session");
+    expect(init.method).toBe("DELETE");
+    expect(init.headers.authorization).toBe("Bearer render-token");
+    expect(JSON.parse(init.body)).toEqual({ userId: "u1", tenantHost: "www.linkedin.com" });
+  });
+
+  it("reports render_unconfigured without a call when RENDER_URL is unset", async () => {
+    delete process.env.RENDER_URL;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await clear()).toEqual({ ok: false, error: "render_unconfigured" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies a transport failure as unreachable without throwing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("tunnel down")));
+    expect(await clear()).toMatchObject({ ok: false, error: "render_unreachable" });
   });
 });

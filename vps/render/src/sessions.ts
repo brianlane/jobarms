@@ -16,7 +16,7 @@
  * under an in-flight request.
  */
 import { chromium, type Browser, type BrowserContext } from "playwright";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { CONFIG } from "./config.js";
@@ -176,6 +176,38 @@ export function finishSession(key: string, entry: Entry, poisoned: boolean): voi
     if (sessions.get(key) === entry) sessions.delete(key);
   }
   if (entry.doomed && entry.inUse === 0) closeEntry(entry);
+}
+
+/**
+ * Forget a session entirely: drop the cached context AND delete its cookies on
+ * disk, so a later run for this user+tenant starts logged out.
+ *
+ * Used when the user disconnects an account they own (LinkedIn). Mirrors the
+ * poison path so an in-flight request is never closed out from under: the entry
+ * is removed from the map immediately, but the context is closed only once no
+ * request still holds it. The cookie file is removed regardless (force, so a
+ * missing file is not an error).
+ */
+export async function dropSession(key: string): Promise<void> {
+  const entry = sessions.get(key);
+  if (entry) {
+    entry.doomed = true;
+    sessions.delete(key);
+    if (entry.inUse === 0) closeEntry(entry);
+  }
+  await removeStorageState(key);
+}
+
+/**
+ * Delete just the persisted cookies for a key, leaving any live context alone.
+ *
+ * Separate from dropSession so a phase that saved cookies AFTER a disconnect had
+ * already deleted them (a save can outlast the `doomed` check by the time it
+ * takes to write the file) can undo that revival. Best-effort: a missing file is
+ * not an error.
+ */
+export async function removeStorageState(key: string): Promise<void> {
+  await rm(storageStatePath(key), { force: true }).catch(() => {});
 }
 
 /** Close every session and the browser. Used on shutdown and by tests. */
