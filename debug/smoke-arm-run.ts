@@ -12,6 +12,8 @@
  *   npx tsx debug/smoke-arm-run.ts [job-url]
  */
 import { createClient } from "@supabase/supabase-js";
+import { detectAts, SUPPORTED_ATS } from "../src/lib/ats";
+import type { SupportedAts } from "../src/lib/arm-dispatch";
 import { findAuthUserByEmail } from "./lib/auth-users";
 
 const SMOKE_EMAIL = "smoke@jobarms.com";
@@ -84,22 +86,21 @@ async function ensureSmokeUser(): Promise<string> {
 }
 
 /**
- * Exact host or a true subdomain of it. A bare `endsWith` would also accept
- * `notlever.co` and `evilmyworkdayjobs.com`, since nothing forces the match to
- * begin at a label boundary.
+ * Production detection, not a local copy of it.
+ *
+ * This script used to carry its own host matcher, which drifted: it missed
+ * `myworkdaysite.com` and fell back to Greenhouse for anything it did not
+ * recognise, so a smoke run could drive the wrong adapter against a live
+ * posting. Deferring to `detectAts` means the smoke test exercises the same
+ * decision production makes, and an unsupported URL stops the run instead of
+ * being silently mislabelled.
  */
-function hostIs(host: string, domain: string): boolean {
-  return host === domain || host.endsWith(`.${domain}`);
-}
-
-function atsOf(url: string): "greenhouse" | "lever" | "workday" {
-  const host = new URL(url).hostname.toLowerCase();
-  if (hostIs(host, "lever.co")) return "lever";
-  // Everything-else-is-greenhouse sent Workday postings through the
-  // Greenhouse adapter, so the smoke run drove the wrong automation against a
-  // real page.
-  if (hostIs(host, "myworkdayjobs.com") || hostIs(host, "myworkday.com")) return "workday";
-  return "greenhouse";
+function atsOf(url: string): SupportedAts {
+  const ats = detectAts(url);
+  if (!SUPPORTED_ATS.has(ats)) {
+    throw new Error(`unsupported ATS for ${url} (detected: ${ats})`);
+  }
+  return ats as SupportedAts;
 }
 
 async function pickJob(argUrl?: string) {

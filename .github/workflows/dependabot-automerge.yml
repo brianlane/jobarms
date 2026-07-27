@@ -144,6 +144,23 @@ jobs:
             local WF_RUNS WF_PENDING
             WF_RUNS=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" --paginate \
               --jq '.workflow_runs[] | {id, name, status, conclusion}' | jq -s '.')
+            # A completed run that FAILED is a stop, not a finish. Judging
+            # status alone let a failed workflow stop blocking during the
+            # window before its failed check runs appear on the commit, which
+            # is the same gap deploy-gate.sh and security-gate.sh close.
+            local WF_FAILED
+            WF_FAILED=$(jq -rn --argjson req '["CodeQL","Dependency Audit"]' --argjson runs "$WF_RUNS" '
+              $req[] | . as $w
+              | ([ $runs[] | select(.name == $w) ] | sort_by(.id) | last) as $latest
+              | select($latest != null and $latest.status == "completed"
+                       and ($latest.conclusion | IN("success","neutral","skipped") | not))
+              | "\($w): \($latest.conclusion // "unknown")"')
+            if [ -n "$WF_FAILED" ]; then
+              echo "Security workflow(s) failed; not merging:"
+              echo "$WF_FAILED"
+              return 0
+            fi
+
             # Newest run per name, so a re-run does not trip over its history.
             WF_PENDING=$(jq -rn --argjson req '["CodeQL","Dependency Audit"]' --argjson runs "$WF_RUNS" '
               $req[] | . as $w

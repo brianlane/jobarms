@@ -15,7 +15,10 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { retryDecision } from "../src/lib/run-outcome";
-import { buildAndDispatchRun } from "../src/lib/arm-dispatch";
+import { ACCOUNT_REQUIRED_ATS, tenantHostOf } from "../src/lib/ats";
+import { ensureApplicantAlias } from "../src/lib/applicant-email";
+import { ensureSiteAccount } from "../src/lib/site-accounts";
+import { buildAndDispatchRun, type SupportedAts } from "../src/lib/arm-dispatch";
 import { cancelRun } from "../src/lib/arm";
 import { armRunQuota, canFullAuto, effectivePlan, meterKey } from "../src/lib/plans";
 import type { SubscriptionRow } from "../src/lib/plans";
@@ -128,9 +131,45 @@ async function main() {
   // submit (proving Layers 1-2); otherwise park at review.
   const autonomy: "review_gate" | "full_auto" = doSubmit ? "full_auto" : "review_gate";
 
+  // Account-gated ATSes need the same setup the real retry route performs, or
+  // a Workday retry driven from here behaves nothing like production: no
+  // alias, no stored tenant credentials, and no tenant_host on the run.
+  // ensureSiteAccount is idempotent, so this signs in to the SAME account
+  // rather than creating a second candidate profile on the employer tenant.
+  const tenantHost = tenantHostOf(job.url);
+  let account: { email: string; password: string } | null = null;
+  if (ACCOUNT_REQUIRED_ATS.has(job.ats as SupportedAts) && tenantHost) {
+    const alias = await ensureApplicantAlias(service, app.user_id);
+    const siteAccount = alias
+      ? await ensureSiteAccount(service, {
+          userId: app.user_id,
+          tenantHost,
+          ats: job.ats as SupportedAts,
+          email: alias
+        })
+      : null;
+    if (!siteAccount) {
+      // Hand the metered slot back before failing, exactly as the retry route
+      // does. Throwing with the reservation still held would quietly cost the
+      // user an arm run for an attempt that never dispatched.
+      await service.rpc("release_arm_run", { p_user_id: app.user_id, p_month_key: mk });
+      throw new Error(
+        `could not reuse the ${job.ats} account for ${tenantHost}; production would return ats_account_unavailable here (reserved slot released)`
+      );
+    }
+    account = { email: siteAccount.email, password: siteAccount.password };
+    console.log(`site account: ${siteAccount.email} @ ${tenantHost}`);
+  }
+
   const { data: newRun } = await service
     .from("application_runs")
-    .insert({ application_id: appId, user_id: app.user_id, autonomy, month_key: mk })
+    .insert({
+      application_id: appId,
+      user_id: app.user_id,
+      autonomy,
+      month_key: mk,
+      tenant_host: tenantHost
+    })
     .select("id")
     .single();
   if (!newRun) throw new Error("run insert failed");
@@ -149,7 +188,8 @@ async function main() {
     jobCompany: job.company,
     jobDescription: job.description,
     profile: profile as Record<string, unknown>,
-    resume: resume ?? null
+    resume: resume ?? null,
+    account
   });
   console.log("dispatch:", dispatch);
   if (!dispatch.ok) throw new Error("dispatch failed");
