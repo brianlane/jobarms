@@ -264,6 +264,10 @@ jobs:
       pull-requests: write
       checks: read
       statuses: read
+      # security-gate.sh reads repos/.../actions/runs on pushes to main.
+      # Without this the call returns nothing and the gate blocks the deploy
+      # until it times out, looking like the workflows never started.
+      actions: read
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

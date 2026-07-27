@@ -10,47 +10,71 @@
 # deployed, which meant a high-severity finding could be reported against a
 # commit that was live.
 #
-# This waits for exactly those out-of-workflow checks to conclude, and fails
-# if any of them did not pass. Checks from ci.yml are already handled by
-# `needs:` and are deliberately not matched here, since waiting on the job
-# that runs this script would deadlock.
+# This waits on WORKFLOW RUNS rather than check runs, by name. Waiting on
+# check runs meant a matrix leg that had not registered its check yet was
+# simply invisible: "some checks exist and none are pending" was satisfied by
+# whichever legs happened to appear first, and the deploy went ahead while the
+# rest were still queued. A workflow run covers every job inside it, including
+# every matrix leg, so requiring the named runs to exist and conclude closes
+# that hole.
 set -euo pipefail
 
 : "${REPO:?REPO is required}"
 : "${SHA:?SHA is required}"
 
-# CodeQL reports as "CodeQL" and "Analyze"; audit.yml reports one check per
-# workspace, all prefixed "npm audit".
-PATTERN='^(CodeQL|Analyze|npm audit)'
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-900}"
+# Must match the `name:` of each workflow, not the job or check names.
+REQUIRED_WORKFLOWS=("CodeQL" "Dependency Audit")
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1200}"
 POLL_SECONDS="${POLL_SECONDS:-15}"
 DEADLINE=$(( $(date +%s) + TIMEOUT_SECONDS ))
 
 while :; do
-  RUNS=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-    --jq "[.check_runs[] | select(.name | test(\"$PATTERN\")) | {name: .name, status: .status, conclusion: .conclusion}]")
+  # --paginate emits one object per line, so slurp into a single array before
+  # filtering. Every run for this commit, no per_page ceiling to fall off.
+  RUNS=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+    --jq '.workflow_runs[] | {id: .id, name: .name, status: .status, conclusion: .conclusion}' \
+    | jq -s '.')
 
-  TOTAL=$(echo "$RUNS" | jq 'length')
-  PENDING=$(echo "$RUNS" | jq '[.[] | select(.status != "completed")] | length')
-  # neutral and skipped are passes: a check that had nothing to do has not
-  # found a problem.
-  FAILED=$(echo "$RUNS" | jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not))] | map(.name) | join(", ")')
+  MISSING=()
+  RUNNING=()
+  FAILED=()
 
-  if [ -n "$FAILED" ]; then
-    echo "::error::Security analyses failed on this commit: $FAILED. Not deploying."
+  for wf in "${REQUIRED_WORKFLOWS[@]}"; do
+    # Newest run only. Re-running a workflow leaves the old failed run on the
+    # same commit, and counting every run would let a failure that has since
+    # been re-run green block the deploy forever.
+    LATEST=$(echo "$RUNS" | jq -c --arg n "$wf" '[.[] | select(.name == $n)] | sort_by(.id) | last // null')
+
+    if [ "$LATEST" = "null" ]; then
+      MISSING+=("$wf")
+      continue
+    fi
+    if [ "$(echo "$LATEST" | jq -r '.status')" != "completed" ]; then
+      RUNNING+=("$wf")
+      continue
+    fi
+    # neutral and skipped are passes: a run with nothing to do found nothing.
+    case "$(echo "$LATEST" | jq -r '.conclusion // ""')" in
+      success|neutral|skipped) ;;
+      *) FAILED+=("$wf") ;;
+    esac
+  done
+
+  if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "::error::Security workflows failed on this commit: ${FAILED[*]}. Not deploying."
     exit 1
   fi
 
-  if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
-    echo "All $TOTAL security check(s) passed on $SHA."
+  if [ ${#MISSING[@]} -eq 0 ] && [ ${#RUNNING[@]} -eq 0 ]; then
+    echo "All required security workflows passed on $SHA: ${REQUIRED_WORKFLOWS[*]}"
     exit 0
   fi
 
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-    echo "::error::Timed out after ${TIMEOUT_SECONDS}s waiting for security analyses on $SHA (found $TOTAL, $PENDING still running). Refusing to deploy without them."
+    echo "::error::Timed out after ${TIMEOUT_SECONDS}s waiting for security workflows on $SHA. Never started: ${MISSING[*]:-none}. Still running: ${RUNNING[*]:-none}. Refusing to deploy without them."
     exit 1
   fi
 
-  echo "Waiting on security analyses: $TOTAL found, $PENDING still running."
+  echo "Waiting on security workflows. Not started: ${MISSING[*]:-none}. Running: ${RUNNING[*]:-none}."
   sleep "$POLL_SECONDS"
 done
