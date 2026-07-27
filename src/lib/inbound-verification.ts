@@ -18,23 +18,34 @@ export function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+export interface VerificationOrigin {
+  host: string | null;
+  /**
+   * Whether the host came from a verification link, which names the tenant,
+   * rather than the sending domain, which usually does not. A code-only mail
+   * arrives from something generic like `myworkday.com` and cannot tell two
+   * Workday tenants apart, so it must not be used to rule runs out.
+   */
+  namesTenant: boolean;
+}
+
 /**
- * Host a verification mail points at, used to match it to the run waiting on
- * it. Prefers the link, since that names the tenant directly, and falls back
- * to the sending domain when there is no usable link.
+ * Where a verification mail points, used to match it to the run waiting on it.
+ * Prefers the link and falls back to the sending domain, reporting which one
+ * it used so the caller knows how much the host is worth.
  */
-export function verificationHost(
+export function verificationOrigin(
   link: string | null,
   fromDomain: string | null
-): string | null {
+): VerificationOrigin {
   if (link) {
     try {
-      return new URL(link).hostname.toLowerCase();
+      return { host: new URL(link).hostname.toLowerCase(), namesTenant: true };
     } catch {
       // Unparseable link; fall through to the sending domain.
     }
   }
-  return fromDomain ? fromDomain.toLowerCase() : null;
+  return { host: fromDomain ? fromDomain.toLowerCase() : null, namesTenant: false };
 }
 
 export interface VerificationRunPick<T> {
@@ -46,28 +57,41 @@ export interface VerificationRunPick<T> {
  * Choose which parked run a verification mail belongs to.
  *
  * Taking the newest run for the user is wrong as soon as two applications are
- * waiting at once: mail for one employer drives the other tenant's session,
- * and both runs suffer for it. Match on the tenant instead, accept a lone
- * candidate when the tenant cannot be matched, and refuse to guess between
- * several. Letting the intended run time out honestly beats completing a
- * verification in the wrong browser session.
+ * waiting at once: mail for one employer drives the other tenant's session
+ * and both runs suffer for it. So a host that names a tenant is matched
+ * against the parked runs first.
+ *
+ * A host that does NOT name a tenant proves nothing. Code-only mail arrives
+ * from a generic sender like `myworkday.com`, which will never equal
+ * `acme.wd1.myworkdayjobs.com`, and treating that as "matches nothing" would
+ * leave every parked run stuck forever. In that case there is simply no
+ * signal, so the newest run is used, which is what happened before any of
+ * this existed.
+ *
+ * Refusing to guess is reserved for the case where we genuinely could tell
+ * the runs apart and still cannot choose. Completing a verification in the
+ * wrong browser session is worse than letting a run time out honestly.
  */
 export function pickVerificationRun<T extends { tenant_host?: string | null }>(
   runs: T[],
-  host: string | null
+  origin: VerificationOrigin
 ): VerificationRunPick<T> {
   if (runs.length === 0) return { run: null, ambiguous: false };
+  if (runs.length === 1) return { run: runs[0], ambiguous: false };
 
-  if (host) {
+  const { host, namesTenant } = origin;
+  if (host && namesTenant) {
     const matched = runs.filter((run) => {
       const tenant = run.tenant_host?.toLowerCase();
       if (!tenant) return false;
       return tenant === host || host.endsWith(`.${tenant}`) || tenant.endsWith(`.${host}`);
     });
     if (matched.length === 1) return { run: matched[0], ambiguous: false };
-    if (matched.length > 1) return { run: null, ambiguous: true };
+    // A link naming a tenant we cannot pin to exactly one parked run is the
+    // case worth refusing: we could discriminate and still cannot choose.
+    return { run: null, ambiguous: true };
   }
 
-  if (runs.length === 1) return { run: runs[0], ambiguous: false };
-  return { run: null, ambiguous: true };
+  // No tenant-bearing signal at all. Fall back to the newest parked run.
+  return { run: runs[0], ambiguous: false };
 }

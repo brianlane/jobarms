@@ -16,7 +16,7 @@ import { resumeAccountVerification } from "@/lib/arm";
 import {
   isUniqueViolation,
   pickVerificationRun,
-  verificationHost
+  verificationOrigin
 } from "@/lib/inbound-verification";
 
 /**
@@ -208,7 +208,7 @@ async function consumeVerification(
 
     const { run, ambiguous } = pickVerificationRun(
       runs ?? [],
-      verificationHost(args.link, args.fromDomain)
+      verificationOrigin(args.link, args.fromDomain)
     );
     if (ambiguous) return "ambiguous_run";
     if (!run?.tenant_host) return "no_pending_run";
