@@ -13,6 +13,11 @@ import {
 import { completeRenderVerification } from "@/lib/render";
 import { markSiteAccountVerified } from "@/lib/site-accounts";
 import { resumeAccountVerification } from "@/lib/arm";
+import {
+  isUniqueViolation,
+  pickVerificationRun,
+  verificationHost
+} from "@/lib/inbound-verification";
 
 /**
  * Inbound mail webhook, called by the `jobarms-email-inbound` Cloudflare Email
@@ -100,11 +105,26 @@ export async function POST(request: Request) {
     .select("id")
     .maybeSingle();
 
-  if (insertError || !inserted) {
-    // Duplicate delivery (or a transient write failure). Either way, do NOT
-    // forward again; returning 200 stops the sender from retrying a message we
-    // have already handled.
-    return NextResponse.json({ ok: true, skipped: "duplicate" });
+  if (insertError) {
+    // A unique-key conflict is a genuine redelivery of mail we already
+    // handled, so 200 tells the sender to stop retrying and we do not forward
+    // twice.
+    if (isUniqueViolation(insertError)) {
+      return NextResponse.json({ ok: true, skipped: "duplicate" });
+    }
+    // Anything else is a write that did not happen. Treating it as a
+    // duplicate used to swallow transient database errors: the sender saw
+    // 200, never retried, and the message reached neither the user nor the
+    // table. Fail loudly so delivery is retried instead.
+    console.error("inbound insert failed", insertError);
+    return NextResponse.json({ ok: false, error: "insert_failed" }, { status: 500 });
+  }
+  if (!inserted) {
+    // Wrote without erroring but nothing came back, so we cannot confirm the
+    // row or safely forward against it. A retry either succeeds or hits the
+    // duplicate branch above, both of which are correct.
+    console.error("inbound insert returned no row", { alias, messageId });
+    return NextResponse.json({ ok: false, error: "insert_unconfirmed" }, { status: 500 });
   }
 
   const forward = await forwardInboundEmail({
@@ -136,7 +156,8 @@ export async function POST(request: Request) {
     consumed = await consumeVerification(service, {
       userId: profile.id as string,
       link: verification.link,
-      code: verification.code
+      code: verification.code,
+      fromDomain
     });
   }
 
@@ -151,7 +172,13 @@ export async function POST(request: Request) {
   });
 }
 
-type ConsumeOutcome = "none" | "no_pending_run" | "verified" | "failed" | "sidecar_error";
+type ConsumeOutcome =
+  | "none"
+  | "no_pending_run"
+  | "ambiguous_run"
+  | "verified"
+  | "failed"
+  | "sidecar_error";
 
 /**
  * Complete a pending account verification and resume the run waiting on it.
@@ -161,17 +188,29 @@ type ConsumeOutcome = "none" | "no_pending_run" | "verified" | "failed" | "sidec
  */
 async function consumeVerification(
   service: SupabaseClient,
-  args: { userId: string; link: string | null; code: string | null }
+  args: {
+    userId: string;
+    link: string | null;
+    code: string | null;
+    fromDomain: string | null;
+  }
 ): Promise<ConsumeOutcome> {
   try {
-    const { data: run } = await service
+    // Every parked run, not just the newest, so the one matching this mail's
+    // tenant can be picked out below.
+    const { data: runs } = await service
       .from("application_runs")
       .select("id, tenant_host")
       .eq("user_id", args.userId)
       .eq("status", "needs_account_verification")
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(20);
+
+    const { run, ambiguous } = pickVerificationRun(
+      runs ?? [],
+      verificationHost(args.link, args.fromDomain)
+    );
+    if (ambiguous) return "ambiguous_run";
     if (!run?.tenant_host) return "no_pending_run";
 
     const tenantHost = run.tenant_host as string;
