@@ -56,6 +56,7 @@ const post = (app: ReturnType<typeof createApp>, path: string, b: unknown = body
 
 beforeEach(() => {
   vi.clearAllMocks();
+  entry.doomed = false;
   context.newPage.mockResolvedValue(page);
   acquireSession.mockResolvedValue(entry);
 });
@@ -72,6 +73,19 @@ describe("real runPhase", () => {
     // Cookies are saved BEFORE the page closes, so a fresh login persists.
     expect(saveStorageState).toHaveBeenCalledWith("u1:jobs.lever.co", context);
     expect(page.close).toHaveBeenCalled();
+    expect(finishSession).toHaveBeenCalledWith("u1:jobs.lever.co", entry, false);
+  });
+
+  it("does NOT re-save cookies when the session was dropped mid-phase", async () => {
+    // A disconnect marks the entry doomed and deletes the cookie file; re-saving
+    // in the finally would revive the login the user asked us to forget.
+    entry.doomed = true;
+    const app = createApp();
+
+    const res = await post(app, "/extract");
+
+    expect(res.status).toBe(200);
+    expect(saveStorageState).not.toHaveBeenCalled();
     expect(finishSession).toHaveBeenCalledWith("u1:jobs.lever.co", entry, false);
   });
 

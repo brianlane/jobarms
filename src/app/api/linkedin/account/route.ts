@@ -34,6 +34,9 @@ export async function POST(request: Request) {
     .from("profiles")
     .update({ linkedin_consent_at: new Date().toISOString() })
     .eq("id", user.id);
+  // Drop any session held under the OLD credentials so the next run signs in
+  // fresh with the password just stored, rather than riding a stale login.
+  await clearRenderSession({ userId: user.id, tenantHost: LINKEDIN_TENANT_HOST });
 
   return NextResponse.json({ ok: true, email: parsed.data.email });
 }

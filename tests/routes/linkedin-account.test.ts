@@ -74,6 +74,11 @@ describe("POST /api/linkedin/account", () => {
       "me@example.com",
       "pw"
     );
+    // Re-connecting must not ride a session opened under the old password.
+    expect(clearRenderSession).toHaveBeenCalledWith({
+      userId: "u1",
+      tenantHost: "www.linkedin.com"
+    });
   });
 });
 
