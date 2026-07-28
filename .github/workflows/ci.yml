@@ -418,19 +418,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # HEAD^ is the previous main tip, so the diff below sees exactly what
-          # this push (squash/merge commit) changed.
-          fetch-depth: 2
+          # Full history so the whole push range can be diffed below, however
+          # many commits it carried.
+          fetch-depth: 0
 
       - name: Detect sidecar changes
         id: changed
+        env:
+          # The full range this push added, not just the tip's parent: a single
+          # push can carry several commits (e.g. a bundled Dependabot squash plus
+          # a PR squash, per the workers-deploy note in this file), and vps/render
+          # may have changed in any of them.
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
-          if git diff --name-only HEAD^ HEAD | grep -q '^vps/render/'; then
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # New branch, force-push, or a base we no longer have: cannot compute
+            # the range, so deploy to be safe rather than silently skip.
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "vps/render changed: deploying the sidecar."
+            echo "No usable previous commit; deploying the sidecar to be safe."
+          elif git diff --name-only "$BEFORE" "$AFTER" | grep -q '^vps/render/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "vps/render changed in this push: deploying the sidecar."
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No vps/render changes; nothing to deploy."
+            echo "No vps/render changes in this push; nothing to deploy."
           fi
 
       - name: Deploy sidecar to KVM1
