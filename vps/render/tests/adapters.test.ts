@@ -219,17 +219,17 @@ describe("generic", () => {
     expect(page.locator).toHaveBeenCalledTimes(1);
   });
 
-  it("recognizes a formless application (email + phone, no password) and leaves Apply alone", async () => {
+  it("recognizes a formless application (email + name, no password) and leaves Apply alone", async () => {
     // Component-built career sites render fields without a <form>; email next
-    // to a phone/name field means the application is up, and clicking Apply
-    // again could navigate away from it.
+    // to a name field means the application is up (the same pair the sanity
+    // check accepts), and clicking Apply again could navigate away from it.
     const email = loc({ count: vi.fn(async () => 1) });
-    const phone = loc({ count: vi.fn(async () => 1) });
+    const name = loc({ count: vi.fn(async () => 1) });
     const apply = loc({ count: vi.fn(async () => 1) });
     const page = fakePage({
       locators: {
         'input[type="email"]': email,
-        'input[type="tel"]': phone,
+        'input[name*="name" i]': name,
         ':has-text("Apply")': apply
       }
     });

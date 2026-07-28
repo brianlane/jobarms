@@ -322,8 +322,10 @@ const generic: AtsAdapter = {
      * input": landing pages carry newsletter boxes (email alone) and login
      * widgets (email + password), and neither means the form is up. The
      * signals: controls inside a real <form>, a file upload (nothing else on
-     * a career page wants a file), or an email field beside a phone/name
-     * field with no password in sight.
+     * a career page wants a file), or an email field beside a name field with
+     * no password in sight. Email + NAME, not email + phone, so this stays
+     * aligned with what looksLikeApplicationForm will later accept: a page
+     * that convinces us to skip Apply must also survive extraction.
      */
     const applicationUp = async (): Promise<boolean> => {
       if ((await page.locator("form input, form textarea, form select").count()) > 0) return true;
@@ -333,11 +335,7 @@ const generic: AtsAdapter = {
         .count();
       if (emails === 0) return false;
       if ((await page.locator('input[type="password"]').count()) > 0) return false;
-      return (
-        (await page
-          .locator('input[type="tel"], input[name*="phone" i], input[name*="name" i]')
-          .count()) > 0
-      );
+      return (await page.locator('input[name*="name" i]').count()) > 0;
     };
 
     // If the form is not up, try the two universal moves: clear a consent
