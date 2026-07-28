@@ -62,19 +62,36 @@ export async function POST(request: Request) {
   const service = createSupabaseServiceClient();
 
   // --- resolve the job (shared catalog, keyed by URL) ---
-  // Never overwrite an existing row: `jobs` is shared across users, so a
-  // re-paste (or an empty fetchJobMeta on a network hiccup) must not clobber
-  // another user's tracked metadata or flip an ingest-sourced row to manual
-  // (which would drop it from everyone's Discover feed).
+  // Never overwrite POPULATED fields on an existing row: `jobs` is shared
+  // across users, so a re-paste (or an empty fetchJobMeta on a network
+  // hiccup) must not clobber another user's tracked metadata or flip an
+  // ingest-sourced row to manual (which would drop it from everyone's
+  // Discover feed).
   const meta = await fetchJobMeta(jobUrl);
   let jobId: string | undefined;
 
   const { data: existingJob } = await service
     .from("jobs")
-    .select("id")
+    .select("id, title, company, location, description")
     .eq("url", jobUrl)
     .maybeSingle();
   jobId = existingJob?.id;
+
+  // Backfill fields that are EMPTY on the existing row from this fetch. A row
+  // created before its ATS had a metadata fetcher (or across a transient fetch
+  // failure) otherwise sits in every tracker as "Untitled role" forever,
+  // because re-pastes reuse the row as-is. Only empty fields, and only with
+  // non-empty fetched values, so the no-clobber rule above still holds.
+  if (existingJob) {
+    const patch: Record<string, string> = {};
+    if (!existingJob.title && meta.title) patch.title = meta.title;
+    if (!existingJob.company && meta.company) patch.company = meta.company;
+    if (!existingJob.location && meta.location) patch.location = meta.location;
+    if (!existingJob.description && meta.description) patch.description = meta.description;
+    if (Object.keys(patch).length > 0) {
+      await service.from("jobs").update(patch).eq("id", existingJob.id);
+    }
+  }
 
   if (!jobId) {
     const { data: inserted } = await service
