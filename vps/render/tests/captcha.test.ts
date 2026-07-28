@@ -38,6 +38,16 @@ describe("detectChallenge", () => {
     ).toBe("hcaptcha");
   });
 
+  it("detects enterprise reCAPTCHA as the same v2 grid widget", async () => {
+    // Dayforce and other ATSes serve the checkbox/grid from an
+    // /enterprise/anchor iframe; it routes into the same solver.
+    expect(
+      await detectChallenge(
+        asPage(fakePage({ locators: { 'iframe[src*="recaptcha/enterprise/anchor"]': present() } }))
+      )
+    ).toBe("recaptcha_v2");
+  });
+
   it("reports nothing on a clean page", async () => {
     expect(await detectChallenge(asPage(fakePage()))).toBeNull();
   });

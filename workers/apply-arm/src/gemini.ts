@@ -93,7 +93,9 @@ export async function diagnosePage(
       text: `This is a screenshot of ${pageUrl}. We are trying to reach the JOB APPLICATION FORM (name/email/resume upload fields) to apply for a job, but our extraction found: ${problem}.
 
 Look at the screenshot and answer as JSON:
-{"form_visible": <true if a real application form with candidate fields is visible>, "action": <one of "click" (an Apply/Apply Now button or link must be clicked first), "iframe" (the form appears embedded from another provider), "scroll" (the form is likely further down the page), "none" (no path to an application form is visible)>, "click_text": <exact visible text of the button/link to click, only when action is "click">, "reason": <one short sentence>}
+{"form_visible": <true if a real application form with candidate fields is visible>, "action": <one of "click" (a control must be clicked first: an Apply/Apply Now button, OR the accept/agree/dismiss button of a cookie, privacy, or consent banner or modal that is covering or obscuring the page), "iframe" (the form appears embedded from another provider), "scroll" (the form is likely further down the page), "none" (no path to an application form is visible)>, "click_text": <exact visible text of the button/link to click, only when action is "click">, "reason": <one short sentence>}
+
+If a cookie/privacy/consent banner or modal is blocking or dominating the page, prefer "click" with the exact text of its accept or agree button (for example "Accept", "Accept all", "I agree") so it can be dismissed. Never pick "none" solely because such a banner is present.
 
 Return ONLY the JSON object.`
     }
