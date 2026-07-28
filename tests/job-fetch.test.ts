@@ -462,3 +462,55 @@ describe("fetchJobMeta (Workday)", () => {
     expect((await fetchJobMeta(JOB_URL)).description).toHaveLength(20_000);
   });
 });
+
+describe("fetchJobMeta (LinkedIn)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const JOB_URL = "https://www.linkedin.com/jobs/view/4442245127/";
+
+  it("scrapes title, company, location, and description from the guest fragment", async () => {
+    const html =
+      '<h2 class="top-card-layout__title font-sans">Software Engineer</h2>' +
+      '<a class="topcard__org-name-link" href="/company/prepass">PrePass</a>' +
+      '<span class="topcard__flavor topcard__flavor--bullet">United States (Remote)</span>' +
+      '<div class="show-more-less-html__markup relative">Build&nbsp;things &amp; ship</div>';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => html });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const meta = await fetchJobMeta(JOB_URL);
+
+    expect(meta).toEqual({
+      company: "PrePass",
+      title: "Software Engineer",
+      location: "United States (Remote)",
+      description: "Build things & ship",
+      ats: "linkedin"
+    });
+    expect(fetchMock.mock.calls[0][0]).toContain("/jobs-guest/jobs/api/jobPosting/4442245127");
+  });
+
+  it("returns fallback without a request when there is no posting id", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const meta = await fetchJobMeta("https://www.linkedin.com/feed/");
+    expect(meta).toMatchObject({ title: "", ats: "linkedin" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns fallback when the guest endpoint responds non-2xx", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 429 }));
+    expect((await fetchJobMeta(JOB_URL)).title).toBe("");
+  });
+
+  it("yields empty fields when the fragment has none of the expected markup", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "<div></div>" }));
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ company: "", title: "", location: "", description: "" });
+  });
+
+  it("caps a pathologically long description", async () => {
+    const html = `<div class="show-more-less-html__markup">${"x".repeat(25_000)}</div>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }));
+    expect((await fetchJobMeta(JOB_URL)).description).toHaveLength(20_000);
+  });
+});

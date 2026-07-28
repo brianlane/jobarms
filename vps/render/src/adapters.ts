@@ -19,6 +19,8 @@ export interface AtsAdapter {
    * True when applying requires a candidate account on the employer's tenant.
    * Workday gives every employer its own tenant with its own candidate database,
    * so a run has to create (or reuse) an account and verify the email first.
+   * LinkedIn is account-gated too, but signs in with the user's OWN login (see
+   * the sidecar's linkedin.ts), which the app-side session handling arranges.
    */
   requiresAccount: boolean;
   /** Get from the job posting page to a visible application form. */
@@ -29,6 +31,12 @@ export interface AtsAdapter {
   nextPage?(page: Page): Promise<boolean>;
   /** Multi-page wizards only: true when this is the final (review) page. */
   isLastPage?(page: Page): Promise<boolean>;
+  /**
+   * Optional: abandon a half-filled application without submitting. Used when
+   * the read-back interlock refuses to send: on LinkedIn a lingering Easy Apply
+   * modal would otherwise sit open as a draft. Best-effort; absence is fine.
+   */
+  discardApplication?(page: Page): Promise<void>;
 }
 
 const greenhouse: AtsAdapter = {
@@ -261,6 +269,111 @@ const ashby: AtsAdapter = {
       return /application (has been |was )?submitted|thank you for applying/i.test(
         await page.content()
       );
+    }
+  }
+};
+
+/** Controls that advance a LinkedIn Easy Apply modal, in preference order. */
+const LINKEDIN_NEXT = [
+  'button[aria-label="Continue to next step"]',
+  'button[aria-label="Review your application"]',
+  'button:has-text("Review")',
+  'button:has-text("Next")',
+  'button:has-text("Continue")'
+];
+
+const LINKEDIN_SUBMIT = [
+  'button[aria-label="Submit application"]',
+  'button:has-text("Submit application")'
+];
+
+const LINKEDIN_MODAL = '.jobs-easy-apply-modal, [data-test-modal][role="dialog"]';
+
+const linkedin: AtsAdapter = {
+  // The Easy Apply modal, not the page: a bare `form` would match the job
+  // search box that also lives on a posting page.
+  formSelector: LINKEDIN_MODAL,
+  requiresAccount: true,
+
+  async openApplication(page) {
+    // reachForm has already navigated to the posting, and sign-in happened in
+    // /session/ensure, so by now the Easy Apply button is present for a logged-in
+    // user. Click it and wait for the modal to mount.
+    const easyApply = page
+      .locator(
+        'button.jobs-apply-button, button[aria-label*="Easy Apply" i], button:has-text("Easy Apply")'
+      )
+      .first();
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if ((await page.locator(LINKEDIN_MODAL).count()) > 0) return;
+      if (
+        (await easyApply.count()) > 0 &&
+        (await easyApply.isVisible().catch(() => false))
+      ) {
+        await easyApply.click().catch(() => {});
+        await page.waitForTimeout(2000);
+      } else {
+        await page.waitForTimeout(1500);
+      }
+    }
+  },
+
+  async submit(page) {
+    for (const selector of LINKEDIN_SUBMIT) {
+      const button = page.locator(selector).first();
+      if ((await button.count()) > 0) {
+        await button.click();
+        await page.waitForTimeout(4000);
+        return;
+      }
+    }
+  },
+
+  async confirmSubmitted(page) {
+    try {
+      await page
+        .locator("text=/your application was sent|application sent|application submitted/i")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return /your application was sent|application sent/i.test(await page.content());
+    }
+  },
+
+  async nextPage(page) {
+    for (const selector of LINKEDIN_NEXT) {
+      const button = page.locator(selector).first();
+      if ((await button.count()) > 0 && (await button.isEnabled().catch(() => false))) {
+        await button.click().catch(() => {});
+        await page.waitForTimeout(1500);
+        return true;
+      }
+    }
+    return false;
+  },
+
+  async isLastPage(page) {
+    for (const selector of LINKEDIN_SUBMIT) {
+      if ((await page.locator(selector).first().count()) > 0) return true;
+    }
+    return false;
+  },
+
+  async discardApplication(page) {
+    // Close the modal (X), then confirm the "Discard" prompt LinkedIn shows so
+    // the abandoned application does not linger as a saved draft.
+    const dismiss = page.locator('button[aria-label="Dismiss"]').first();
+    if ((await dismiss.count()) > 0) {
+      await dismiss.click().catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    const discard = page
+      .locator('button[data-test-dialog-primary-btn], button:has-text("Discard")')
+      .first();
+    if ((await discard.count()) > 0) {
+      await discard.click().catch(() => {});
+      await page.waitForTimeout(500);
     }
   }
 };
@@ -531,5 +644,6 @@ export const ADAPTERS: Record<Ats, AtsAdapter> = {
   workday,
   ashby,
   dayforce,
+  linkedin,
   generic
 };

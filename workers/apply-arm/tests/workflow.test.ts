@@ -3,6 +3,7 @@ import type { Env, RunParams } from "../src/types";
 
 const render = vi.hoisted(() => ({
   ensureSession: vi.fn(),
+  completeLoginCode: vi.fn(),
   extractForm: vi.fn(),
   fillForm: vi.fn(),
   fetchResumeBase64: vi.fn(async () => null as string | null),
@@ -116,6 +117,7 @@ beforeEach(() => {
   render.ensureSession.mockResolvedValue(
     ok({ status: "authenticated", accountRequired: true, screenshotBase64: "AA==" })
   );
+  render.completeLoginCode.mockResolvedValue(ok({ status: "authenticated", screenshotBase64: "AA==" }));
   render.extractForm.mockResolvedValue(
     ok({
       fields: [{ name: "email", label: "Email", type: "email", required: true, options: [] }],
@@ -591,6 +593,118 @@ describe("candidate accounts", () => {
     await expect(run(params({ ...WD, autonomy: "full_auto" }))).rejects.toThrow(
       /render_unreachable during account setup: tunnel down/
     );
+  });
+
+  const LI = {
+    ats: "linkedin" as const,
+    jobUrl: "https://www.linkedin.com/jobs/view/4442245127/",
+    account: { email: "me@example.com", password: ["li", "v"].join("-") }
+  };
+
+  it("parks for a LinkedIn PIN, then resumes once the user enters the code", async () => {
+    render.ensureSession.mockResolvedValue(
+      ok({
+        status: "needs_login_code",
+        accountRequired: true,
+        checkpointUrl: "https://www.linkedin.com/checkpoint/1"
+      })
+    );
+    const waited: string[] = [];
+
+    await run(params({ ...LI, autonomy: "full_auto" }), async (opts) => {
+      waited.push(opts.type);
+      return { payload: { code: "483920" } };
+    });
+
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", { status: "needs_login_code" });
+    expect(waited).toContain("login-code");
+    expect(render.completeLoginCode).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        code: "483920",
+        checkpointUrl: "https://www.linkedin.com/checkpoint/1",
+        tenantHost: "www.linkedin.com"
+      })
+    );
+    // Resumed all the way to a submit.
+    expect(render.fillForm).toHaveBeenCalled();
+  });
+
+  it("fails and refunds when the login code is never entered", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+
+    await expect(
+      run(params({ ...LI, autonomy: "full_auto" }), async (opts) => {
+        if (opts.type === "login-code") throw new Error("timeout");
+        return { payload: {} };
+      })
+    ).rejects.toThrow(/login_code_timeout/);
+
+    expect(db.releaseArmRunSlot).toHaveBeenCalledWith(env, "r1");
+  });
+
+  it("fails permanently when the entered code is rejected", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+    render.completeLoginCode.mockResolvedValue(ok({ status: "login_failed" }));
+
+    await expect(
+      run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "000000" } }))
+    ).rejects.toThrow(/ats_login_failed/);
+    expect(db.logStep).toHaveBeenCalledWith(env, "r1", "account_login_failed");
+  });
+
+  it("propagates a sidecar outage while submitting the code", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+    render.completeLoginCode.mockResolvedValue(fail("render_unreachable", { detail: "tunnel down" }));
+
+    await expect(
+      run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "1" } }))
+    ).rejects.toThrow(/render_unreachable during login code/);
+  });
+
+  it("submits an empty code when the resume event carried none", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+
+    await run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: {} }));
+
+    expect(render.completeLoginCode).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ code: "" })
+    );
+  });
+
+  it("re-parks for another PIN when LinkedIn re-prompts, then resumes", async () => {
+    render.ensureSession.mockResolvedValue(
+      ok({ status: "needs_login_code", accountRequired: true, checkpointUrl: "https://li/checkpoint/1" })
+    );
+    // First code is not accepted and LinkedIn moves the challenge; second is.
+    render.completeLoginCode
+      .mockResolvedValueOnce(ok({ status: "needs_login_code", checkpointUrl: "https://li/checkpoint/2" }))
+      .mockResolvedValueOnce(ok({ status: "authenticated" }));
+
+    await run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "0" } }));
+
+    expect(render.completeLoginCode).toHaveBeenCalledTimes(2);
+    // First attempt uses the ensureSession checkpoint; the retry follows the
+    // challenge to the URL the re-prompt moved it to.
+    expect(render.completeLoginCode.mock.calls[0][1]).toMatchObject({
+      checkpointUrl: "https://li/checkpoint/1"
+    });
+    expect(render.completeLoginCode.mock.calls[1][1]).toMatchObject({
+      checkpointUrl: "https://li/checkpoint/2"
+    });
+    expect(db.logStep).toHaveBeenCalledWith(env, "r1", "login_code_retry");
+    expect(render.fillForm).toHaveBeenCalled();
+  });
+
+  it("gives up after the PIN attempt cap", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+    render.completeLoginCode.mockResolvedValue(ok({ status: "needs_login_code" }));
+
+    await expect(
+      run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "0" } }))
+    ).rejects.toThrow(/ats_login_failed/);
+    expect(render.completeLoginCode).toHaveBeenCalledTimes(3);
   });
 });
 

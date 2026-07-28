@@ -6,7 +6,7 @@ import { fakePage, goodFields, loc } from "./helpers/fake-page";
 const asPage = (p: ReturnType<typeof fakePage>) => p as unknown as Page;
 
 describe("adapter contract", () => {
-  it("marks only Workday as account-gated", () => {
+  it("marks Workday and LinkedIn as account-gated", () => {
     expect(ADAPTERS.greenhouse.requiresAccount).toBe(false);
     expect(ADAPTERS.lever.requiresAccount).toBe(false);
     expect(ADAPTERS.ashby.requiresAccount).toBe(false);
@@ -14,13 +14,14 @@ describe("adapter contract", () => {
     // accounts on an unknown site.
     expect(ADAPTERS.generic.requiresAccount).toBe(false);
     expect(ADAPTERS.workday.requiresAccount).toBe(true);
+    expect(ADAPTERS.linkedin.requiresAccount).toBe(true);
   });
 
-  it("marks no tuned ATS except Workday as account-gated (Dayforce is guest-flow)", () => {
+  it("keeps Dayforce on the guest flow, not account-gated", () => {
     expect(ADAPTERS.dayforce.requiresAccount).toBe(false);
   });
 
-  it("gives wizard hooks to the multi-page ATSes (Workday, Dayforce, generic)", () => {
+  it("gives wizard hooks to the multi-page ATSes (Workday, Dayforce, LinkedIn, generic)", () => {
     expect(ADAPTERS.greenhouse.nextPage).toBeUndefined();
     expect(ADAPTERS.lever.nextPage).toBeUndefined();
     expect(ADAPTERS.ashby.nextPage).toBeUndefined();
@@ -32,6 +33,8 @@ describe("adapter contract", () => {
     expect(ADAPTERS.workday.isLastPage).toBeTypeOf("function");
     expect(ADAPTERS.dayforce.nextPage).toBeTypeOf("function");
     expect(ADAPTERS.dayforce.isLastPage).toBeTypeOf("function");
+    expect(ADAPTERS.linkedin.nextPage).toBeTypeOf("function");
+    expect(ADAPTERS.linkedin.isLastPage).toBeTypeOf("function");
   });
 });
 
@@ -691,5 +694,171 @@ describe("workday", () => {
         )
       )
     ).toBe(false);
+  });
+});
+
+describe("linkedin", () => {
+  const li = ADAPTERS.linkedin;
+  const modalKey = ".jobs-easy-apply-modal";
+
+  it("returns once the Easy Apply modal is already open", async () => {
+    const page = fakePage({ locators: { [modalKey]: loc({ count: vi.fn(async () => 1) }) } });
+    await li.openApplication(asPage(page));
+    // The Easy Apply button was never clicked, since the modal was already up.
+    const btn = page.locator(".jobs-apply-button") as ReturnType<typeof loc>;
+    expect(btn.click).not.toHaveBeenCalled();
+  });
+
+  it("clicks Easy Apply to open the modal", async () => {
+    const apply = loc({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => true) });
+    const page = fakePage({ locators: { "button.jobs-apply-button": apply } });
+    await li.openApplication(asPage(page));
+    expect(apply.click).toHaveBeenCalled();
+  });
+
+  it("tolerates a posting with no Easy Apply button (bounded wait, no throw)", async () => {
+    await expect(li.openApplication(asPage(fakePage()))).resolves.toBeUndefined();
+  });
+
+  it("treats an unreadable visibility as not clickable", async () => {
+    const apply = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { "button.jobs-apply-button": apply } });
+    await li.openApplication(asPage(page));
+    expect(apply.click).not.toHaveBeenCalled();
+  });
+
+  it("tolerates the Easy Apply click itself throwing", async () => {
+    const apply = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => true),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { "button.jobs-apply-button": apply } });
+    await expect(li.openApplication(asPage(page))).resolves.toBeUndefined();
+  });
+
+  it("skips a disabled-check that throws, and tolerates the advance click throwing", async () => {
+    const flaky = loc({
+      count: vi.fn(async () => 1),
+      isEnabled: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    // isEnabled throwing reads as not-enabled, so this control is skipped.
+    expect(
+      await li.nextPage!(
+        asPage(fakePage({ locators: { 'button[aria-label="Continue to next step"]': flaky } }))
+      )
+    ).toBe(false);
+
+    const clicky = loc({
+      count: vi.fn(async () => 1),
+      isEnabled: vi.fn(async () => true),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    expect(
+      await li.nextPage!(
+        asPage(fakePage({ locators: { 'button[aria-label="Continue to next step"]': clicky } }))
+      )
+    ).toBe(true);
+  });
+
+  it("advances the modal through Next/Review and stops at Submit", async () => {
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const page = fakePage({ locators: { 'button[aria-label="Continue to next step"]': next } });
+    expect(await li.nextPage!(asPage(page))).toBe(true);
+    expect(next.click).toHaveBeenCalled();
+
+    // No advance control left.
+    expect(await li.nextPage!(asPage(fakePage()))).toBe(false);
+  });
+
+  it("treats the Submit step as the last page", async () => {
+    const submit = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({ locators: { 'button[aria-label="Submit application"]': submit } });
+    expect(await li.isLastPage!(asPage(page))).toBe(true);
+    expect(await li.isLastPage!(asPage(fakePage()))).toBe(false);
+  });
+
+  it("submits through the Submit application control", async () => {
+    const submit = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({ locators: { 'button[aria-label="Submit application"]': submit } });
+    await li.submit(asPage(page));
+    expect(submit.click).toHaveBeenCalled();
+  });
+
+  it("does nothing when there is no Submit control", async () => {
+    await expect(li.submit(asPage(fakePage()))).resolves.toBeUndefined();
+  });
+
+  it("confirms by the sent message, then by page content", async () => {
+    expect(
+      await li.confirmSubmitted(asPage(fakePage({ locators: { "text=/your application was sent": loc() } })))
+    ).toBe(true);
+
+    const missing = loc({
+      waitFor: vi.fn(async () => {
+        throw new Error("timeout");
+      })
+    });
+    expect(
+      await li.confirmSubmitted(
+        asPage(fakePage({ locators: { "text=": missing }, content: "Your application was sent" }))
+      )
+    ).toBe(true);
+    expect(
+      await li.confirmSubmitted(
+        asPage(fakePage({ locators: { "text=": missing }, content: "still filling" }))
+      )
+    ).toBe(false);
+  });
+
+  it("discards the modal by dismissing and confirming the discard prompt", async () => {
+    const dismiss = loc({ count: vi.fn(async () => 1) });
+    const discard = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: {
+        'button[aria-label="Dismiss"]': dismiss,
+        "button:has-text(\"Discard\")": discard
+      }
+    });
+    await li.discardApplication!(asPage(page));
+    expect(dismiss.click).toHaveBeenCalled();
+    expect(discard.click).toHaveBeenCalled();
+  });
+
+  it("discard is a no-op when neither control is present", async () => {
+    await expect(li.discardApplication!(asPage(fakePage()))).resolves.toBeUndefined();
+  });
+
+  it("tolerates the dismiss and discard clicks throwing", async () => {
+    const dismiss = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const discard = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({
+      locators: {
+        'button[aria-label="Dismiss"]': dismiss,
+        "button:has-text(\"Discard\")": discard
+      }
+    });
+    await expect(li.discardApplication!(asPage(page))).resolves.toBeUndefined();
   });
 });

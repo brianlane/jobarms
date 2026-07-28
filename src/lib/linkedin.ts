@@ -12,7 +12,7 @@
  * simply replaces the credentials and resets the login state.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { encryptPassword } from "@/lib/site-accounts";
+import { decryptPassword, encryptPassword } from "@/lib/site-accounts";
 import type { SiteAccountStatus } from "@/lib/site-accounts";
 
 /** The tenant host every LinkedIn account and session is keyed by. */
@@ -66,6 +66,39 @@ export async function getLinkedInAccount(
   return {
     email: (data as { email: string }).email,
     status: (data as { status: SiteAccountStatus }).status
+  };
+}
+
+export interface LinkedInCredentials {
+  email: string;
+  password: string;
+  status: SiteAccountStatus;
+}
+
+/**
+ * The connected account WITH its decrypted password, for dispatch.
+ *
+ * Service-role only (site_accounts is deny-all RLS), and the plaintext never
+ * leaves the dispatch path: it rides the run payload to the worker, which
+ * forwards it to the sidecar, and is never persisted anywhere else. Returns
+ * null when the user has not connected LinkedIn.
+ */
+export async function getLinkedInCredentials(
+  service: SupabaseClient,
+  userId: string
+): Promise<LinkedInCredentials | null> {
+  const { data } = await service
+    .from("site_accounts")
+    .select("email, password_encrypted, status")
+    .eq("user_id", userId)
+    .eq("tenant_host", LINKEDIN_TENANT_HOST)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { email: string; password_encrypted: string; status: SiteAccountStatus };
+  return {
+    email: row.email,
+    password: decryptPassword(row.password_encrypted),
+    status: row.status
   };
 }
 

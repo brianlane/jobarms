@@ -7,6 +7,7 @@ export type Ats =
   | "ashby"
   | "dayforce"
   | "workable"
+  | "linkedin"
   | "unknown";
 
 /**
@@ -27,7 +28,11 @@ const ATS_HOSTS: ReadonlyArray<{ suffix: string; ats: Ats }> = [
   // Ceridian Dayforce candidate portals: <tenant>.dayforcehcm.com and the
   // shared jobs.dayforcehcm.com host both serve from dayforcehcm.com.
   { suffix: "dayforcehcm.com", ats: "dayforce" },
-  { suffix: "workable.com", ats: "workable" }
+  { suffix: "workable.com", ats: "workable" },
+  // LinkedIn Easy Apply. Unlike every other ATS, the "account" here is the
+  // user's own LinkedIn login (see the site-account vault), not one the arm
+  // creates, so this is account-gated but never account-creating.
+  { suffix: "linkedin.com", ats: "linkedin" }
 ];
 
 export function detectAts(rawUrl: string): Ats {
@@ -50,7 +55,8 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
   "lever",
   "workday",
   "ashby",
-  "dayforce"
+  "dayforce",
+  "linkedin"
 ]);
 
 /**
@@ -61,7 +67,14 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
  * re-enforces): review-gate only, never account creation, and an explicit
  * user acknowledgment that the attempt may fail and still consume a run.
  */
-export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "dayforce" | "generic";
+export type DispatchAts =
+  | "greenhouse"
+  | "lever"
+  | "workday"
+  | "ashby"
+  | "dayforce"
+  | "linkedin"
+  | "generic";
 
 export function dispatchAtsOf(ats: Ats): DispatchAts {
   return SUPPORTED_ATS.has(ats) ? (ats as DispatchAts) : "generic";
@@ -72,7 +85,36 @@ export function dispatchAtsOf(ats: Ats): DispatchAts {
  * application can be submitted. Drives the account-vault and email-verification
  * path at dispatch; mirrors `requiresAccount` on the sidecar's adapters.
  */
-export const ACCOUNT_REQUIRED_ATS: ReadonlySet<Ats> = new Set(["workday"]);
+export const ACCOUNT_REQUIRED_ATS: ReadonlySet<Ats> = new Set(["workday", "linkedin"]);
+
+/**
+ * The fixed host every LinkedIn session, job URL, and vault row is keyed by.
+ * A run's tenant host is normalized to this so the browser session, the
+ * `site_accounts` row, and the dispatch all agree on one key.
+ */
+export const LINKEDIN_HOST = "www.linkedin.com";
+
+/**
+ * The numeric posting id from any LinkedIn job URL shape, or null.
+ *
+ * LinkedIn surfaces the same posting under several URLs: the canonical
+ * `/jobs/view/<id>/`, and search/collection pages that carry the id in a
+ * `currentJobId` query param. Both must normalize to one catalog key so a job
+ * pasted from search and the same job opened directly are not tracked twice.
+ */
+export function parseLinkedInJobId(url: URL): string | null {
+  // The /jobs/view/<id> path is the authoritative posting, so it wins over a
+  // currentJobId query param a share or search link may also carry. The query
+  // param is the fallback for search/collection pages that have no view path.
+  const parts = url.pathname.split("/").filter(Boolean);
+  const viewIdx = parts.indexOf("view");
+  if (viewIdx !== -1 && /^\d+$/.test(parts[viewIdx + 1] ?? "")) return parts[viewIdx + 1];
+
+  const fromQuery = url.searchParams.get("currentJobId");
+  if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
+
+  return null;
+}
 
 export interface WorkdayRef {
   /** Tenant, the first host label: `nvidia` in nvidia.wd5.myworkdayjobs.com. */
@@ -133,6 +175,16 @@ export function normalizeJobUrl(rawUrl: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+
+  // LinkedIn: collapse every posting shape to the canonical view URL on the
+  // fixed host, so search-result and direct-open URLs share one catalog key and
+  // one session. A LinkedIn URL with no parseable posting id is not a job.
+  const host = url.hostname.toLowerCase();
+  if (host === "linkedin.com" || host.endsWith(".linkedin.com")) {
+    const id = parseLinkedInJobId(url);
+    return id ? `https://${LINKEDIN_HOST}/jobs/view/${id}/` : null;
+  }
+
   // Strip trackers; keep meaningful params (gh_jid for embedded boards).
   const keep = new Set(["gh_jid", "lever-origin"]);
   // Workday postings carry no meaningful query params, and its `?q=` search

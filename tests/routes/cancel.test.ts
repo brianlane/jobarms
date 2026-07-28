@@ -61,6 +61,21 @@ describe("POST /api/runs/[id]/cancel", () => {
     expect(cancelRun).toHaveBeenCalledWith("run-1");
   });
 
+  it("lets a user cancel while waiting on a LinkedIn sign-in code", async () => {
+    holder.server = fakeClient({
+      user: { id: "u1" },
+      from: fakeFrom({
+        application_runs: [
+          { data: { id: "run-1", status: "needs_login_code", answers: null, application_id: "a1" } }
+        ]
+      })
+    });
+    holder.service = fakeClient({ rpc: fakeRpc({}) });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(cancelRun).toHaveBeenCalledWith("run-1");
+  });
+
   it("consumes the slot when canceling working machinery (no refund)", async () => {
     holder.server = fakeClient({
       user: { id: "u1" },

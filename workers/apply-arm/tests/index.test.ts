@@ -108,6 +108,38 @@ describe("apply-arm HTTP surface", () => {
     expect(sendEvent).toHaveBeenCalledWith({ type: "account-verified", payload: {} });
   });
 
+  it("POST /runs/:id/login-code forwards the code event", async () => {
+    const sendEvent = vi.fn(async () => {});
+    const env = makeEnv();
+    (env.APPLY_RUN!.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sendEvent, terminate: vi.fn() });
+
+    const res = await worker.fetch(
+      req(`/runs/${RUN_ID}/login-code`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ code: "483920" })
+      }),
+      env
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendEvent).toHaveBeenCalledWith({ type: "login-code", payload: { code: "483920" } });
+  });
+
+  it("POST /runs/:id/login-code 400s without a code", async () => {
+    const sendEvent = vi.fn(async () => {});
+    const env = makeEnv();
+    (env.APPLY_RUN!.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sendEvent, terminate: vi.fn() });
+
+    const res = await worker.fetch(
+      req(`/runs/${RUN_ID}/login-code`, { method: "POST", headers: auth, body: "{not json" }),
+      env
+    );
+
+    expect(res.status).toBe(400);
+    expect(sendEvent).not.toHaveBeenCalled();
+  });
+
   it("POST /runs/:id/cancel terminates and marks canceled", async () => {
     const terminate = vi.fn(async () => {});
     const env = makeEnv();

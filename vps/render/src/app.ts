@@ -56,6 +56,7 @@ import {
 } from "./fill.js";
 import { collectFields, readFilledState } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
+import { signInLinkedIn, submitLoginCode } from "./linkedin.js";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
 import { blocksSubmit, checkAnswers, type FillCheck } from "./verify.js";
@@ -67,6 +68,7 @@ const ATS_VALUES: readonly Ats[] = [
   "workday",
   "ashby",
   "dayforce",
+  "linkedin",
   "generic"
 ];
 
@@ -344,6 +346,17 @@ export function createApp(deps: AppDeps = {}): Express {
       try {
         const result = await withSlot(() =>
           runPhase(parsed.userId, parsed.tenantHost, async ({ page }) => {
+            // LinkedIn signs in with the user's own login on linkedin.com, not by
+            // clicking Apply on a tenant page, and a challenge can send back a PIN
+            // to enter. Everything else creates/reuses a tenant account.
+            if (parsed.ats === "linkedin") {
+              const auth = await signInLinkedIn(page, account);
+              return {
+                status: auth.status,
+                ...(auth.checkpointUrl ? { checkpointUrl: auth.checkpointUrl } : {}),
+                screenshotBase64: await shot(page)
+              };
+            }
             await page.goto(parsed.jobUrl, { waitUntil: "domcontentloaded" });
             await adapter.openApplication(page);
             const status = await ensureAccount(page, account);
@@ -355,6 +368,39 @@ export function createApp(deps: AppDeps = {}): Express {
         return errorPayload("render_failed", String(err));
       }
     });
+  });
+
+  // Finish a LinkedIn PIN challenge in the held session: the user typed the code
+  // the dashboard asked for, and it lands here. Synchronous like /verify (a
+  // single navigation and submit), and the caller is the worker resuming a
+  // parked run.
+  app.post("/login-code", async (req, res) => {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const tenantHost = typeof body.tenantHost === "string" ? body.tenantHost.trim() : "";
+    const code = typeof body.code === "string" ? body.code.trim() : "";
+    const checkpointUrl = typeof body.checkpointUrl === "string" ? safeUrl(body.checkpointUrl) : null;
+    if (!userId || !tenantHost || !code) {
+      return void res.status(400).json({ error: "invalid_body" });
+    }
+
+    try {
+      const result = await withSlot(() =>
+        runPhase(userId, tenantHost, async ({ page }) => {
+          const auth = await submitLoginCode(page, { code, checkpointUrl });
+          return {
+            status: auth.status,
+            // A re-prompt can move to a new challenge URL; hand it back so the
+            // next attempt resumes there rather than at the stale one.
+            ...(auth.checkpointUrl ? { checkpointUrl: auth.checkpointUrl } : {}),
+            screenshotBase64: await shot(page)
+          };
+        })
+      );
+      return void res.json(result);
+    } catch (err) {
+      return void appError(res, "render_failed", String(err));
+    }
   });
 
   app.post("/verify", async (req, res) => {
@@ -576,6 +622,11 @@ export function createApp(deps: AppDeps = {}): Express {
             // read of the page we happen to be standing on: a wizard's earlier
             // pages are already out of the DOM by now.
             if (blocksSubmit(verdicts.mismatches())) {
+              // Leave nothing half-filled behind (LinkedIn keeps an open Easy
+              // Apply modal as a draft otherwise). Best-effort and adapter-opt-in.
+              if (adapter.discardApplication) {
+                await adapter.discardApplication(page).catch(() => {});
+              }
               return {
                 outcome: "verification_failed" as SubmitOutcome,
                 resume: resumeOutcome,

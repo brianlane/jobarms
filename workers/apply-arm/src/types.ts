@@ -33,7 +33,14 @@ export interface Env {
 }
 
 /** ATSes the arm can drive; `generic` is the best-effort adapter for the rest. */
-export type Ats = "greenhouse" | "lever" | "workday" | "ashby" | "dayforce" | "generic";
+export type Ats =
+  | "greenhouse"
+  | "lever"
+  | "workday"
+  | "ashby"
+  | "dayforce"
+  | "linkedin"
+  | "generic";
 
 /** Everything a run needs, snapshotted at dispatch time by the app. */
 export interface RunParams {

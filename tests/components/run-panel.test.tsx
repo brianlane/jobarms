@@ -368,3 +368,62 @@ describe("answers the form did not accept", () => {
     expect(screen.getByText(/the form disagreed on some answers/)).toBeInTheDocument();
   });
 });
+
+describe("RunPanel LinkedIn login code", () => {
+  it("prompts for the PIN and submits it, once it is long enough", async () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_login_code",
+          steps: [{ at: AT, step: "login_code_pending" }, { at: AT, step: "account_verified" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+
+    expect(screen.getByText("Enter your LinkedIn code")).toBeInTheDocument();
+    expect(screen.getByText(/LinkedIn asked for a verification code/)).toBeInTheDocument();
+
+    const submit = screen.getByText("Submit code");
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("LinkedIn verification code"), {
+      target: { value: "483920" }
+    });
+    expect(submit).not.toBeDisabled();
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/runs/run-1/login-code",
+      expect.objectContaining({ method: "POST" })
+    );
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => typeof c[0] === "string" && c[0].endsWith("/login-code")
+    );
+    expect(JSON.parse(call![1].body)).toEqual({ code: "483920" });
+  });
+
+  it("can be canceled while waiting for the code", async () => {
+    stubFetch();
+    render(<RunPanel run={run({ status: "needs_login_code" })} applicationId="app-1" />);
+    fireEvent.click(screen.getByText("Cancel this run"));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/cancel", expect.any(Object))
+    );
+  });
+
+  it("shows the working label while confirming an account email", () => {
+    stubFetch();
+    render(<RunPanel run={run({ status: "needs_account_verification" })} applicationId="app-1" />);
+    expect(screen.getByText(/Confirming your application email/)).toBeInTheDocument();
+  });
+
+  it("polls while parked on a login code", async () => {
+    vi.useFakeTimers();
+    render(<RunPanel run={run({ status: "needs_login_code" })} applicationId="app-1" />);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(router.refresh).toHaveBeenCalled();
+  });
+});

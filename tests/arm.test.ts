@@ -4,7 +4,8 @@ import {
   armWorkerUrl,
   cancelRun,
   dispatchRun,
-  resumeAccountVerification
+  resumeAccountVerification,
+  submitLoginCode
 } from "@/lib/arm";
 
 const BASE = "https://arm.example.com";
@@ -88,5 +89,14 @@ describe("arm worker client", () => {
   it("reports an offline worker so the run stays parked rather than looking done", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
     expect(await resumeAccountVerification("r1")).toEqual({ ok: false, reason: "arm_offline" });
+  });
+
+  it("submitLoginCode posts the code to the run's login-code endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await submitLoginCode("r1", "483920")).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/runs/r1/login-code`);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "483920" });
   });
 });

@@ -36,6 +36,9 @@ describe("cancelRefund: user behavior consumes, system failure refunds", () => {
   it("cancel on a dead-ended junk review refunds (cleanup, not a choice)", () => {
     expect(cancelRefund("needs_review", junkAnswers)).toBe(true);
   });
+  it("cancel while waiting on a LinkedIn PIN refunds (no application work yet)", () => {
+    expect(cancelRefund("needs_login_code", null)).toBe(true);
+  });
 });
 
 describe("retryDecision", () => {
@@ -91,6 +94,13 @@ describe("retryDecision", () => {
     // It waits on a confirmation mail, not on the user, so a day later it is
     // stuck rather than patient, and the slot refunds as a system failure.
     const status = "needs_account_verification";
+    expect(retryDecision({ status, answers: null, created_at: recent }, NOW).eligible).toBe(false);
+    const d = retryDecision({ status, answers: null, created_at: stale }, NOW);
+    expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });
+  });
+
+  it("run awaiting a LinkedIn PIN: patient at first, stuck (retryable) after 24h", () => {
+    const status = "needs_login_code";
     expect(retryDecision({ status, answers: null, created_at: recent }, NOW).eligible).toBe(false);
     const d = retryDecision({ status, answers: null, created_at: stale }, NOW);
     expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });

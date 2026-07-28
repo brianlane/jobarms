@@ -15,6 +15,7 @@ import { createClient } from "@supabase/supabase-js";
 import { ACCOUNT_REQUIRED_ATS, detectAts, dispatchAtsOf, tenantHostOf } from "../src/lib/ats";
 import { ensureApplicantAlias } from "../src/lib/applicant-email";
 import { ensureSiteAccount } from "../src/lib/site-accounts";
+import { getLinkedInCredentials } from "../src/lib/linkedin";
 import { findAuthUserByEmail } from "./lib/auth-users";
 
 const SMOKE_EMAIL = "smoke@jobarms.com";
@@ -145,7 +146,14 @@ async function main() {
   }
   const tenantHost = tenantHostOf(job.url);
   let account: { email: string; password: string } | null = null;
-  if (ats !== "generic" && ACCOUNT_REQUIRED_ATS.has(detected) && tenantHost) {
+  if (detected === "linkedin") {
+    // LinkedIn uses the smoke user's own connected login, not a generated one.
+    // Connect it first (Settings, or set_linkedin_credentials) or this throws.
+    const creds = await getLinkedInCredentials(supabase, userId);
+    if (!creds) throw new Error("LinkedIn is not connected for the smoke user; connect it first");
+    account = { email: creds.email, password: creds.password };
+    console.log(`linkedin account: ${creds.email} (a PIN challenge will park at needs_login_code)`);
+  } else if (ats !== "generic" && ACCOUNT_REQUIRED_ATS.has(detected) && tenantHost) {
     const alias = await ensureApplicantAlias(supabase, userId);
     const siteAccount = alias
       ? await ensureSiteAccount(supabase, { userId, tenantHost, ats: detected, email: alias })
@@ -206,7 +214,10 @@ async function main() {
       .single();
     if (!data) continue;
     console.log(`  status: ${data.status} (${(data.steps as unknown[])?.length ?? 0} steps)`);
-    if (["needs_review", "failed", "submitted", "canceled"].includes(data.status)) {
+    // needs_login_code is a terminal outcome FOR THE SMOKE: it proves the arm
+    // signed in and reached LinkedIn's PIN gate, which is as far as an automated
+    // run can go without a human-entered code.
+    if (["needs_review", "needs_login_code", "failed", "submitted", "canceled"].includes(data.status)) {
       final = data;
       break;
     }

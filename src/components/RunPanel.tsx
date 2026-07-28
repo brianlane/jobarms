@@ -24,6 +24,8 @@ export interface RunData {
 const RUN_STATUS_COPY: Record<string, { label: string; tone: "working" | "action" | "good" | "bad" | "muted" }> = {
   queued: { label: "Getting started...", tone: "working" },
   running: { label: "Your arm is working...", tone: "working" },
+  needs_account_verification: { label: "Confirming your application email...", tone: "working" },
+  needs_login_code: { label: "Enter your LinkedIn code", tone: "action" },
   needs_review: { label: "Waiting for your review", tone: "action" },
   approved: { label: "Approved, submitting...", tone: "working" },
   submitting: { label: "Submitting...", tone: "working" },
@@ -54,6 +56,10 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
       const n = parseInt(step.detail ?? "", 10);
       return Number.isFinite(n) && n <= 1 ? null : "Drafted your answers";
     }
+    case "login_code_pending":
+      return "Signed in, and LinkedIn asked for a verification code";
+    case "account_verified":
+      return "Signed in";
     case "review_requested":
       return "Paused so you can review";
     case "approved":
@@ -110,6 +116,7 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
   const router = useRouter();
   const [answers, setAnswers] = useState(run.answers ?? []);
   const [screenshots, setScreenshots] = useState<{ path: string; url: string }[]>([]);
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -127,7 +134,15 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
 
   // While the arm works, poll for state changes.
   useEffect(() => {
-    if (!["queued", "running", "approved", "submitting"].includes(run.status)) return;
+    // Poll while the arm is working, and also while parked on a login code: the
+    // code is submitted separately, so polling is what surfaces the transition
+    // to "running" once the worker accepts it.
+    if (
+      !["queued", "running", "approved", "submitting", "needs_account_verification", "needs_login_code"].includes(
+        run.status
+      )
+    )
+      return;
     const t = setInterval(() => router.refresh(), 5000);
     return () => clearInterval(t);
   }, [run.status, router]);
@@ -188,7 +203,7 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
             {status.label}
           </span>
         </div>
-        {["queued", "running", "needs_review"].includes(run.status) && (
+        {["queued", "running", "needs_review", "needs_login_code"].includes(run.status) && (
           <button
             onClick={() => act(`/api/runs/${run.id}/cancel`)}
             disabled={busy}
@@ -240,6 +255,37 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
             </li>
           ))}
         </ol>
+      )}
+
+      {/* LinkedIn PIN challenge: the one moment a LinkedIn sign-in needs the user */}
+      {run.status === "needs_login_code" && (
+        <div className="mt-6 rounded-xl border-2 border-amber-300 bg-amber-50 p-5">
+          <h3 className="font-display text-base font-bold text-amber-900">
+            LinkedIn needs a verification code
+          </h3>
+          <p className="mt-1 text-sm text-amber-800">
+            To confirm this sign-in, LinkedIn sent a one-time code to your email or phone.
+            Enter it here and your arm will keep going. Codes expire quickly, so enter it soon.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="Verification code"
+              aria-label="LinkedIn verification code"
+              className="w-40 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none"
+            />
+            <button
+              onClick={() => act(`/api/runs/${run.id}/login-code`, { code: code.trim() })}
+              disabled={busy || code.trim().length < 4}
+              className="rounded-lg bg-arm-600 px-5 py-2.5 font-semibold text-white hover:bg-arm-500 disabled:opacity-50"
+            >
+              {busy ? "Submitting..." : "Submit code"}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Dead-ended review: nothing to approve, offer the fix */}

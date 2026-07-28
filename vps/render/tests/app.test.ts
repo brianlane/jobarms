@@ -16,6 +16,7 @@ import { phase } from "./helpers/phase";
 const TOKEN = CONFIG.token;
 const JOB_URL = "https://jobs.lever.co/acme/1/apply";
 const WD_URL = "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/1";
+const LI_URL = "https://www.linkedin.com/jobs/view/4442245127/";
 
 /**
  * Build the app with a phase runner that hands every phase the SAME fake page,
@@ -179,6 +180,118 @@ describe("POST /session/ensure", () => {
     expect(res.status).toBe(200);
     expect(res.body.error).toBe("render_failed");
     expect(res.body.detail).toContain("browser died");
+  });
+
+  it("signs in to LinkedIn with the user's own login", async () => {
+    // A fresh page with no login form reads as an already-valid session.
+    const page = fakePage({ url: "https://www.linkedin.com/feed/", evaluate: () => "" });
+    const { app } = appWith(page);
+    const res = await phase(app, "/session/ensure", {
+      userId: "u1",
+      jobUrl: LI_URL,
+      ats: "linkedin",
+      account: TEST_CREDS
+    });
+    expect(res.body).toMatchObject({ status: "authenticated", accountRequired: true });
+    expect(res.body.checkpointUrl).toBeUndefined();
+  });
+
+  it("returns needs_login_code with the checkpoint URL on a PIN challenge", async () => {
+    const page = fakePage({
+      locators: {
+        "#username": loc({ count: vi.fn(async () => 1) }),
+        "#password": loc({ count: vi.fn(async () => 1) }),
+        'input[type="password"]': loc({ count: vi.fn(async () => 1) }),
+        'button[type="submit"]': loc({ count: vi.fn(async () => 1) }),
+        'input[name="pin"]': loc({ count: vi.fn(async () => 1) })
+      }
+    });
+    page.goto = vi.fn(async () => {});
+    page.url = vi.fn(() => "https://www.linkedin.com/checkpoint/challenge/9");
+    const { app } = appWith(page);
+
+    const res = await phase(app, "/session/ensure", {
+      userId: "u1",
+      jobUrl: LI_URL,
+      ats: "linkedin",
+      account: TEST_CREDS
+    });
+
+    expect(res.body).toMatchObject({
+      status: "needs_login_code",
+      accountRequired: true,
+      checkpointUrl: "https://www.linkedin.com/checkpoint/challenge/9"
+    });
+  });
+});
+
+describe("POST /login-code", () => {
+  it("400s without a userId, tenantHost, and code", async () => {
+    const { app } = appWith(formPage());
+    // No body at all (req.body undefined), then each field missing on its own.
+    expect((await auth(request(app).post("/login-code"))).status).toBe(400);
+    for (const body of [
+      { tenantHost: "www.linkedin.com", code: "483920" },
+      { userId: "u1", code: "483920" },
+      { userId: "u1", tenantHost: "www.linkedin.com" }
+    ]) {
+      expect((await auth(request(app).post("/login-code").send(body))).status).toBe(400);
+    }
+  });
+
+  it("submits the code (with the checkpoint URL) and reports the status", async () => {
+    const page = fakePage({
+      locators: { 'input[name="pin"]': loc({ count: vi.fn(async () => 1) }) },
+      evaluate: () => ""
+    });
+    // The code clears the challenge and the session lands on the feed.
+    page.goto = vi.fn(async () => {});
+    page.url = vi.fn(() => "https://www.linkedin.com/feed/");
+    const { app } = appWith(page);
+    const res = await auth(
+      request(app).post("/login-code").send({
+        userId: "u1",
+        tenantHost: "www.linkedin.com",
+        code: "483920",
+        checkpointUrl: "https://www.linkedin.com/checkpoint/challenge/1"
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("authenticated");
+    // The code-entry step resumed at the captured checkpoint URL.
+    expect((page.goto as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "https://www.linkedin.com/checkpoint/challenge/1"
+    );
+  });
+
+  it("hands back the new checkpoint URL when LinkedIn re-prompts", async () => {
+    const page = fakePage({
+      locators: { 'input[name="pin"]': loc({ count: vi.fn(async () => 1) }) },
+      evaluate: () => ""
+    });
+    page.goto = vi.fn(async () => {});
+    page.url = vi.fn(() => "https://www.linkedin.com/checkpoint/challenge/2");
+    const { app } = appWith(page);
+    const res = await auth(
+      request(app)
+        .post("/login-code")
+        .send({ userId: "u1", tenantHost: "www.linkedin.com", code: "000000" })
+    );
+    expect(res.body.status).toBe("needs_login_code");
+    expect(res.body.checkpointUrl).toBe("https://www.linkedin.com/checkpoint/challenge/2");
+  });
+
+  it("wraps a browser crash as render_failed", async () => {
+    const runPhase = vi.fn(async () => {
+      throw new Error("browser died");
+    });
+    const app = createApp({ runPhase } as unknown as AppDeps);
+    const res = await auth(
+      request(app)
+        .post("/login-code")
+        .send({ userId: "u1", tenantHost: "www.linkedin.com", code: "483920" })
+    );
+    expect(res.body.error).toBe("render_failed");
   });
 });
 
@@ -430,6 +543,54 @@ describe("POST /fill", () => {
       name: "q[]",
       expected: "None of the above"
     });
+  });
+
+  it("discards the LinkedIn modal rather than leave a draft when it refuses", async () => {
+    // Same interlock, but on LinkedIn the abandoned Easy Apply modal would sit
+    // open as a saved draft, so the adapter's discard runs before returning.
+    const { app } = appWith(disagreeingPage(["Ordinarily a resident of Cuba"]));
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: LI_URL,
+      ats: "linkedin",
+      answers: choiceAnswers,
+      submit: true
+    });
+
+    expect(res.body.outcome).toBe("verification_failed");
+  });
+
+  it("still refuses even if discarding the modal throws", async () => {
+    // The discard is best-effort: a modal that vanished mid-teardown must not
+    // turn a refusal into a crash.
+    let call = 0;
+    const page = fakePage({
+      url: LI_URL,
+      eval$$: () =>
+        call++ === 0
+          ? [
+              { name: "name", label: "Full name", type: "text", required: true, options: [] },
+              { name: "q[]", label: "Sanctions", type: "checkbox", required: true, options: [] }
+            ]
+          : [{ name: "q[]", kind: "choice", checked: ["Ordinarily a resident of Cuba"], value: "", count: 4 }],
+      locators: {
+        "text=/": loc(),
+        'button[aria-label="Dismiss"]': loc({
+          count: vi.fn(async () => {
+            throw new Error("modal gone");
+          })
+        })
+      }
+    });
+    const { app } = appWith(page);
+    const res = await phase(app, "/fill", {
+      userId: "u1",
+      jobUrl: LI_URL,
+      ats: "linkedin",
+      answers: choiceAnswers,
+      submit: true
+    });
+    expect(res.body.outcome).toBe("verification_failed");
   });
 
   it("submits normally when the read-back agrees", async () => {

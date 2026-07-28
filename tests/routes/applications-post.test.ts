@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   tailorResume: vi.fn(),
   renderResumePdf: vi.fn(),
   buildAndDispatchRun: vi.fn(),
+  getLinkedInCredentials: vi.fn(),
   ensureApplicantAlias: vi.fn(async () => "a-abcdefghjk@jobarms.com" as string | null),
   ensureSiteAccount: vi.fn(
     async () =>
@@ -31,6 +32,7 @@ vi.mock("@/lib/resume-pdf", () => ({ renderResumePdf: mocks.renderResumePdf }));
 vi.mock("@/lib/arm-dispatch", () => ({ buildAndDispatchRun: mocks.buildAndDispatchRun }));
 vi.mock("@/lib/applicant-email", () => ({ ensureApplicantAlias: mocks.ensureApplicantAlias }));
 vi.mock("@/lib/site-accounts", () => ({ ensureSiteAccount: mocks.ensureSiteAccount }));
+vi.mock("@/lib/linkedin", () => ({ getLinkedInCredentials: mocks.getLinkedInCredentials }));
 
 import { POST } from "@/app/api/applications/route";
 
@@ -82,6 +84,11 @@ beforeEach(() => {
   });
   mocks.tailorResume.mockResolvedValue({ resume: VALID_RESUME, keywords: { incorporated: [], missing: [] } });
   mocks.renderResumePdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
+  mocks.getLinkedInCredentials.mockResolvedValue({
+    email: "me@example.com",
+    password: ["li", "fixture"].join("-"),
+    status: "verified"
+  });
 });
 
 describe("POST /api/applications", () => {
@@ -622,5 +629,66 @@ describe("POST /api/applications (account-gated ATS)", () => {
     expect(mocks.ensureApplicantAlias).not.toHaveBeenCalled();
     expect(mocks.ensureSiteAccount).not.toHaveBeenCalled();
     expect(mocks.buildAndDispatchRun.mock.calls[0][1].account).toBeNull();
+  });
+});
+
+describe("POST /api/applications (LinkedIn)", () => {
+  const LI = "https://www.linkedin.com/jobs/view/4442245127/";
+
+  function linkedinService(over: Parameters<typeof service>[0] = {}) {
+    return service({
+      applications: [{ data: null }, { data: { id: "app1" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true], release_arm_run: [true] },
+      ...over
+    });
+  }
+
+  beforeEach(() => {
+    mocks.fetchJobMeta.mockResolvedValue({ ...META, ats: "linkedin" });
+    holder.server = fakeClient({ user: { id: "u1" } });
+  });
+
+  it("409s without dispatching when LinkedIn is not connected", async () => {
+    mocks.getLinkedInCredentials.mockResolvedValueOnce(null);
+    holder.service = linkedinService();
+
+    const res = await POST(post({ url: LI }));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("linkedin_not_connected");
+    expect(mocks.buildAndDispatchRun).not.toHaveBeenCalled();
+    // The generated-account path is never touched for LinkedIn.
+    expect(mocks.ensureSiteAccount).not.toHaveBeenCalled();
+  });
+
+  it("422s without dispatching when the connected account is locked", async () => {
+    mocks.getLinkedInCredentials.mockResolvedValueOnce({
+      email: "me@example.com",
+      password: "x",
+      status: "locked"
+    });
+    holder.service = linkedinService();
+
+    const res = await POST(post({ url: LI }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("ats_account_locked");
+    expect(mocks.buildAndDispatchRun).not.toHaveBeenCalled();
+  });
+
+  it("dispatches with the user's connected LinkedIn credentials", async () => {
+    holder.service = linkedinService();
+
+    const res = await POST(post({ url: LI }));
+
+    expect(res.status).toBe(200);
+    const dispatched = mocks.buildAndDispatchRun.mock.calls[0][1];
+    expect(dispatched.ats).toBe("linkedin");
+    expect(dispatched.account).toEqual({
+      email: "me@example.com",
+      password: ["li", "fixture"].join("-")
+    });
+    expect(mocks.ensureApplicantAlias).not.toHaveBeenCalled();
+    expect(mocks.ensureSiteAccount).not.toHaveBeenCalled();
   });
 });

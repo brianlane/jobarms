@@ -84,3 +84,14 @@ export function cancelRun(runId: string): Promise<ArmDispatchResult> {
 export function resumeAccountVerification(runId: string): Promise<ArmDispatchResult> {
   return armPost(`/runs/${runId}/account-verified`, {});
 }
+
+/**
+ * Hand a run parked on a LinkedIn PIN challenge the code the user entered.
+ *
+ * The worker owns run state, so this only sends the workflow event; a failure
+ * leaves the run parked to time out honestly rather than marking it resumed
+ * behind the worker's back.
+ */
+export function submitLoginCode(runId: string, code: string): Promise<ArmDispatchResult> {
+  return armPost(`/runs/${runId}/login-code`, { code });
+}
