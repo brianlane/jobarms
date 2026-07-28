@@ -564,9 +564,15 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
   for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
     // Re-picked every attempt because widgets add and remove inputs as they work.
     const index = await resumeInputIndex(page);
-    const input = page.locator('input[type="file"]').nth(index);
-    // No input left and not yet accepted means there is nowhere to put it.
-    if ((await input.count()) === 0) break;
+    let input = page.locator('input[type="file"]').nth(index);
+    if ((await input.count()) === 0) {
+      // The index can go stale INSIDE an attempt (a widget swapped its inputs
+      // between the pick and this look), which means stale, not gone: fall back
+      // to the first input rather than abandoning the attach.
+      input = page.locator('input[type="file"]').first();
+      // No input left and not yet accepted means there is nowhere to put it.
+      if ((await input.count()) === 0) break;
+    }
 
     // A hidden input belongs to a widget, and the widget has to be the one to
     // take the file. Writing to the input directly fires a change event into a

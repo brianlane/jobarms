@@ -863,6 +863,26 @@ describe("handing the resume to a widget that owns its own input", () => {
     expect(pageWideControl.click).toHaveBeenCalled();
   });
 
+  it("falls back to the first input when the picked index went stale mid-attempt", async () => {
+    // A widget can swap its inputs between the pick and the look. An empty
+    // nth() while an input still exists means stale, not gone, so the attach
+    // must not abandon the resume over it.
+    const gone = loc({ count: vi.fn(async () => 0) });
+    const remaining = loc({ count: vi.fn(async () => 1) });
+    const inputs = loc({});
+    inputs.nth = vi.fn(() => gone);
+    inputs.first = vi.fn(() => remaining);
+    const page = fakePage({
+      locators: { 'input[type="file"]': inputs },
+      evaluate: (fn) =>
+        fn === resumeFileInputIndexInPage ? 1 : fn === fileInputIsWidgetOwnedInPage ? false : true
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(remaining.setInputFiles).toHaveBeenCalled();
+    expect(gone.setInputFiles).not.toHaveBeenCalled();
+  });
+
   it("treats a picker answer that is not a usable index as the first input", async () => {
     // page.evaluate can hand back anything on a hostile page; a junk index must
     // degrade to the old behavior, not become nth(NaN).
