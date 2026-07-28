@@ -159,6 +159,28 @@ describe("RunPanel review gate", () => {
     expect(body.answers[0].value).toBe("Bisexual");
   });
 
+  it("reads a comma-joined draft the way the filler would", () => {
+    // The sidecar's splitAnswerValues accepts semicolons AND commas; a
+    // comma-joined model draft must not render as nothing selected while
+    // still filling fine after approval.
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "grp", label: "Which apply?", type: "checkbox", required: false, options: ["A", "B", "C"] }
+          ],
+          answers: [{ name: "grp", label: "Which apply?", value: "A, C" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect((screen.getByRole("checkbox", { name: "A" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "B" }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("checkbox", { name: "C" }) as HTMLInputElement).checked).toBe(true);
+  });
+
   it("nags only for skipped REQUIRED fields; optional blanks are just noted", () => {
     stubFetch();
     render(

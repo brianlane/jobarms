@@ -136,11 +136,16 @@ function fieldMap(raw: unknown): Map<string, ReviewField> {
   return map;
 }
 
-/** The options currently selected in a "; "-joined group answer. */
+/**
+ * The options currently selected in a joined group answer. Splits on the SAME
+ * separators the filler does (semicolon or comma, see the sidecar's
+ * splitAnswerValues): a comma-joined draft must not render as unselected here
+ * while still filling fine after approval.
+ */
 function selectedOptions(value: string): Set<string> {
   return new Set(
     value
-      .split(";")
+      .split(/[;,]/)
       .map((v) => v.trim())
       .filter(Boolean)
   );
