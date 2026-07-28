@@ -13,7 +13,7 @@
  */
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
-import type { Answer, Env, RecoveryStrategy, RunParams } from "./types";
+import type { Answer, BatchParams, Env, RecoveryStrategy, RunParams } from "./types";
 import {
   completeLoginCode,
   decodeScreenshot,
@@ -21,7 +21,9 @@ import {
   extractForm,
   fetchResumeBase64,
   fillForm,
+  searchJobs,
   type ExtractResponse,
+  type JobCard,
   type Mismatch,
   type RenderResult
 } from "./render";
@@ -29,7 +31,11 @@ import { diagnosePage, generateAnswers } from "./gemini";
 import { notifyReviewNeeded } from "./notify";
 import {
   appendScreenshot,
+  claimBatch,
+  createApplication,
+  createRun,
   type FillTactics,
+  findApplication,
   getFillTactics,
   getPlaybook,
   logStep,
@@ -37,10 +43,14 @@ import {
   recordFillTacticFailure,
   recordPlaybook,
   recordPlaybookFailure,
+  releaseArmRuns,
   releaseArmRunSlot,
+  settleBatchFailure,
   updateApplication,
+  updateBatch,
   updateRun,
-  uploadScreenshot
+  uploadScreenshot,
+  upsertJob
 } from "./db";
 
 /** ATSes whose applications require an account on the employer's own tenant. */
@@ -685,4 +695,339 @@ async function reachWithVision(
   // Deterministic: there is no application form here we can drive.
   await logStep(env, params.runId, "form_not_found", reason);
   throw new NonRetryableError(`form_not_found: ${reason}`);
+}
+
+// ---------------------------------------------------------------------------
+// Search-driven LinkedIn Easy Apply batches
+// ---------------------------------------------------------------------------
+
+/** LinkedIn is the only host batches run on; it keys the session and playbooks. */
+const BATCH_HOST = "www.linkedin.com";
+
+/**
+ * The wait between consecutive applications in a batch. LinkedIn restricts
+ * accounts that fire applications machine-fast, so the batch paces like a
+ * person: a base pause plus jitter. The value is only computed once per step
+ * name (step.sleep caches by name), so replay determinism is preserved.
+ */
+export function batchPace(): number {
+  return (30 + Math.floor(Math.random() * 61)) * 1000;
+}
+
+/** How one job in the batch ended, and what it should do to the meters. */
+export type CardOutcome =
+  | "applied" // confirmed submission: counts, consumes a slot
+  | "work_done_failed" // captcha/verify/unconfirmed AFTER real work: consumes
+  | "system_failed" // died before any submission attempt: slot released
+  | "skipped"; // user already applied to this job: nothing charged
+
+/**
+ * Apply to one discovered job: record it, drive the Easy Apply modal with the
+ * same reach/answer/fill machinery as a single run, and classify the outcome.
+ *
+ * NEVER throws: any error is folded into "system_failed" so one broken posting
+ * cannot kill the rest of the batch.
+ */
+export async function applyToCard(
+  env: Env,
+  batch: BatchParams,
+  card: JobCard
+): Promise<CardOutcome> {
+  const jobId = await upsertJob(env, {
+    url: card.url,
+    ats: "linkedin",
+    company: card.company,
+    title: card.title,
+    location: card.location
+  }).catch(() => null);
+  if (!jobId) return "system_failed";
+
+  const existing = await findApplication(env, batch.userId, jobId).catch(() => null);
+  // A submitted or user-managed application (applied, interviewing, parked on
+  // review, ...) means re-applying would spam the employer; skip it. Three
+  // states are re-appliable:
+  //   - "saved"/"failed": same rule as the app's create route - a tracked job
+  //     or a dead prior attempt must not fence the user off it.
+  //   - "applying": this very card sets the row to applying BEFORE the fill,
+  //     so a workflow step retry mid-card must be able to resume its own
+  //     half-finished job instead of skipping it into a wedged state. A job
+  //     that actually submitted before the retry fails safely at extraction
+  //     (LinkedIn no longer shows the Easy Apply button), never twice.
+  const reappliable = new Set(["saved", "failed", "applying"]);
+  if (existing && !reappliable.has(existing.status)) return "skipped";
+
+  const applicationId =
+    existing?.id ?? (await createApplication(env, batch.userId, jobId).catch(() => null));
+  if (!applicationId) return "system_failed";
+  const runId = await createRun(env, {
+    applicationId,
+    userId: batch.userId,
+    monthKey: batch.monthKey,
+    batchId: batch.batchId,
+    tenantHost: BATCH_HOST
+  }).catch(() => null);
+  if (!runId) return "system_failed";
+
+  // A per-card RunParams lets the batch reuse the exact single-run machinery.
+  const params: RunParams = {
+    runId,
+    applicationId,
+    userId: batch.userId,
+    jobUrl: card.url,
+    ats: "linkedin",
+    autonomy: "full_auto",
+    jobTitle: card.title,
+    jobCompany: card.company,
+    jobDescription: "",
+    profile: batch.profile,
+    resume: batch.resume,
+    ...(batch.memory ? { memory: batch.memory } : {}),
+    account: batch.account
+  };
+
+  try {
+    await updateApplication(env, applicationId, { status: "applying" });
+    const reached = await reachWithVision(env, params, BATCH_HOST);
+    await updateRun(env, runId, { form_fields: reached.fields });
+    await logStep(env, runId, "form_extracted", `${reached.fields.length} fields (batch)`);
+
+    const answers = await generateAnswers(env, params, reached.fields);
+    await updateRun(env, runId, { answers });
+
+    const tactics = await getFillTactics(env, BATCH_HOST, "linkedin");
+    const fill = await fillForm(env, {
+      userId: batch.userId,
+      runId,
+      jobUrl: card.url,
+      ats: "linkedin",
+      answers,
+      resume: await resumePayload(params),
+      submit: true,
+      playbook: await getPlaybook(env, BATCH_HOST, "linkedin"),
+      tactics
+    });
+    if (!fill.ok) {
+      await saveShot(env, params, "failed", fill.screenshotBase64).catch(() => {});
+      throw renderFailure(fill, "batch fill");
+    }
+
+    await saveShot(env, params, "submit", fill.data.screenshotBase64).catch(() => {});
+    await learnTactics(env, BATCH_HOST, "linkedin", tactics, fill.data).catch(() => {});
+
+    if (fill.data.outcome === "submitted") {
+      await updateRun(env, runId, { status: "submitted", error: null });
+      await updateApplication(env, applicationId, {
+        status: "applied",
+        applied_at: new Date().toISOString()
+      });
+      await logStep(env, runId, "submitted", "batch");
+      return "applied";
+    }
+
+    // Real work happened but the submission did not confirm: captcha wall,
+    // read-back mismatches the interlock refused, or a page that never showed a
+    // confirmation. The job is marked failed and the batch moves on.
+    const detail =
+      fill.data.outcome === "captcha_blocked"
+        ? "captcha_blocked: the site demanded a human check"
+        : fill.data.outcome === "verification_failed"
+          ? `verification_failed: ${describeMismatches(fill.data.mismatches ?? [])}`
+          : "submit_unconfirmed: no confirmation appeared after submitting";
+    await updateRun(env, runId, {
+      status: "failed",
+      error: detail.slice(0, 500),
+      fill_mismatches: fill.data.mismatches ?? []
+    });
+    await updateApplication(env, applicationId, { status: "failed" });
+    return "work_done_failed";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await updateRun(env, runId, { status: "failed", error: message.slice(0, 500) }).catch(
+      () => {}
+    );
+    await updateApplication(env, applicationId, { status: "failed" }).catch(() => {});
+    return "system_failed";
+  }
+}
+
+/**
+ * Search LinkedIn for matching Easy Apply jobs and apply to up to `reserved` of
+ * them in one held session.
+ *
+ * Metering: the app bulk-reserved `reserved` slots at dispatch. Each card whose
+ * outcome represents real application work (submitted, or failed at the captcha
+ * or verify stage) consumes one; everything else - system failures, skips, and
+ * slots no matching job ever used - is released when the batch settles.
+ */
+export class BatchApplyWorkflow extends WorkflowEntrypoint<Env, BatchParams> {
+  async run(event: WorkflowEvent<BatchParams>, step: WorkflowStep): Promise<void> {
+    const params = event.payload;
+    const env = this.env;
+
+    // Loop accumulators. Safe across replays: they are rebuilt from cached step
+    // results, so every invocation converges on the same values.
+    let processed = 0;
+    let applied = 0;
+    let failed = 0;
+    let consumed = 0;
+
+    try {
+      // --- Sign in (parking on a PIN challenge exactly like a single run) ----
+      const gate = await step.do("batch ensure account", async () => {
+        // Claim the row before doing anything. If the app's dispatch call
+        // timed out, it gave up through a guarded queued-only write and
+        // released the reservation; the claim then fails and this batch must
+        // not run on quota that no longer exists.
+        if (!(await claimBatch(env, params.batchId))) {
+          throw new NonRetryableError(
+            "batch_not_claimable: the app abandoned this batch before it started"
+          );
+        }
+        const session = await ensureSession(env, {
+          userId: params.userId,
+          jobUrl: `https://${BATCH_HOST}/`,
+          ats: "linkedin",
+          account: params.account
+        });
+        if (!session.ok) throw renderFailure(session, "batch account setup");
+        if (session.data.status === "login_failed") {
+          throw new NonRetryableError("ats_login_failed: LinkedIn did not accept the sign-in");
+        }
+        if (session.data.status === "needs_login_code") {
+          await updateBatch(env, params.batchId, { status: "needs_login_code" });
+          return { wait: true, checkpointUrl: session.data.checkpointUrl ?? null };
+        }
+        return { wait: false, checkpointUrl: null };
+      });
+
+      if (gate.wait) {
+        let checkpointUrl = gate.checkpointUrl;
+        for (let attempt = 1; ; attempt++) {
+          let evt: { payload?: { code?: string } };
+          try {
+            evt = (await step.waitForEvent(`batch login code ${attempt}`, {
+              type: "login-code",
+              timeout: LOGIN_CODE_TIMEOUT
+            })) as { payload?: { code?: string } };
+          } catch {
+            throw new Error("login_code_timeout: no sign-in code arrived in time");
+          }
+
+          const url = checkpointUrl;
+          const verdict = await step.do(`batch submit login code ${attempt}`, async () => {
+            const result = await completeLoginCode(env, {
+              userId: params.userId,
+              tenantHost: BATCH_HOST,
+              code: (evt.payload?.code ?? "").trim(),
+              ...(url ? { checkpointUrl: url } : {})
+            });
+            if (!result.ok) throw renderFailure(result, "batch login code");
+            if (result.data.status === "authenticated") {
+              await updateBatch(env, params.batchId, { status: "running" });
+              return { state: "authenticated" as const, checkpointUrl: null };
+            }
+            if (result.data.status === "needs_login_code" && attempt < LOGIN_CODE_MAX_ATTEMPTS) {
+              await updateBatch(env, params.batchId, { status: "needs_login_code" });
+              return {
+                state: "retry" as const,
+                checkpointUrl: result.data.checkpointUrl ?? null
+              };
+            }
+            throw new NonRetryableError("ats_login_failed: the sign-in code was not accepted");
+          });
+          if (verdict.state === "authenticated") break;
+          if (verdict.checkpointUrl) checkpointUrl = verdict.checkpointUrl;
+        }
+      }
+
+      // --- Search ----------------------------------------------------------
+      const cards = await step.do("batch search", async () => {
+        await updateBatch(env, params.batchId, { status: "searching" });
+        const result = await searchJobs(env, {
+          userId: params.userId,
+          keywords: params.keywords,
+          location: params.location,
+          remote: params.remote,
+          limit: params.reserved
+        });
+        if (!result.ok) throw renderFailure(result, "batch search");
+        await updateBatch(env, params.batchId, { status: "running" });
+        return result.data.cards;
+      });
+
+      // --- Apply, one job at a time, paced ----------------------------------
+      for (let i = 0; i < cards.length; i++) {
+        const card = cards[i];
+
+        // Pre-charge the slot BEFORE driving the card. A cancel reads the
+        // persisted `consumed` to decide how much to release, and the apply
+        // step can do real work (submit an application) before the progress
+        // write below lands. Charging first means a cancel racing an in-flight
+        // card can only UNDER-release by one slot, never credit back work that
+        // actually happened; the progress step corrects the charge downward
+        // when the card turned out not to consume.
+        await step.do(`batch precharge ${i}`, async () => {
+          await updateBatch(env, params.batchId, { consumed: consumed + 1 });
+        });
+
+        const outcome = await step.do(`batch apply ${i}`, () => applyToCard(env, params, card));
+
+        if (outcome !== "skipped") processed++;
+        if (outcome === "applied") applied++;
+        if (outcome === "work_done_failed" || outcome === "system_failed") failed++;
+        if (outcome === "applied" || outcome === "work_done_failed") consumed++;
+
+        await step.do(`batch progress ${i}`, async () => {
+          await updateBatch(env, params.batchId, { processed, applied, failed, consumed });
+        });
+
+        if (i < cards.length - 1) {
+          await step.sleep(`batch pace ${i}`, batchPace());
+        }
+      }
+
+      // --- Settle ------------------------------------------------------------
+      await step.do("batch settle", async () => {
+        await releaseArmRuns(env, params.userId, params.monthKey, params.reserved - consumed);
+        await updateBatch(env, params.batchId, {
+          status: "completed",
+          processed,
+          applied,
+          failed,
+          consumed
+        });
+      });
+    } catch (err) {
+      // Same shape as the single-run failure path: the bookkeeping runs as a
+      // STEP so it survives subrequest exhaustion, and the original error is
+      // what the instance dies with.
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        await step.do(
+          "batch record terminal failure",
+          { retries: { limit: 4, delay: "10 seconds", backoff: "exponential" } },
+          async () => {
+            // Guarded flip: only a batch still in a LIVE state becomes failed.
+            // If a user cancel got here first, the app's cancel route already
+            // released the unspent slots, so releasing again would
+            // double-credit; the guard reports whether the failure landed and
+            // the release happens only when it did.
+            const landed = await settleBatchFailure(env, params.batchId, {
+              error: message.slice(0, 500),
+              processed,
+              applied,
+              failed,
+              consumed
+            });
+            if (landed) {
+              await releaseArmRuns(env, params.userId, params.monthKey, params.reserved - consumed);
+            }
+          }
+        );
+      } catch {
+        // keep the original failure
+      }
+      throw err;
+    }
+  }
 }

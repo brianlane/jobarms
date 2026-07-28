@@ -20,6 +20,14 @@ import { visibleTextInPage } from "./account.js";
 
 export type LinkedInAuthStatus = "authenticated" | "needs_login_code" | "login_failed";
 
+export interface JobCard {
+  jobId: string;
+  url: string;
+  title: string;
+  company: string;
+  location: string;
+}
+
 export interface LinkedInAuthResult {
   status: LinkedInAuthStatus;
   /**
@@ -193,6 +201,105 @@ export async function signInLinkedIn(
  * session that started the login. Returns the resulting status so the caller can
  * resume the run or fail it honestly.
  */
+/**
+ * Runs IN THE PAGE. Collect the visible job cards on a LinkedIn search results
+ * page: the posting link plus whatever title/company/location the card shows.
+ *
+ * `document` is reached through globalThis because the package carries no DOM
+ * lib (same convention as extract.ts). Exported so it can be unit-tested against
+ * a fake document.
+ */
+export const collectJobCardsInPage = (): Array<{
+  href: string;
+  title: string;
+  company: string;
+  location: string;
+}> => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const doc = (globalThis as any).document;
+  const text = (el: unknown): string =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (((el as any)?.innerText ?? (el as any)?.textContent ?? "") as string).trim();
+  const cards: unknown[] = Array.from(
+    doc?.querySelectorAll?.(
+      ".job-card-container, li.jobs-search-results__list-item, [data-job-id]"
+    ) ?? []
+  );
+  const out: Array<{ href: string; title: string; company: string; location: string }> = [];
+  for (const card of cards) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const c = card as any;
+    const link =
+      c.querySelector?.("a[href*='/jobs/view/']") ?? c.querySelector?.("a.job-card-container__link");
+    const href = (link?.href ?? link?.getAttribute?.("href") ?? "") as string;
+    if (!href) continue;
+    out.push({
+      href,
+      title: text(link),
+      company: text(
+        c.querySelector?.(".artdeco-entity-lockup__subtitle, .job-card-container__primary-description")
+      ),
+      location: text(
+        c.querySelector?.(".job-card-container__metadata-item, .artdeco-entity-lockup__caption")
+      )
+    });
+  }
+  return out;
+};
+
+/** The numeric posting id from a LinkedIn job href, or null. */
+function jobIdFromHref(href: string): string | null {
+  const m = href.match(/\/jobs\/view\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Search LinkedIn for Easy Apply jobs matching the query, in the held session.
+ *
+ * Returns up to `limit` cards, deduplicated by posting id and normalized to the
+ * canonical view URL the apply path drives. Best-effort: a search that renders
+ * nothing yields an empty list, and the batch simply applies to nothing.
+ */
+export async function searchEasyApply(
+  page: Page,
+  args: { keywords: string; location: string; remote: boolean; limit: number }
+): Promise<JobCard[]> {
+  const params = new URLSearchParams({ keywords: args.keywords, f_AL: "true" });
+  if (args.location) params.set("location", args.location);
+  // f_WT=2 is LinkedIn's "Remote" workplace-type filter.
+  if (args.remote) params.set("f_WT", "2");
+  await page
+    .goto(`https://www.linkedin.com/jobs/search/?${params.toString()}`, {
+      waitUntil: "domcontentloaded"
+    })
+    .catch(() => {});
+  await page.waitForTimeout(2000);
+
+  // Results lazy-load as the list scrolls; nudge it a few times before reading.
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.wheel(0, 2000).catch(() => {});
+    await page.waitForTimeout(800);
+  }
+
+  const raw = await page.evaluate(collectJobCardsInPage).catch(() => []);
+  const seen = new Set<string>();
+  const cards: JobCard[] = [];
+  for (const item of raw) {
+    const jobId = jobIdFromHref(item.href);
+    if (!jobId || seen.has(jobId)) continue;
+    seen.add(jobId);
+    cards.push({
+      jobId,
+      url: `https://www.linkedin.com/jobs/view/${jobId}/`,
+      title: item.title,
+      company: item.company,
+      location: item.location
+    });
+    if (cards.length >= args.limit) break;
+  }
+  return cards;
+}
+
 export async function submitLoginCode(
   page: Page,
   args: { code: string; checkpointUrl?: string | null }

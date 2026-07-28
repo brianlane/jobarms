@@ -7,6 +7,7 @@ import {
   extractForm,
   fetchResumeBase64,
   fillForm,
+  searchJobs,
   timers
 } from "../src/render";
 
@@ -205,6 +206,27 @@ describe("the phase calls", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/login-code");
     const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
     expect(JSON.parse(init.body)).toMatchObject({ code: "483920", tenantHost: "www.linkedin.com" });
+  });
+
+  it("searchJobs posts the query to /search and returns the cards", async () => {
+    const cards = [
+      { jobId: "1", url: "https://www.linkedin.com/jobs/view/1/", title: "Eng", company: "Acme", location: "Remote" }
+    ];
+    const fetchMock = sidecar({ cards });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchJobs(env, {
+      userId: "u1",
+      keywords: "react",
+      location: "Denver",
+      remote: true,
+      limit: 5
+    });
+
+    expect(result).toEqual({ ok: true, data: { cards } });
+    expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/search");
+    const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
+    expect(JSON.parse(init.body)).toMatchObject({ keywords: "react", remote: true, limit: 5 });
   });
 
   it("fillForm posts answers, resume bytes, and the submit flag", async () => {

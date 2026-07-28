@@ -11,6 +11,13 @@ export const FREE_ARM_RUNS_PER_MONTH = 3;
 export const FREE_RESUME_PARSES_LIFETIME = 2;
 export const PREMIUM_ARM_RUNS_PER_MONTH = 200;
 export const MAX_ARM_RUNS_PER_DAY = 100;
+/**
+ * Hard ceiling on how many jobs one LinkedIn batch applies to, regardless of
+ * plan or how many the user asked for. Deliberately conservative: LinkedIn
+ * restricts accounts it detects as automated, and a batch already paces itself
+ * between applications, so this caps the blast radius of a single run.
+ */
+export const MAX_BATCH_APPLICATIONS = 25;
 export const PREMIUM_PRICE_USD_MONTHLY = 19;
 export const MAX_PRICE_USD_MONTHLY = 199;
 

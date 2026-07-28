@@ -4,6 +4,8 @@
 export interface Env {
   // Bindings
   APPLY_RUN?: Workflow;
+  /** Search-driven LinkedIn Easy Apply batches (BatchApplyWorkflow). */
+  BATCH_RUN?: Workflow;
 
   // Secrets (wrangler secret put)
   ARM_WORKER_SHARED_SECRET?: string;
@@ -70,6 +72,31 @@ export interface RunParams {
    * here: the app's `site_accounts` vault is the system of record.
    */
   account?: { email: string; password: string };
+}
+
+/** Everything a search-driven batch needs, snapshotted at dispatch time. */
+export interface BatchParams {
+  batchId: string;
+  userId: string;
+  keywords: string;
+  location: string;
+  remote: boolean;
+  /** Metering granted this many slots; the batch applies to at most this many. */
+  reserved: number;
+  /** The meter key the reservation was made under, for releasing unused slots. */
+  monthKey: string;
+  profile: Record<string, unknown>;
+  resume: {
+    signedUrl: string | null;
+    fileName: string;
+    mimeType: string;
+  };
+  memory?: {
+    answers: Array<{ label: string; answer: string; source: string }>;
+    lessons: string[];
+  };
+  /** The user's connected LinkedIn login (batches are LinkedIn-only). */
+  account: { email: string; password: string };
 }
 
 export interface FormField {

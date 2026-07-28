@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright";
-import { signInLinkedIn, submitLoginCode } from "../src/linkedin";
+import {
+  collectJobCardsInPage,
+  searchEasyApply,
+  signInLinkedIn,
+  submitLoginCode
+} from "../src/linkedin";
 import { fakePage, loc, TEST_CREDS } from "./helpers/fake-page";
 
 /** A page carrying a LinkedIn login form (email + password + submit). */
@@ -261,5 +266,142 @@ describe("submitLoginCode", () => {
       checkpointUrl: "https://www.linkedin.com/checkpoint/challenge/1"
     });
     expect(result.status).toBe("authenticated");
+  });
+});
+
+describe("searchEasyApply", () => {
+  const search = (page: ReturnType<typeof fakePage>, over = {}) =>
+    searchEasyApply(page as unknown as Page, {
+      keywords: "react engineer",
+      location: "Denver",
+      remote: true,
+      limit: 5,
+      ...over
+    });
+
+  it("drives the Easy Apply search URL and returns canonical cards", async () => {
+    const page = fakePage({
+      evaluate: () => [
+        {
+          href: "https://www.linkedin.com/jobs/view/111/?refId=x",
+          title: "Frontend Eng",
+          company: "Acme",
+          location: "Denver, CO"
+        }
+      ]
+    });
+
+    const cards = await search(page);
+
+    const gotoUrl = (page.goto as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(gotoUrl).toContain("https://www.linkedin.com/jobs/search/?");
+    expect(gotoUrl).toContain("keywords=react+engineer");
+    expect(gotoUrl).toContain("f_AL=true");
+    expect(gotoUrl).toContain("location=Denver");
+    expect(gotoUrl).toContain("f_WT=2");
+    expect(cards).toEqual([
+      {
+        jobId: "111",
+        url: "https://www.linkedin.com/jobs/view/111/",
+        title: "Frontend Eng",
+        company: "Acme",
+        location: "Denver, CO"
+      }
+    ]);
+  });
+
+  it("omits the location and remote filters when not asked for", async () => {
+    const page = fakePage({ evaluate: () => [] });
+    await search(page, { location: "", remote: false });
+    const gotoUrl = (page.goto as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(gotoUrl).not.toContain("location=");
+    expect(gotoUrl).not.toContain("f_WT");
+  });
+
+  it("dedupes repeated postings, skips non-posting links, and stops at the limit", async () => {
+    const page = fakePage({
+      evaluate: () => [
+        { href: "https://www.linkedin.com/jobs/view/1/", title: "A", company: "", location: "" },
+        // The same posting reached through a tracking URL: one card, not two.
+        { href: "https://www.linkedin.com/jobs/view/1/?refId=y", title: "A again", company: "", location: "" },
+        { href: "https://www.linkedin.com/company/acme/", title: "not a job", company: "", location: "" },
+        { href: "https://www.linkedin.com/jobs/view/2/", title: "B", company: "", location: "" },
+        { href: "https://www.linkedin.com/jobs/view/3/", title: "C", company: "", location: "" }
+      ]
+    });
+
+    const cards = await search(page, { limit: 2 });
+
+    expect(cards.map((c) => c.jobId)).toEqual(["1", "2"]);
+  });
+
+  it("returns nothing when the page cannot be driven at all", async () => {
+    const page = fakePage({
+      evaluate: () => {
+        throw new Error("page died");
+      }
+    });
+    page.goto = vi.fn(async () => {
+      throw new Error("nav refused");
+    });
+    (page.mouse as { wheel: ReturnType<typeof vi.fn> }).wheel = vi.fn(async () => {
+      throw new Error("no wheel");
+    });
+
+    expect(await search(page)).toEqual([]);
+  });
+});
+
+describe("collectJobCardsInPage", () => {
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+  });
+
+  it("reads the link, title, company, and location out of each card", () => {
+    (globalThis as { document?: unknown }).document = {
+      querySelectorAll: () => [
+        {
+          querySelector: (sel: string) => {
+            if (sel.includes("/jobs/view/")) {
+              return { href: "https://www.linkedin.com/jobs/view/9/", innerText: " Eng " };
+            }
+            if (sel.includes("subtitle")) return { innerText: " Acme " };
+            return { textContent: "Remote" };
+          }
+        }
+      ]
+    };
+
+    expect(collectJobCardsInPage()).toEqual([
+      { href: "https://www.linkedin.com/jobs/view/9/", title: "Eng", company: "Acme", location: "Remote" }
+    ]);
+  });
+
+  it("falls back to the explicit card link class and the href attribute", () => {
+    (globalThis as { document?: unknown }).document = {
+      querySelectorAll: () => [
+        {
+          querySelector: (sel: string) => {
+            // No generic /jobs/view/ anchor on this card...
+            if (sel.includes("/jobs/view/")) return null;
+            // ...but the titled card link exists, exposing href only as an attribute.
+            if (sel.includes("job-card-container__link")) {
+              return { getAttribute: () => "/jobs/view/7/" };
+            }
+            return null;
+          }
+        },
+        // A card with no link at all is skipped.
+        { querySelector: () => null }
+      ]
+    };
+
+    expect(collectJobCardsInPage()).toEqual([
+      { href: "/jobs/view/7/", title: "", company: "", location: "" }
+    ]);
+  });
+
+  it("returns nothing when there is no document to read", () => {
+    expect(collectJobCardsInPage()).toEqual([]);
   });
 });

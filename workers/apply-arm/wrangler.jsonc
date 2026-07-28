@@ -14,6 +14,11 @@
       "name": "apply-run",
       "binding": "APPLY_RUN",
       "class_name": "ApplyRunWorkflow"
+    },
+    {
+      "name": "batch-apply",
+      "binding": "BATCH_RUN",
+      "class_name": "BatchApplyWorkflow"
     }
   ],
   // Secrets (wrangler secret put): ARM_WORKER_SHARED_SECRET, SUPABASE_URL,

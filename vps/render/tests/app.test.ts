@@ -349,6 +349,72 @@ describe("POST /verify", () => {
   });
 });
 
+describe("POST /search", () => {
+  const RAW = [
+    {
+      href: "https://www.linkedin.com/jobs/view/4442245127/?refId=z",
+      title: "Frontend Eng",
+      company: "Acme",
+      location: "Remote"
+    }
+  ];
+
+  it("400s without a userId or a positive limit (or any body at all)", async () => {
+    const { app } = appWith(fakePage());
+    expect((await auth(request(app).post("/search"))).status).toBe(400);
+    for (const body of [
+      { keywords: "react", limit: 5 },
+      { userId: "u1", keywords: "react" },
+      { userId: "u1", keywords: "react", limit: 0 },
+      { userId: "u1", keywords: "react", limit: "five" }
+    ]) {
+      const res = await auth(request(app).post("/search").send(body));
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body).toEqual({ error: "invalid_body" });
+    }
+  });
+
+  it("searches in the held LinkedIn session and returns the cards", async () => {
+    const page = fakePage({ evaluate: () => RAW });
+    const { app, runPhase } = appWith(page);
+
+    const res = await phase(app, "/search", {
+      userId: "u1",
+      keywords: "react",
+      location: "Denver",
+      remote: true,
+      // A fractional limit is floored, not rejected.
+      limit: 2.9
+    });
+
+    expect(res.body).toEqual({
+      cards: [
+        {
+          jobId: "4442245127",
+          url: "https://www.linkedin.com/jobs/view/4442245127/",
+          title: "Frontend Eng",
+          company: "Acme",
+          location: "Remote"
+        }
+      ]
+    });
+    // The session is keyed to LinkedIn itself, not any job URL.
+    expect(runPhase.mock.calls[0][1]).toBe("www.linkedin.com");
+  });
+
+  it("defaults the optional fields and wraps a dead browser as render_failed", async () => {
+    const runPhase = vi.fn(async () => {
+      throw new Error("browser crashed");
+    });
+    const { app } = appWith(fakePage(), { runPhase: runPhase as never });
+
+    const res = await phase(app, "/search", { userId: "u1", limit: 3 });
+
+    expect(res.body).toMatchObject({ error: "render_failed" });
+    expect(String(res.body.detail)).toContain("browser crashed");
+  });
+});
+
 describe("POST /extract", () => {
   it("returns the filtered field set, scope, and a screenshot", async () => {
     const { app } = appWith(formPage());

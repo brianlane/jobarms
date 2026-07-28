@@ -174,6 +174,22 @@ export function ensureSession(
   return runPhase(env, "/session/ensure", args);
 }
 
+export interface JobCard {
+  jobId: string;
+  url: string;
+  title: string;
+  company: string;
+  location: string;
+}
+
+/** Search LinkedIn for up to `limit` Easy Apply jobs in the held session. */
+export function searchJobs(
+  env: Env,
+  args: { userId: string; keywords: string; location: string; remote: boolean; limit: number }
+): Promise<RenderResult<{ cards: JobCard[] }>> {
+  return runPhase(env, "/search", args);
+}
+
 export interface LoginCodeResponse {
   status: "authenticated" | "needs_login_code" | "login_failed";
   /** A re-prompt may move to a new challenge URL; the next attempt resumes here. */
