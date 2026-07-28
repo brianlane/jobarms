@@ -26,6 +26,7 @@ const db = vi.hoisted(() => ({
   updateApplication: vi.fn(async () => {}),
   releaseArmRunSlot: vi.fn(async () => {}),
   updateBatch: vi.fn(async () => {}),
+  settleBatchFailure: vi.fn(async () => true),
   upsertJob: vi.fn(async () => "job-1" as string | null),
   findApplication: vi.fn(async () => null as { id: string; status: string } | null),
   createApplication: vi.fn(async () => "app-1" as string | null),
@@ -135,6 +136,7 @@ beforeEach(() => {
   db.findApplication.mockResolvedValue(null);
   db.createApplication.mockResolvedValue("app-1");
   db.createRun.mockResolvedValue("run-1");
+  db.settleBatchFailure.mockResolvedValue(true);
 });
 
 describe("batchPace", () => {
@@ -327,6 +329,10 @@ describe("BatchApplyWorkflow", () => {
       remote: true,
       limit: 5
     });
+    // Each card was pre-charged before it was driven, so a cancel racing an
+    // in-flight application can never release a slot whose work happened.
+    expect(db.updateBatch).toHaveBeenCalledWith(env, "b1", { consumed: 1 });
+    expect(db.updateBatch).toHaveBeenCalledWith(env, "b1", { consumed: 2 });
     // Both consumed a slot (real work), so 3 of the 5 reserved go back.
     expect(db.releaseArmRuns).toHaveBeenCalledWith(env, "u1", "2026-07", 3);
     expect(db.updateBatch).toHaveBeenCalledWith(env, "b1", {
@@ -426,13 +432,22 @@ describe("BatchApplyWorkflow", () => {
   it("fails the batch when LinkedIn rejects the sign-in outright", async () => {
     render.ensureSession.mockResolvedValue(ok({ status: "login_failed" }));
     await expect(run(batchParams())).rejects.toThrow(/ats_login_failed/);
-    expect(db.updateBatch).toHaveBeenCalledWith(
+    expect(db.settleBatchFailure).toHaveBeenCalledWith(
       env,
       "b1",
-      expect.objectContaining({ status: "failed", error: expect.stringContaining("ats_login_failed") })
+      expect.objectContaining({ error: expect.stringContaining("ats_login_failed") })
     );
     // Nothing was consumed, so everything reserved goes back.
     expect(db.releaseArmRuns).toHaveBeenCalledWith(env, "u1", "2026-07", 5);
+  });
+
+  it("leaves the release to the app when a cancel already settled the batch", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "login_failed" }));
+    // The guarded write found the batch already canceled: the app's cancel
+    // route released the unspent slots, so releasing here would double-credit.
+    db.settleBatchFailure.mockResolvedValue(false);
+    await expect(run(batchParams())).rejects.toThrow(/ats_login_failed/);
+    expect(db.releaseArmRuns).not.toHaveBeenCalled();
   });
 
   it("fails the batch when the code is still rejected on the last attempt", async () => {
@@ -472,8 +487,9 @@ describe("BatchApplyWorkflow", () => {
 
   it("still dies with the ORIGINAL error when the failure bookkeeping also fails", async () => {
     render.ensureSession.mockResolvedValue(fail("render_unreachable"));
-    db.releaseArmRuns.mockRejectedValue(new Error("db down"));
+    db.settleBatchFailure.mockRejectedValue(new Error("db down"));
     await expect(run(batchParams())).rejects.toThrow(/render_unreachable/);
+    expect(db.releaseArmRuns).not.toHaveBeenCalled();
   });
 
   it("handles a search that finds nothing: no applications, everything released", async () => {
@@ -495,10 +511,10 @@ describe("BatchApplyWorkflow", () => {
   it("wraps a non-Error failure into the terminal record", async () => {
     render.ensureSession.mockRejectedValue("string failure");
     await expect(run(batchParams())).rejects.toBe("string failure");
-    expect(db.updateBatch).toHaveBeenCalledWith(
+    expect(db.settleBatchFailure).toHaveBeenCalledWith(
       env,
       "b1",
-      expect.objectContaining({ status: "failed", error: "string failure" })
+      expect.objectContaining({ error: "string failure" })
     );
   });
 });

@@ -151,6 +151,33 @@ export async function markBatchCanceled(env: Env, batchId: string): Promise<void
 }
 
 /**
+ * Mark a batch failed, but only if it is still in a live state, reporting
+ * whether the write landed. The batch's failure path releases the unspent
+ * reservation ONLY when it landed: a batch the user already canceled had its
+ * release done by the app's cancel route, and doing it again here would
+ * double-credit the quota (and overwrite "canceled" with "failed").
+ */
+export async function settleBatchFailure(
+  env: Env,
+  batchId: string,
+  patch: Record<string, unknown>
+): Promise<boolean> {
+  const filter =
+    `id=eq.${encodeURIComponent(batchId)}` +
+    `&status=in.(queued,searching,running,needs_login_code)`;
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/apply_batches?${filter}`, {
+    method: "PATCH",
+    headers: { ...headers(env), Prefer: "return=representation" },
+    body: JSON.stringify({ ...patch, status: "failed" })
+  });
+  if (!res.ok) {
+    throw new Error(`settleBatchFailure ${batchId} failed: ${res.status}`);
+  }
+  const rows = (await res.json()) as unknown[];
+  return rows.length > 0;
+}
+
+/**
  * Ensure a jobs row for this URL and return its id.
  *
  * ignore-duplicates, never merge: `jobs` is shared across users, so a batch must

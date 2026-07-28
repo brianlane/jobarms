@@ -7,6 +7,7 @@ import {
   getFillTactics,
   getPlaybook,
   markBatchCanceled,
+  settleBatchFailure,
   recordFillTactic,
   recordFillTacticFailure,
   logStep,
@@ -215,6 +216,27 @@ describe("batch db helpers", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
     await expect(updateBatch(env, "b1", {})).rejects.toThrow(/updateBatch/);
+  });
+
+  it("settleBatchFailure flips live states only, reporting whether it landed", async () => {
+    // A live batch: the guarded PATCH matches and returns the updated row.
+    const fetchMock = vi.fn().mockResolvedValue(ok([{ id: "b1" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await settleBatchFailure(env, "b1", { error: "boom", consumed: 2 })).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "status=in.(queued,searching,running,needs_login_code)"
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      status: "failed",
+      error: "boom"
+    });
+
+    // Already canceled/completed: nothing matched, so the failure did NOT land.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([])));
+    expect(await settleBatchFailure(env, "b1", {})).toBe(false);
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    await expect(settleBatchFailure(env, "b1", {})).rejects.toThrow(/settleBatchFailure/);
   });
 
   it("markBatchCanceled only targets live states, and throws on failure", async () => {

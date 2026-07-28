@@ -28,6 +28,7 @@ const db = vi.hoisted(() => ({
   // Batch support (exercised in batch-workflow.test.ts; mocked here so the
   // module's imports resolve).
   updateBatch: vi.fn(async () => {}),
+  settleBatchFailure: vi.fn(async () => true),
   upsertJob: vi.fn(async () => "job-1" as string | null),
   findApplication: vi.fn(async () => null as { id: string; status: string } | null),
   createApplication: vi.fn(async () => "app-1" as string | null),

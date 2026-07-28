@@ -44,6 +44,7 @@ import {
   recordPlaybookFailure,
   releaseArmRuns,
   releaseArmRunSlot,
+  settleBatchFailure,
   updateApplication,
   updateBatch,
   updateRun,
@@ -939,6 +940,18 @@ export class BatchApplyWorkflow extends WorkflowEntrypoint<Env, BatchParams> {
       // --- Apply, one job at a time, paced ----------------------------------
       for (let i = 0; i < cards.length; i++) {
         const card = cards[i];
+
+        // Pre-charge the slot BEFORE driving the card. A cancel reads the
+        // persisted `consumed` to decide how much to release, and the apply
+        // step can do real work (submit an application) before the progress
+        // write below lands. Charging first means a cancel racing an in-flight
+        // card can only UNDER-release by one slot, never credit back work that
+        // actually happened; the progress step corrects the charge downward
+        // when the card turned out not to consume.
+        await step.do(`batch precharge ${i}`, async () => {
+          await updateBatch(env, params.batchId, { consumed: consumed + 1 });
+        });
+
         const outcome = await step.do(`batch apply ${i}`, () => applyToCard(env, params, card));
 
         if (outcome !== "skipped") processed++;
@@ -976,15 +989,21 @@ export class BatchApplyWorkflow extends WorkflowEntrypoint<Env, BatchParams> {
           "batch record terminal failure",
           { retries: { limit: 4, delay: "10 seconds", backoff: "exponential" } },
           async () => {
-            await releaseArmRuns(env, params.userId, params.monthKey, params.reserved - consumed);
-            await updateBatch(env, params.batchId, {
-              status: "failed",
+            // Guarded flip: only a batch still in a LIVE state becomes failed.
+            // If a user cancel got here first, the app's cancel route already
+            // released the unspent slots, so releasing again would
+            // double-credit; the guard reports whether the failure landed and
+            // the release happens only when it did.
+            const landed = await settleBatchFailure(env, params.batchId, {
               error: message.slice(0, 500),
               processed,
               applied,
               failed,
               consumed
             });
+            if (landed) {
+              await releaseArmRuns(env, params.userId, params.monthKey, params.reserved - consumed);
+            }
           }
         );
       } catch {
