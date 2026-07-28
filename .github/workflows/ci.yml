@@ -400,14 +400,23 @@ jobs:
           npm run deploy
 
   # Deploy the render sidecar to the KVM1 box on pushes to main, but ONLY when
-  # something under vps/render/ actually changed: the sidecar lives on a shared
-  # box and each deploy rsyncs, rebuilds, and restarts it, so redeploying on
-  # every unrelated merge would needlessly bounce the browser. This replaces the
-  # "run deploy.sh by hand and hope you remember" step; the script stays the
-  # fallback and the way to bootstrap the box. Skips gracefully (does not fail
-  # the run) while KVM1_SSH_KEY is unset, so the box's key never has to live in
-  # CI until you choose to put it there. See README "Deploying and verifying the
-  # sidecar".
+  # the box is actually behind: the sidecar lives on a shared box holding live
+  # browser sessions, and each deploy rsyncs, rebuilds, and restarts it, so
+  # redeploying on every unrelated merge would needlessly bounce the browser.
+  #
+  # "Behind" is judged against the BOX, not against the push range. The old
+  # detection diffed `github.event.before..sha`, which loses changes forever
+  # when the run that carried them fails before deploying: the next push's
+  # range no longer contains them, reports "nothing to deploy", and main and
+  # the box silently diverge (exactly how the Ashby extraction fix merged
+  # green and never shipped). The box now records the vps/render TREE hash it
+  # runs, and this job deploys whenever main's tree differs, whatever push
+  # history led here. A box with no recorded tree (first run, manual deploy
+  # in between) deploys to be safe.
+  #
+  # Skips gracefully (does not fail the run) while KVM1_SSH_KEY is unset, so
+  # the box's key never has to live in CI until you choose to put it there.
+  # See README "Deploying and verifying the sidecar".
   sidecar-deploy:
     name: Sidecar Deploy
     if: github.event_name == 'push'
@@ -417,36 +426,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # Full history so the whole push range can be diffed below, however
-          # many commits it carried.
-          fetch-depth: 0
 
-      - name: Detect sidecar changes
-        id: changed
-        env:
-          # The full range this push added, not just the tip's parent: a single
-          # push can carry several commits (e.g. a bundled Dependabot squash plus
-          # a PR squash, per the workers-deploy note in this file), and vps/render
-          # may have changed in any of them.
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: |
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            # New branch, force-push, or a base we no longer have: cannot compute
-            # the range, so deploy to be safe rather than silently skip.
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "No usable previous commit; deploying the sidecar to be safe."
-          elif git diff --name-only "$BEFORE" "$AFTER" | grep -q '^vps/render/'; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "vps/render changed in this push: deploying the sidecar."
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No vps/render changes in this push; nothing to deploy."
-          fi
-
-      - name: Deploy sidecar to KVM1
-        if: steps.changed.outputs.changed == 'true'
+      - name: Deploy sidecar when the box is behind
         env:
           KVM1_SSH_KEY: ${{ secrets.KVM1_SSH_KEY }}
           RENDER_TOKEN: ${{ secrets.RENDER_TOKEN }}
@@ -474,6 +455,19 @@ jobs:
           # does not stall on the prompt. accept-new (not "no") still refuses a
           # CHANGED key, which would signal something is wrong.
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # The content identity of what main wants on the box: the git TREE
+          # hash of vps/render, which changes exactly when its contents do.
+          WANT="$(git rev-parse "HEAD:vps/render")"
+          MARKER="/opt/jobarms-render/DEPLOYED_TREE"
+          HAVE="$(ssh -i "$KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$TARGET" "cat $MARKER 2>/dev/null" || true)"
+          if [ "$WANT" = "$HAVE" ]; then
+            echo "Box already runs vps/render tree $WANT; nothing to deploy."
+            rm -f "$KEY_FILE"
+            exit 0
+          fi
+          echo "Box runs '${HAVE:-(no recorded tree)}', main wants $WANT: deploying."
+
           set +e
           SSH_KEY="$KEY_FILE" \
             RENDER_TOKEN="$RENDER_TOKEN" \
@@ -483,5 +477,10 @@ jobs:
             bash vps/render/scripts/deploy.sh "$TARGET"
           STATUS=$?
           set -e
+          if [ $STATUS -eq 0 ]; then
+            # Recorded only AFTER a successful deploy, so a failed one leaves
+            # the box marked behind and the next push tries again.
+            ssh -i "$KEY_FILE" -o BatchMode=yes "$TARGET" "printf '%s\n' '$WANT' > $MARKER"
+          fi
           rm -f "$KEY_FILE"
           exit $STATUS
