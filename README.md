@@ -802,6 +802,23 @@ SSH_KEY=/tmp/kvm1_key RENDER_TOKEN="$RENDER_TOKEN" \
 It is idempotent and ends with a health check. Confirm the code you expect
 actually landed (`grep` the built `dist/`), not just that the service is up.
 
+**A failed deploy says so, loudly.** The restart is the last thing that happens,
+so anything aborting after the source sync leaves the box holding new code while
+the old build keeps serving, which reads exactly like a deploy that has not taken
+effect yet. That cost hours once, so the script now prints an explicit warning
+naming that state, and tells you the `systemctl restart` to run once the cause is
+fixed.
+
+The cause that time was `apt`. The browser step used `playwright install
+--with-deps`, which made every deploy hostage to whatever repositories the box
+carries: NodeSource's `node_24.x` started returning 403 and deploys began dying at
+that line for reasons that had nothing to do with this service. It now installs the
+browser BINARY only (no apt), then asks the only question that matters, whether
+Chromium actually starts, and reaches for `--with-deps` solely if the answer is no.
+The dead NodeSource source list has been moved aside on KVM1
+(`/root/nodesource.sources.disabled`); Node is installed already, so nothing needs
+it.
+
 **Verifying a browser change is live.** Two levels, and the first is the one that
 catches real bugs:
 

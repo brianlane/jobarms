@@ -52,6 +52,19 @@ if [ -n "${SSH_KEY:-}" ]; then
 fi
 ssh_run() { ssh "${SSH_OPTS[@]}" "$@"; }
 
+# The restart is the LAST thing that happens, so anything that aborts after the
+# source sync leaves the box holding new code while the old build keeps serving.
+# That reads exactly like a successful deploy that has not taken effect yet, which
+# is how a fix sat on the box for hours looking live. Say it plainly instead.
+restarted=0
+trap '[ "$restarted" = 1 ] || {
+  echo ""
+  echo "!! DEPLOY FAILED, and the service was NOT restarted."
+  echo "   The box may now hold new code while the OLD build keeps serving."
+  echo "   Fix the cause and re-run this script, or once fixed, restart by hand:"
+  echo "     ssh $TARGET systemctl restart jobarms-render"
+} >&2' EXIT
+
 echo "==> syncing source to $TARGET:$APP_DIR"
 ssh_run "$TARGET" "mkdir -p $APP_DIR $STATE_DIR"
 # Source only: node_modules and build output are produced on the box.
@@ -79,12 +92,32 @@ npm ci --omit=dev --ignore-scripts
 npm install --no-save typescript@^7.0.2 @types/node @types/express
 npx tsc
 rm -rf node_modules/typescript
-# Chromium plus the system libraries it needs. Driven by the playwright that npm
-# actually RESOLVED, not the range package.json declares: those differ the moment
-# a caret range moves (^1.58.0 resolving to 1.62.0 installed browser build 1208
-# while the runtime wanted 1234, and the sidecar launched against a browser that
-# was not there). The installed binary always knows its own build.
-./node_modules/.bin/playwright install --with-deps chromium
+# The browser binary, driven by the playwright npm actually RESOLVED rather than
+# the range package.json declares: those differ the moment a caret range moves
+# (^1.58.0 resolving to 1.62.0 installed browser build 1208 while the runtime
+# wanted 1234, and the sidecar launched against a browser that was not there).
+# The installed binary always knows its own build.
+#
+# Note the absence of --with-deps. That runs apt, which made every deploy hostage
+# to the health of whatever repositories the box happens to carry: NodeSource's
+# node_24.x began returning 403, and deploys started dying HERE, after the new
+# code was already synced and built, with the old build still serving.
+./node_modules/.bin/playwright install chromium
+
+# Whether the system libraries are present is not really the question. Whether
+# Chromium starts is, so ask that instead, and only reach for apt if the answer
+# is no. On a box that already works this never touches a package manager.
+launches() {
+  node -e "require('playwright').chromium.launch({args:['--no-sandbox']}).then(b => b.close())" \
+    >/dev/null 2>&1
+}
+if ! launches; then
+  echo "chromium will not start; installing the system libraries it needs (uses apt)" >&2
+  ./node_modules/.bin/playwright install --with-deps chromium
+  # Deliberately unguarded: if it still will not start, the deploy must stop here
+  # rather than restart the service onto a browser that cannot open a page.
+  node -e "require('playwright').chromium.launch({args:['--no-sandbox']}).then(b => b.close())"
+fi
 REMOTE
 
 echo "==> writing systemd unit"
@@ -130,6 +163,8 @@ systemctl restart jobarms-render
 sleep 3
 systemctl is-active jobarms-render
 REMOTE
+
+restarted=1
 
 echo "==> health check"
 ssh_run "$TARGET" "curl -fsS http://127.0.0.1:$PORT/health"
