@@ -387,7 +387,13 @@ export function createApp(deps: AppDeps = {}): Express {
       const result = await withSlot(() =>
         runPhase(userId, tenantHost, async ({ page }) => {
           const auth = await submitLoginCode(page, { code, checkpointUrl });
-          return { status: auth.status, screenshotBase64: await shot(page) };
+          return {
+            status: auth.status,
+            // A re-prompt can move to a new challenge URL; hand it back so the
+            // next attempt resumes there rather than at the stale one.
+            ...(auth.checkpointUrl ? { checkpointUrl: auth.checkpointUrl } : {}),
+            screenshotBase64: await shot(page)
+          };
         })
       );
       return void res.json(result);

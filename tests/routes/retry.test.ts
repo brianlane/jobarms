@@ -354,6 +354,27 @@ describe("retrying a LinkedIn application", () => {
     expect((buildAndDispatchRun.mock.calls[0][1] as { ats?: string }).ats).toBe("linkedin");
   });
 
+  it("falls back to the raw URL when it cannot be normalized", async () => {
+    // A stored LinkedIn URL with no parseable id normalizes to null; retry still
+    // dispatches on the raw URL rather than crashing.
+    const rawUrl = "https://www.linkedin.com/jobs/";
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: { ...LI_JOB, url: rawUrl } } },
+      { data: null }
+    );
+    holder.service = service({
+      application_runs: [{ data: { id: "run2" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(200);
+    const args = buildAndDispatchRun.mock.calls[0][1] as { jobUrl?: string; ats?: string };
+    expect(args.jobUrl).toBe(rawUrl);
+    expect(args.ats).toBe("linkedin");
+  });
+
   it("409s and releases the slot when LinkedIn was disconnected", async () => {
     getLinkedInCredentials.mockResolvedValueOnce(null);
     holder.server = server({ data: { id: "app-1", resume_id: null, jobs: LI_JOB } }, { data: null });

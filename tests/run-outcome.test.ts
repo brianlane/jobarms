@@ -36,6 +36,9 @@ describe("cancelRefund: user behavior consumes, system failure refunds", () => {
   it("cancel on a dead-ended junk review refunds (cleanup, not a choice)", () => {
     expect(cancelRefund("needs_review", junkAnswers)).toBe(true);
   });
+  it("cancel while waiting on a LinkedIn PIN refunds (no application work yet)", () => {
+    expect(cancelRefund("needs_login_code", null)).toBe(true);
+  });
 });
 
 describe("retryDecision", () => {

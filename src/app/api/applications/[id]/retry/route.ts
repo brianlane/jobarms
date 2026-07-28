@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { ACCOUNT_REQUIRED_ATS, detectAts, dispatchAtsOf, tenantHostOf, type Ats } from "@/lib/ats";
+import {
+  ACCOUNT_REQUIRED_ATS,
+  detectAts,
+  dispatchAtsOf,
+  normalizeJobUrl,
+  tenantHostOf,
+  type Ats
+} from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
 import { ensureSiteAccount } from "@/lib/site-accounts";
 import { getLinkedInCredentials } from "@/lib/linkedin";
@@ -49,11 +56,15 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     description: string;
   } | null;
   if (!job) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  // Normalize the same way create does, so a stored URL that was never
+  // canonicalized (e.g. a LinkedIn search link on `linkedin.com` without `www`)
+  // keys the session and vault on the same host the create path would.
+  const jobUrl = normalizeJobUrl(job.url) ?? job.url;
   // Re-detect from the URL rather than trust the stored `jobs.ats`: the catalog
   // row is shared and may predate a detector (a LinkedIn posting ingested before
   // LinkedIn support still reads `unknown`), and the create route already routes
   // on the URL, so this keeps retry from silently dispatching the wrong adapter.
-  const detected = detectAts(job.url);
+  const detected = detectAts(jobUrl);
   const dispatchAts = dispatchAtsOf(detected);
 
   const { data: latestRun } = await supabase
@@ -163,7 +174,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   // is idempotent, so a retry signs in to the SAME account rather than creating
   // a second candidate profile on the employer's tenant). Generic runs never
   // touch the account path.
-  const tenantHost = tenantHostOf(job.url);
+  const tenantHost = tenantHostOf(jobUrl);
   let account: { email: string; password: string } | null = null;
   if (dispatchAts === "linkedin") {
     // Reuse the user's connected LinkedIn login. A disconnect between the
@@ -220,7 +231,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     runId: newRun.id,
     applicationId: id,
     userId: user.id,
-    jobUrl: job.url,
+    jobUrl,
     ats: dispatchAts,
     autonomy,
     jobTitle: job.title,

@@ -176,6 +176,8 @@ export function ensureSession(
 
 export interface LoginCodeResponse {
   status: "authenticated" | "needs_login_code" | "login_failed";
+  /** A re-prompt may move to a new challenge URL; the next attempt resumes here. */
+  checkpointUrl?: string | null;
   screenshotBase64?: string | null;
 }
 

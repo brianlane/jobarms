@@ -264,6 +264,23 @@ describe("POST /login-code", () => {
     );
   });
 
+  it("hands back the new checkpoint URL when LinkedIn re-prompts", async () => {
+    const page = fakePage({
+      locators: { 'input[name="pin"]': loc({ count: vi.fn(async () => 1) }) },
+      evaluate: () => ""
+    });
+    page.goto = vi.fn(async () => {});
+    page.url = vi.fn(() => "https://www.linkedin.com/checkpoint/challenge/2");
+    const { app } = appWith(page);
+    const res = await auth(
+      request(app)
+        .post("/login-code")
+        .send({ userId: "u1", tenantHost: "www.linkedin.com", code: "000000" })
+    );
+    expect(res.body.status).toBe("needs_login_code");
+    expect(res.body.checkpointUrl).toBe("https://www.linkedin.com/checkpoint/challenge/2");
+  });
+
   it("wraps a browser crash as render_failed", async () => {
     const runPhase = vi.fn(async () => {
       throw new Error("browser died");

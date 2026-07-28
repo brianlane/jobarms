@@ -26,6 +26,10 @@ export function hasMeaningfulAnswers(answers: RunAnswerLike[] | null): boolean {
  * Canceling working machinery or a real review consumes.
  */
 export function cancelRefund(status: string, answers: RunAnswerLike[] | null): boolean {
+  // A run parked on a LinkedIn PIN never got past sign-in, so canceling it did
+  // not consume any application work: refund, like a review that dead-ended
+  // with nothing to approve.
+  if (status === "needs_login_code") return true;
   return status === "needs_review" && !hasMeaningfulAnswers(answers);
 }
 

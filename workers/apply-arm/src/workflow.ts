@@ -152,6 +152,9 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
           // browser slot forever. Step names carry the attempt number because a
           // step name is the Workflows cache key: reusing one would replay the
           // first attempt's result and never wait for the next code.
+          // The challenge URL can move between attempts, so carry the freshest
+          // one forward rather than reusing the original from ensureSession.
+          let checkpointUrl = gate.checkpointUrl;
           for (let attempt = 1; ; attempt++) {
             let codeEvent: { payload?: { code?: string } };
             try {
@@ -166,33 +169,35 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
                 "login_code_timeout: the sign-in code was never entered, so nothing was submitted"
               );
             }
-            const verdict = await step.do(`submit login code ${attempt}`, async () => {
+            const result = await step.do(`submit login code ${attempt}`, async () => {
               const code = (codeEvent.payload?.code ?? "").trim();
-              const result = await completeLoginCode(env, {
+              const res = await completeLoginCode(env, {
                 userId: params.userId,
                 tenantHost: hostOf(params.jobUrl),
                 code,
-                checkpointUrl: gate.checkpointUrl
+                checkpointUrl
               });
-              if (!result.ok) throw renderFailure(result, "login code");
-              if (result.data.status === "authenticated") {
+              if (!res.ok) throw renderFailure(res, "login code");
+              if (res.data.status === "authenticated") {
                 await updateRun(env, params.runId, { status: "running", error: null });
                 await logStep(env, params.runId, "account_verified");
-                return "authenticated" as const;
+                return { verdict: "authenticated" as const, checkpointUrl: null };
               }
               // LinkedIn still wants a code (a wrong or expired digit): re-park
-              // for another try, up to the cap.
-              if (result.data.status === "needs_login_code" && attempt < LOGIN_CODE_MAX_ATTEMPTS) {
+              // for another try, up to the cap, resuming at whatever challenge
+              // URL it moved to.
+              if (res.data.status === "needs_login_code" && attempt < LOGIN_CODE_MAX_ATTEMPTS) {
                 await updateRun(env, params.runId, { status: "needs_login_code" });
                 await logStep(env, params.runId, "login_code_retry");
-                return "retry" as const;
+                return { verdict: "retry" as const, checkpointUrl: res.data.checkpointUrl ?? null };
               }
               // Out of tries, or a hard rejection. A fresh run can ask for a new
               // code; this one ends honestly (and refunds via the outer catch).
               await logStep(env, params.runId, "account_login_failed");
               throw new NonRetryableError("ats_login_failed: the sign-in code was not accepted");
             });
-            if (verdict === "authenticated") break;
+            if (result.verdict === "authenticated") break;
+            if (result.checkpointUrl) checkpointUrl = result.checkpointUrl;
           }
         }
       }

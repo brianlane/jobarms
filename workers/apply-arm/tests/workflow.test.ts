@@ -674,15 +674,25 @@ describe("candidate accounts", () => {
   });
 
   it("re-parks for another PIN when LinkedIn re-prompts, then resumes", async () => {
-    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
-    // First code is not accepted (LinkedIn keeps the checkpoint open); second is.
+    render.ensureSession.mockResolvedValue(
+      ok({ status: "needs_login_code", accountRequired: true, checkpointUrl: "https://li/checkpoint/1" })
+    );
+    // First code is not accepted and LinkedIn moves the challenge; second is.
     render.completeLoginCode
-      .mockResolvedValueOnce(ok({ status: "needs_login_code" }))
+      .mockResolvedValueOnce(ok({ status: "needs_login_code", checkpointUrl: "https://li/checkpoint/2" }))
       .mockResolvedValueOnce(ok({ status: "authenticated" }));
 
     await run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "0" } }));
 
     expect(render.completeLoginCode).toHaveBeenCalledTimes(2);
+    // First attempt uses the ensureSession checkpoint; the retry follows the
+    // challenge to the URL the re-prompt moved it to.
+    expect(render.completeLoginCode.mock.calls[0][1]).toMatchObject({
+      checkpointUrl: "https://li/checkpoint/1"
+    });
+    expect(render.completeLoginCode.mock.calls[1][1]).toMatchObject({
+      checkpointUrl: "https://li/checkpoint/2"
+    });
     expect(db.logStep).toHaveBeenCalledWith(env, "r1", "login_code_retry");
     expect(render.fillForm).toHaveBeenCalled();
   });
