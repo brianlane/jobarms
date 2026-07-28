@@ -99,6 +99,13 @@ describe("retryDecision", () => {
     expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });
   });
 
+  it("run awaiting a LinkedIn PIN: patient at first, stuck (retryable) after 24h", () => {
+    const status = "needs_login_code";
+    expect(retryDecision({ status, answers: null, created_at: recent }, NOW).eligible).toBe(false);
+    const d = retryDecision({ status, answers: null, created_at: stale }, NOW);
+    expect(d).toMatchObject({ eligible: true, cancelStale: true, refundStale: true });
+  });
+
   it("submitted run: never eligible", () => {
     expect(retryDecision({ status: "submitted", answers: realAnswers, created_at: recent }, NOW).eligible).toBe(false);
   });

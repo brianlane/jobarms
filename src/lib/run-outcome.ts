@@ -75,10 +75,16 @@ export function retryDecision(run: RunLike | null, now: Date = new Date()): Retr
   }
 
   // States where the arm is mid-flight and a stall means it is never finishing.
-  // `needs_account_verification` belongs here rather than with the review gate:
-  // it waits on a machine (an ATS confirmation mail), not on the user, so a run
-  // still sitting in it a day later is stuck, not patient.
-  const STALLABLE = ["queued", "running", "needs_account_verification"];
+  // `needs_account_verification` and `needs_login_code` belong here rather than
+  // with the review gate: both wait on something outside the run (an ATS mail, a
+  // LinkedIn PIN), and if the worker died without updating the row a run can
+  // zombie there past its own timeout, so a day later it is stuck, not patient.
+  const STALLABLE = [
+    "queued",
+    "running",
+    "needs_account_verification",
+    "needs_login_code"
+  ];
   const ageMs = now.getTime() - new Date(run.created_at).getTime();
   if (STALLABLE.includes(run.status) && ageMs > STALE_ACTIVE_MS) {
     return {
