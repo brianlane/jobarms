@@ -86,6 +86,23 @@ describe("generateAnswers", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{}] } }] }), text: async () => "" }));
     await expect(generateAnswers(env, params, fields)).rejects.toThrow();
   });
+
+  it("pins the answer policy: no volunteered declines, referrals deliberately blank", async () => {
+    // A run once answered a user's demographic survey with "Decline to
+    // self-identify" everywhere and nagged them for a referral name. The policy
+    // lives only in this prompt, so the prompt is where it is pinned.
+    const fetchMock = vi.fn().mockResolvedValue(geminiText("[]"));
+    vi.stubGlobal("fetch", fetchMock);
+    await generateAnswers(env, params, fields);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const prompt = body.contents[0].parts[0].text as string;
+    expect(prompt).toContain('NEVER pick a "prefer not to answer"');
+    expect(prompt).toContain("leave the question blank");
+    expect(prompt).toContain("Blank IS the answer");
+    // The old rule that volunteered declines on the user's behalf must be gone.
+    expect(prompt).not.toContain('otherwise choose the "decline to answer" style option');
+  });
 });
 
 describe("diagnosePage default action", () => {

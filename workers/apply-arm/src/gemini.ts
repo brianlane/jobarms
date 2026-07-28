@@ -205,11 +205,12 @@ ${JSON.stringify(fields)}
 Rules:
 - Return a JSON array: [{"name": "<field name>", "label": "<label>", "value": "<answer>", "skipped": false}, ...] covering EVERY field.
 - For select/radio/checkbox fields WITH a non-empty options array, the value MUST be copied EXACTLY from that options array (verbatim, including punctuation).
-- Checkbox fields with options are "select all that apply" groups: pick the option(s) that truthfully apply and join multiple with "; ". Always choose the explicit "None of the above" / "None of these apply" option when nothing else applies rather than skipping (these are required compliance questions).
+- Checkbox fields with options are "select all that apply" groups: pick the option(s) that truthfully apply and join multiple with "; ". For COMPLIANCE questions (sanctions lists, export control, "none of the following applies"), always choose the explicit "None of the above" / "None of these apply" option when nothing else applies rather than skipping. Demographic survey groups follow the demographics rule below instead.
 - For a select field with an EMPTY options array (a dynamic dropdown whose choices are not listed), infer the correct short value from the label: yes/no questions get "Yes" or "No"; a country dropdown gets the full country name; etc.
 - For a lone checkbox consent/acknowledgement field (no options) use "true".
 - For file fields return value "" and skipped true (files are attached separately).
-- Voluntary self-identification (EEO) fields: use the profile's eeo values if present; otherwise choose the "decline to answer" style option when available, else skip.
+- Demographic and voluntary self-identification (EEO) questions (gender, ethnicity, veteran status, disability, sexual orientation, age): answer from the profile's eeo values or from the candidate's previously approved answers above. When neither holds the fact, leave the question blank (value "", skipped true). NEVER pick a "prefer not to answer" / "decline to self-identify" style option unless the profile or a previously approved answer explicitly holds that preference.
+- Referral questions ("Were you referred by an employee? If so, write their name"): unless the profile or a previously approved answer names a referrer, answer value "" with skipped false. Blank IS the answer there; it is not missing information the candidate must supply.
 - Open-ended questions ("Why do you want to work here?", cover letter): 2-5 sentences, first person, grounded ONLY in real profile facts, tailored to the job description.
 - If a field truly cannot be answered from the profile (e.g. asks for information the profile lacks), set skipped true and value "".
 - Never use the em dash character anywhere in any answer; use a comma, colon, or hyphen instead.
