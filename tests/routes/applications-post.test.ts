@@ -115,6 +115,71 @@ describe("POST /api/applications", () => {
     expect((await res.json()).application_id).toBe("app1");
   });
 
+  it("backfills empty fields on an existing job row from the fresh fetch", async () => {
+    // A row created before its ATS had a metadata fetcher shows "Untitled
+    // role" forever otherwise, because re-pastes reuse the row as-is.
+    holder.server = fakeClient({ user: { id: "u1" } });
+    const from = fakeFrom({
+      jobs: [
+        { data: { id: "job1", title: "", company: "", location: "", description: "" } },
+        { data: null }
+      ],
+      applications: [{ data: null }, { data: { id: "app1" } }]
+    });
+    holder.service = fakeClient({ from, rpc: fakeRpc({}) });
+
+    const res = await POST(post({ url: GH, mode: "track_only" }));
+    expect(res.status).toBe(200);
+
+    const jobsQueries = from.mock.calls
+      .map((c, i) => ({ table: c[0], query: from.mock.results[i].value }))
+      .filter((q) => q.table === "jobs");
+    expect(jobsQueries[1].query.update).toHaveBeenCalledWith({
+      title: "Engineer",
+      company: "Acme",
+      location: "Remote",
+      description: "d"
+    });
+  });
+
+  it("backfills only the empty fields, never the populated ones", async () => {
+    holder.server = fakeClient({ user: { id: "u1" } });
+    const from = fakeFrom({
+      jobs: [
+        { data: { id: "job1", title: "Kept Title", company: "", location: "Kept City", description: "" } },
+        { data: null }
+      ],
+      applications: [{ data: null }, { data: { id: "app1" } }]
+    });
+    holder.service = fakeClient({ from, rpc: fakeRpc({}) });
+
+    await POST(post({ url: GH, mode: "track_only" }));
+
+    const jobsQueries = from.mock.calls
+      .map((c, i) => ({ table: c[0], query: from.mock.results[i].value }))
+      .filter((q) => q.table === "jobs");
+    expect(jobsQueries[1].query.update).toHaveBeenCalledWith({ company: "Acme", description: "d" });
+  });
+
+  it("skips the backfill entirely when the fetch returned nothing", async () => {
+    // The no-clobber rule's other half: an empty fetch (network hiccup,
+    // unknown ATS) must write nothing at all.
+    mocks.fetchJobMeta.mockResolvedValueOnce({ company: "", title: "", location: "", description: "", ats: "unknown" });
+    holder.server = fakeClient({ user: { id: "u1" } });
+    const from = fakeFrom({
+      jobs: [{ data: { id: "job1", title: "", company: "", location: "", description: "" } }],
+      applications: [{ data: null }, { data: { id: "app1" } }]
+    });
+    holder.service = fakeClient({ from, rpc: fakeRpc({}) });
+
+    await POST(post({ url: "https://example.com/job", mode: "track_only" }));
+
+    for (let i = 0; i < from.mock.calls.length; i++) {
+      if (from.mock.calls[i][0] !== "jobs") continue;
+      expect(from.mock.results[i].value.update).not.toHaveBeenCalled();
+    }
+  });
+
   it("500 when the job cannot be resolved (insert + race both empty)", async () => {
     holder.server = fakeClient({ user: { id: "u1" } });
     holder.service = service({ jobs: [{ data: null }, { data: null }, { data: null }] });
