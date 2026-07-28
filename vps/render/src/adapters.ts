@@ -9,6 +9,8 @@
  *    ATSes.
  */
 import type { Page } from "playwright";
+import { collectFields } from "./extract.js";
+import { looksLikeApplicationForm } from "./form-sanity.js";
 import type { Ats } from "./types.js";
 
 export interface AtsAdapter {
@@ -308,15 +310,34 @@ async function dismissConsentOverlay(page: Page): Promise<void> {
  * than a claimed success.
  */
 const generic: AtsAdapter = {
+  // Narrow on purpose: a real <form> must always win. Component-built career
+  // sites that render fields with NO <form> element are handled by the
+  // generic-only page-wide fallback in reach.ts, which runs only after this
+  // scope found nothing form-shaped.
   formSelector: "form",
   requiresAccount: false,
 
   async openApplication(page) {
-    // If no fillable form is on screen, try the two universal moves: clear a
-    // consent overlay, then click an Apply control and wait for something to
-    // mount.
+    /**
+     * Is the APPLICATION form already on screen? If so, another Apply click
+     * could navigate away from it. Answered by the SAME extraction + sanity
+     * pair the reach path uses, not by a lookalike heuristic: every attempt
+     * to approximate it (email input? email + name attribute?) either
+     * mistook a newsletter box for the form or skipped Apply on a page whose
+     * extraction was about to fail, because the sanity check also accepts
+     * label text, opaque field names, and sheer field volume. One check, one
+     * verdict. The password guard is the single extra rule, since a login
+     * widget can carry enough chrome to pass the sanity bar.
+     */
+    const applicationUp = async (): Promise<boolean> => {
+      if ((await page.locator('input[type="password"]').count()) > 0) return false;
+      return looksLikeApplicationForm(await collectFields(page, "body")).ok;
+    };
+
+    // If the form is not up, try the two universal moves: clear a consent
+    // overlay, then click an Apply control and wait for something to mount.
     for (let attempt = 0; attempt < 3; attempt++) {
-      if ((await page.locator("form input, form textarea, form select").count()) > 0) return;
+      if (await applicationUp()) return;
 
       await dismissConsentOverlay(page);
 

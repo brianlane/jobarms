@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright";
 import { ADAPTERS } from "../src/adapters";
-import { fakePage, loc } from "./helpers/fake-page";
+import { fakePage, goodFields, loc } from "./helpers/fake-page";
 
 const asPage = (p: ReturnType<typeof fakePage>) => p as unknown as Page;
 
@@ -212,11 +212,41 @@ describe("ashby", () => {
 describe("generic", () => {
   const generic = ADAPTERS.generic;
 
-  it("returns immediately when fillable form fields are already on screen", async () => {
-    const fields = loc({ count: vi.fn(async () => 3) });
-    const page = fakePage({ locators: { "form input": fields } });
+  it("skips Apply when page-wide extraction already passes the application sanity check", async () => {
+    // The SAME extraction + sanity pair the reach path uses answers "is the
+    // form up", so the two can never disagree about what counts as a form.
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { ':has-text("Apply")': apply },
+      eval$$: () => goodFields()
+    });
     await generic.openApplication(asPage(page));
-    expect(page.locator).toHaveBeenCalledTimes(1);
+    expect(apply.click).not.toHaveBeenCalled();
+  });
+
+  it("still clicks Apply when a password field marks the visible fields as a login", async () => {
+    const password = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'input[type="password"]': password, ':has-text("Apply")': apply },
+      eval$$: () => goodFields()
+    });
+    await generic.openApplication(asPage(page));
+    expect(apply.click).toHaveBeenCalled();
+  });
+
+  it("clicks Apply when extraction finds only a newsletter box", async () => {
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { ':has-text("Apply")': apply },
+      eval$$: () => [{ name: "email", label: "Subscribe", type: "email", required: false, options: [] }]
+    });
+    await generic.openApplication(asPage(page));
+    expect(apply.click).toHaveBeenCalled();
+  });
+
+  it("keeps the narrow form scope (the page-wide fallback lives in reach.ts)", () => {
+    expect(generic.formSelector).toBe("form");
   });
 
   it("clicks Apply while no form is present, then gives up quietly", async () => {
