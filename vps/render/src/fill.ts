@@ -330,6 +330,23 @@ export async function fillCheckboxGroup(
           return;
         }
       }
+      // The truthy fallback is for PLAIN consent boxes only. A toggle whose
+      // wanted option matched no button must stay empty: checking the hidden
+      // box behind the widget's back renders nothing, the read-back reports
+      // selection from the buttons, and the interlock would flag a "filled"
+      // field the form visibly does not hold. Empty is honest and reviewable.
+      const buttonish = Number(
+        await container
+          .evaluate((node: unknown) => {
+            const container = node as { querySelectorAll: (s: string) => ArrayLike<unknown> };
+            return Array.from(container.querySelectorAll("button")).filter((b) => {
+              const text = ((b as { textContent?: string | null }).textContent ?? "").trim();
+              return text.length > 0 && text.length <= 30;
+            }).length;
+          })
+          .catch(() => 0)
+      );
+      if (buttonish >= 2) return;
       if (/^(true|yes|checked|on|1)$/i.test(wanted)) {
         await setBox(page, boxes.first(), true, tactic);
       }

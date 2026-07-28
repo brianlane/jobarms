@@ -482,6 +482,48 @@ describe("fillCheckboxGroup", () => {
     expect(box.check).not.toHaveBeenCalled();
   });
 
+  it("leaves a toggle empty when no button matches, instead of faking the checkbox", async () => {
+    // Checking the hidden box behind the widget's back renders nothing, and the
+    // read-back reports the buttons, so the interlock would flag a mismatch on
+    // a field the fill claimed to have handled. Empty is honest and reviewable.
+    const noMatch = loc({ count: vi.fn(async () => 0) });
+    const container = loc({
+      getByRole: vi.fn(() => noMatch),
+      // The in-page counter runs against a real container node in production;
+      // here it sees two plausible option buttons plus noise it must ignore.
+      evaluate: vi.fn(async (fn: (node: unknown) => number) =>
+        fn({
+          querySelectorAll: () => [
+            { textContent: "Yes" },
+            { textContent: "No" },
+            { textContent: null },
+            { textContent: "x".repeat(31) }
+          ]
+        })
+      )
+    });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "auth", "Yes");
+    expect(box.check).not.toHaveBeenCalled();
+  });
+
+  it("keeps the consent fallback when the container cannot even be counted", async () => {
+    const noMatch = loc({ count: vi.fn(async () => 0) });
+    const container = loc({
+      getByRole: vi.fn(() => noMatch),
+      evaluate: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "agree", "true");
+    expect(box.check).toHaveBeenCalled();
+  });
+
   it("swallows a toggle button whose click is refused", async () => {
     const yesButton = loc({
       count: vi.fn(async () => 1),
