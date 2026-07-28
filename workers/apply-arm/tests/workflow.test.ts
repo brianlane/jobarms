@@ -672,6 +672,30 @@ describe("candidate accounts", () => {
       expect.objectContaining({ code: "" })
     );
   });
+
+  it("re-parks for another PIN when LinkedIn re-prompts, then resumes", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+    // First code is not accepted (LinkedIn keeps the checkpoint open); second is.
+    render.completeLoginCode
+      .mockResolvedValueOnce(ok({ status: "needs_login_code" }))
+      .mockResolvedValueOnce(ok({ status: "authenticated" }));
+
+    await run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "0" } }));
+
+    expect(render.completeLoginCode).toHaveBeenCalledTimes(2);
+    expect(db.logStep).toHaveBeenCalledWith(env, "r1", "login_code_retry");
+    expect(render.fillForm).toHaveBeenCalled();
+  });
+
+  it("gives up after the PIN attempt cap", async () => {
+    render.ensureSession.mockResolvedValue(ok({ status: "needs_login_code", accountRequired: true }));
+    render.completeLoginCode.mockResolvedValue(ok({ status: "needs_login_code" }));
+
+    await expect(
+      run(params({ ...LI, autonomy: "full_auto" }), async () => ({ payload: { code: "0" } }))
+    ).rejects.toThrow(/ats_login_failed/);
+    expect(render.completeLoginCode).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("reaching the form", () => {

@@ -57,6 +57,13 @@ const ACCOUNT_REQUIRED: ReadonlySet<string> = new Set(["workday", "linkedin"]);
 const LOGIN_CODE_TIMEOUT = "30 minutes";
 
 /**
+ * How many PIN attempts before giving up. LinkedIn re-prompts on a mistyped
+ * code, so one wrong digit should not burn the run; a code that never works
+ * still cannot hold a browser slot indefinitely.
+ */
+const LOGIN_CODE_MAX_ATTEMPTS = 3;
+
+/**
  * How long to wait for an employer's account-verification email.
  *
  * Short compared to the review gate because nobody is being asked to do
@@ -139,39 +146,54 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
             await logStep(env, params.runId, "account_verified");
           });
         } else if (gate.wait === "code") {
-          let codeEvent: { payload?: { code?: string } };
-          try {
-            codeEvent = await step.waitForEvent<{ code?: string }>("await login code", {
-              type: "login-code",
-              timeout: LOGIN_CODE_TIMEOUT
-            });
-          } catch {
-            // The user never entered the PIN. No application work happened, so
-            // this refunds via the outer catch, same as the email-verify timeout.
-            throw new Error(
-              "login_code_timeout: the sign-in code was never entered, so nothing was submitted"
-            );
-          }
-          await step.do("submit login code", async () => {
-            const code = (codeEvent.payload?.code ?? "").trim();
-            const result = await completeLoginCode(env, {
-              userId: params.userId,
-              tenantHost: hostOf(params.jobUrl),
-              code,
-              checkpointUrl: gate.checkpointUrl
-            });
-            if (!result.ok) throw renderFailure(result, "login code");
-            if (result.data.status !== "authenticated") {
-              // A wrong or expired code. Not retryable: the same code will fail
-              // again, and a fresh run can ask for a new one.
-              await logStep(env, params.runId, "account_login_failed");
-              throw new NonRetryableError(
-                "ats_login_failed: the sign-in code was not accepted"
+          // LinkedIn re-prompts on a mistyped PIN, so give the user a few tries
+          // rather than fail the whole run (and the browser session) on one
+          // fat-fingered digit. Bounded so a code that never works cannot hold a
+          // browser slot forever. Step names carry the attempt number because a
+          // step name is the Workflows cache key: reusing one would replay the
+          // first attempt's result and never wait for the next code.
+          for (let attempt = 1; ; attempt++) {
+            let codeEvent: { payload?: { code?: string } };
+            try {
+              codeEvent = await step.waitForEvent<{ code?: string }>(`await login code ${attempt}`, {
+                type: "login-code",
+                timeout: LOGIN_CODE_TIMEOUT
+              });
+            } catch {
+              // The user stopped entering codes. No application work happened, so
+              // this refunds via the outer catch, like the email-verify timeout.
+              throw new Error(
+                "login_code_timeout: the sign-in code was never entered, so nothing was submitted"
               );
             }
-            await updateRun(env, params.runId, { status: "running", error: null });
-            await logStep(env, params.runId, "account_verified");
-          });
+            const verdict = await step.do(`submit login code ${attempt}`, async () => {
+              const code = (codeEvent.payload?.code ?? "").trim();
+              const result = await completeLoginCode(env, {
+                userId: params.userId,
+                tenantHost: hostOf(params.jobUrl),
+                code,
+                checkpointUrl: gate.checkpointUrl
+              });
+              if (!result.ok) throw renderFailure(result, "login code");
+              if (result.data.status === "authenticated") {
+                await updateRun(env, params.runId, { status: "running", error: null });
+                await logStep(env, params.runId, "account_verified");
+                return "authenticated" as const;
+              }
+              // LinkedIn still wants a code (a wrong or expired digit): re-park
+              // for another try, up to the cap.
+              if (result.data.status === "needs_login_code" && attempt < LOGIN_CODE_MAX_ATTEMPTS) {
+                await updateRun(env, params.runId, { status: "needs_login_code" });
+                await logStep(env, params.runId, "login_code_retry");
+                return "retry" as const;
+              }
+              // Out of tries, or a hard rejection. A fresh run can ask for a new
+              // code; this one ends honestly (and refunds via the outer catch).
+              await logStep(env, params.runId, "account_login_failed");
+              throw new NonRetryableError("ats_login_failed: the sign-in code was not accepted");
+            });
+            if (verdict === "authenticated") break;
+          }
         }
       }
 

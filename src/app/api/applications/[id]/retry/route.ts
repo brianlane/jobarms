@@ -185,7 +185,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   } else if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(detected) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     const siteAccount = alias
-      ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats: job.ats, email: alias })
+      ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats: detected, email: alias })
       : null;
     if (!siteAccount) {
       await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
