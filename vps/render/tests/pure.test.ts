@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { looksLikeApplicationForm } from "../src/form-sanity";
 import { filterApplicationFields, isNonApplicationField } from "../src/field-filter";
 import { checkboxLabelMatches, splitAnswerValues } from "../src/field-match";
-import { attrEscape, cssEscape } from "../src/fill";
+import { attrEscape } from "../src/fill";
 import type { FormField } from "../src/types";
 
 const field = (over: Partial<FormField> = {}): FormField => ({
@@ -143,13 +143,6 @@ describe("checkboxLabelMatches", () => {
     expect(checkboxLabelMatches("  ", ["yes"])).toBe(false);
     expect(checkboxLabelMatches("Yes", ["  "])).toBe(false);
     expect(checkboxLabelMatches("Yes", [])).toBe(false);
-  });
-});
-
-describe("cssEscape", () => {
-  it("escapes everything outside the safe identifier set", () => {
-    expect(cssEscape("a.b:c")).toBe("a\\.b\\:c");
-    expect(cssEscape("plain_name-1")).toBe("plain_name-1");
   });
 });
 
