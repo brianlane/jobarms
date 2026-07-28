@@ -123,6 +123,14 @@ describe("RunPanel terminal + errors", () => {
     ["submit_unconfirmed - x", /never showed a confirmation/],
     ["review_timeout: x", /sat for 7 days/],
     ["form_not_found: x", /couldn't find a real application form/],
+    // System failures own up instead of hiding behind "a problem": the Valon
+    // incident's error read only as the generic line, which told the user
+    // nothing about whose fault it was or whether anything got sent.
+    ["render_failed during fill for review: SyntaxError", /on our side.*Nothing was submitted/],
+    ["render_unreachable during fill for review", /on our side.*Nothing was submitted/],
+    // Mid-submit failures must NOT claim nothing was submitted: the click may
+    // have landed before the crash.
+    ["render_unreachable during submit", /couldn't confirm whether the application went through/],
     ["weird error", /couldn't recover from/]
   ])("maps error %s to a friendly message", (error, re) => {
     render(<RunPanel run={run({ status: "failed", error })} applicationId="app-1" />);
