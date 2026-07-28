@@ -1,6 +1,13 @@
 /** ATS detection + job-page URL normalization (pure, unit-tested). */
 
-export type Ats = "greenhouse" | "lever" | "workday" | "ashby" | "workable" | "unknown";
+export type Ats =
+  | "greenhouse"
+  | "lever"
+  | "workday"
+  | "ashby"
+  | "dayforce"
+  | "workable"
+  | "unknown";
 
 /**
  * Host suffixes, matched as the domain itself or a subdomain of it.
@@ -17,6 +24,9 @@ const ATS_HOSTS: ReadonlyArray<{ suffix: string; ats: Ats }> = [
   { suffix: "myworkdayjobs.com", ats: "workday" },
   { suffix: "myworkdaysite.com", ats: "workday" },
   { suffix: "ashbyhq.com", ats: "ashby" },
+  // Ceridian Dayforce candidate portals: <tenant>.dayforcehcm.com and the
+  // shared jobs.dayforcehcm.com host both serve from dayforcehcm.com.
+  { suffix: "dayforcehcm.com", ats: "dayforce" },
   { suffix: "workable.com", ats: "workable" }
 ];
 
@@ -35,7 +45,13 @@ export function detectAts(rawUrl: string): Ats {
 }
 
 /** ATSes the arm has a tuned adapter for today. */
-export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "workday", "ashby"]);
+export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
+  "greenhouse",
+  "lever",
+  "workday",
+  "ashby",
+  "dayforce"
+]);
 
 /**
  * The adapter a run dispatches with: the tuned adapter for supported ATSes,
@@ -45,7 +61,7 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "
  * re-enforces): review-gate only, never account creation, and an explicit
  * user acknowledgment that the attempt may fail and still consume a run.
  */
-export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "generic";
+export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "dayforce" | "generic";
 
 export function dispatchAtsOf(ats: Ats): DispatchAts {
   return SUPPORTED_ATS.has(ats) ? (ats as DispatchAts) : "generic";

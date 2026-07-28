@@ -8,7 +8,7 @@
  */
 
 /** ATSes the sidecar can drive; `generic` is the best-effort adapter for the rest. */
-export type Ats = "greenhouse" | "lever" | "workday" | "ashby" | "generic";
+export type Ats = "greenhouse" | "lever" | "workday" | "ashby" | "dayforce" | "generic";
 
 export interface FormField {
   /** input name/id used to locate the control. */

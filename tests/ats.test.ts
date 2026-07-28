@@ -15,6 +15,7 @@ describe("detectAts", () => {
     expect(detectAts("https://job-boards.greenhouse.io/acme/jobs/456")).toBe("greenhouse");
     expect(detectAts("https://jobs.lever.co/acme/uuid-here")).toBe("lever");
     expect(detectAts("https://jobs.ashbyhq.com/acme/uuid")).toBe("ashby");
+    expect(detectAts("https://jobs.dayforcehcm.com/en-US/acme/SITE/jobs/439")).toBe("dayforce");
     expect(detectAts("https://apply.workable.com/acme/j/ABC123/")).toBe("workable");
     expect(detectAts("https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/x_JR1")).toBe("workday");
     expect(detectAts("https://acme.wd5.myworkdaysite.com/Careers/job/x_JR1")).toBe("workday");
@@ -40,11 +41,12 @@ describe("detectAts", () => {
     expect(detectAts("not a url")).toBe("unknown");
   });
 
-  it("supports greenhouse, lever, workday, and ashby", () => {
+  it("supports greenhouse, lever, workday, ashby, and dayforce", () => {
     expect(SUPPORTED_ATS.has("greenhouse")).toBe(true);
     expect(SUPPORTED_ATS.has("lever")).toBe(true);
     expect(SUPPORTED_ATS.has("workday")).toBe(true);
     expect(SUPPORTED_ATS.has("ashby")).toBe(true);
+    expect(SUPPORTED_ATS.has("dayforce")).toBe(true);
     expect(SUPPORTED_ATS.has("workable")).toBe(false);
     expect(SUPPORTED_ATS.has("unknown")).toBe(false);
   });
@@ -54,6 +56,7 @@ describe("detectAts", () => {
     expect(dispatchAtsOf("lever")).toBe("lever");
     expect(dispatchAtsOf("workday")).toBe("workday");
     expect(dispatchAtsOf("ashby")).toBe("ashby");
+    expect(dispatchAtsOf("dayforce")).toBe("dayforce");
     expect(dispatchAtsOf("workable")).toBe("generic");
     expect(dispatchAtsOf("unknown")).toBe("generic");
   });

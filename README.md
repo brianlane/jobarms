@@ -66,7 +66,7 @@ which keeps the logged-in session alive between them.
 
 1. User pastes a job URL (`POST /api/applications`). The app normalizes the
    URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse, Lever,
-   Workday, and Ashby have tuned adapters; anything else dispatches the
+   Workday, Ashby, and Dayforce have tuned adapters; anything else dispatches the
    best-effort `generic` adapter, below), upserts the job (public ATS APIs
    provide title/company/description), **reserves a metered run**
    (`try_reserve_arm_run` RPC, row-locked monthly cap), snapshots the
@@ -694,6 +694,34 @@ which is what makes best-effort get better with use. `confirmSubmitted` is
 deliberately strict: with no known confirmation shape, anything less than
 explicit success wording ends as an honest `submit_unconfirmed` (which
 consumes the run, exactly what the user acknowledged).
+
+## Dayforce (a guest-flow wizard ATS)
+
+Ceridian Dayforce candidate portals (`jobs.dayforcehcm.com/<locale>/<tenant>/<site>/jobs/<id>`)
+apply without an account: the Apply button leads to a flow-selection screen where
+the arm always takes "Apply without an Account", then walks a multi-page wizard.
+
+- **Detection + metadata**: `dayforcehcm.com` in [src/lib/ats.ts](src/lib/ats.ts);
+  `parseDayforceUrl` + `fetchDayforce` in [src/lib/job-fetch.ts](src/lib/job-fetch.ts)
+  read the public site-context endpoint for the board id, then the posting
+  endpoint (`/api/geo/<tenant>/jobposting/<tenant>/<locale>/<boardId>/<id>`).
+  Company name is the tenant slug (the posting API carries none), same trade-off
+  as Lever and Ashby.
+- **Adapter** ([vps/render/src/adapters.ts](vps/render/src/adapters.ts)): dismiss
+  the consent card, click Apply, take the guest path, wait for the
+  `jobPostingApplication_`-prefixed form, then let the shared wizard loop advance
+  through pages with the text-based Next/Submit detection.
+- **The consent card is load-bearing.** It is a fixed `.ant-card` with a plain
+  "Accept" button that vision reads as an unclearable "privacy notice modal";
+  dismissing it first is what lets the arm reach the form at all.
+- **No proactive ingestion.** Unlike the other tuned ATSes, Dayforce's
+  job-search endpoint (`POST /api/geo/<tenant>/jobposting/search`) is anti-bot
+  protected: it returns `Forbidden` to any scripted request, including a
+  same-origin `fetch` from within the portal page, and only serves the SPA's own
+  navigation-driven call. So Dayforce jobs are drivable by pasted link but do not
+  populate the Discover feed; the schema (`companies.ats`) accepts `dayforce` for
+  when a browser-driven ingestion path exists. The single-posting GET the
+  metadata fetcher uses is NOT gated this way.
 
 ## Adding an ATS adapter (required checklist)
 

@@ -88,8 +88,8 @@ export function NewApplicationForm({ premium = false }: { premium?: boolean }) {
           className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 focus:border-arm-500 focus:outline-none"
         />
         <p className="mt-1 text-xs text-slate-400">
-          The arm is tuned for Greenhouse, Lever, Workday, and Ashby postings. Paste any other job
-          link and it will try its best.
+          The arm is tuned for Greenhouse, Lever, Workday, Ashby, and Dayforce postings. Paste any
+          other job link and it will try its best.
         </p>
       </div>
 

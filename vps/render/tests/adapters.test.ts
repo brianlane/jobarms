@@ -16,7 +16,11 @@ describe("adapter contract", () => {
     expect(ADAPTERS.workday.requiresAccount).toBe(true);
   });
 
-  it("gives wizard hooks to the multi-page ATSes (Workday and generic)", () => {
+  it("marks no tuned ATS except Workday as account-gated (Dayforce is guest-flow)", () => {
+    expect(ADAPTERS.dayforce.requiresAccount).toBe(false);
+  });
+
+  it("gives wizard hooks to the multi-page ATSes (Workday, Dayforce, generic)", () => {
     expect(ADAPTERS.greenhouse.nextPage).toBeUndefined();
     expect(ADAPTERS.lever.nextPage).toBeUndefined();
     expect(ADAPTERS.ashby.nextPage).toBeUndefined();
@@ -26,6 +30,8 @@ describe("adapter contract", () => {
     expect(ADAPTERS.generic.isLastPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.nextPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.isLastPage).toBeTypeOf("function");
+    expect(ADAPTERS.dayforce.nextPage).toBeTypeOf("function");
+    expect(ADAPTERS.dayforce.isLastPage).toBeTypeOf("function");
   });
 });
 
@@ -463,6 +469,115 @@ describe("generic", () => {
       throw new Error("navigation aborted");
     });
     expect(await generic.nextPage!(asPage(page))).toBe(true);
+  });
+});
+
+describe("dayforce", () => {
+  const df = ADAPTERS.dayforce;
+
+  it("clears consent, clicks Apply, and takes the guest path to the form", async () => {
+    const accept = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const guest = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      url: "https://jobs.dayforcehcm.com/en-US/acme/SITE/jobs/1",
+      locators: {
+        'button:text-is("Accept")': accept,
+        ':has-text("Apply without an Account")': guest,
+        ':has-text("Apply")': apply
+      }
+    });
+    await df.openApplication(asPage(page));
+    expect(accept.click).toHaveBeenCalled();
+    expect(apply.click).toHaveBeenCalled();
+    expect(guest.click).toHaveBeenCalled();
+    // The guest form fields are the hydration signal it waits on.
+    expect(page.waitForSelector).toHaveBeenCalledWith(
+      expect.stringContaining("jobPostingApplication"),
+      expect.anything()
+    );
+  });
+
+  it("skips the Apply click when already on an /apply URL", async () => {
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      url: "https://jobs.dayforcehcm.com/en-US/acme/SITE/jobs/1/apply?flowSelection=true",
+      locators: { ':has-text("Apply")': apply, ':has-text("Apply without an Account")': loc() }
+    });
+    await df.openApplication(asPage(page));
+    // The only Apply-ish control it should touch here is the guest button,
+    // which is absent, so nothing is clicked from the posting-page path.
+    expect(apply.click).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a posting with no Apply or guest control", async () => {
+    await expect(
+      df.openApplication(
+        asPage(fakePage({ url: "https://jobs.dayforcehcm.com/en-US/acme/SITE/jobs/1" }))
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("shrugs off click, load-state, and hydration failures (best-effort)", async () => {
+    const apply = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const guest = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({
+      url: "https://jobs.dayforcehcm.com/en-US/acme/SITE/jobs/1",
+      locators: {
+        ':has-text("Apply without an Account")': guest,
+        ':has-text("Apply")': apply
+      }
+    });
+    page.waitForLoadState = vi.fn(async () => {
+      throw new Error("navigation aborted");
+    });
+    page.waitForSelector = vi.fn(async () => {
+      throw new Error("timeout");
+    });
+    await expect(df.openApplication(asPage(page))).resolves.toBeUndefined();
+  });
+
+  it("submits through a Submit-text control and advances pages via Next", async () => {
+    const submit = loc({ count: vi.fn(async () => 1) });
+    const submitPage = fakePage({ locators: { 'button:has-text("Submit")': submit } });
+    await df.submit(asPage(submitPage));
+    expect(submit.click).toHaveBeenCalled();
+
+    // isLastPage keys off Submit text; nextPage advances only when no Submit.
+    expect(await df.isLastPage!(asPage(submitPage))).toBe(true);
+
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const nextPage = fakePage({ locators: { 'button:has-text("Next")': next } });
+    expect(await df.nextPage!(asPage(nextPage))).toBe(true);
+    expect(next.click).toHaveBeenCalled();
+    expect(await df.nextPage!(asPage(submitPage))).toBe(false);
+    expect(await df.nextPage!(asPage(fakePage()))).toBe(false);
+  });
+
+  it("confirms on Dayforce success wording, else honestly reports not-confirmed", async () => {
+    expect(await df.confirmSubmitted(asPage(fakePage({ locators: { "text=/": loc() } })))).toBe(true);
+    const missing = loc({
+      waitFor: vi.fn(async () => {
+        throw new Error("timeout");
+      })
+    });
+    const received = fakePage({
+      locators: { "text=/": missing },
+      content: "<p>Your application has been received</p>"
+    });
+    expect(await df.confirmSubmitted(asPage(received))).toBe(true);
+    const neither = fakePage({ locators: { "text=/": missing }, content: "<p>nope</p>" });
+    expect(await df.confirmSubmitted(asPage(neither))).toBe(false);
   });
 });
 

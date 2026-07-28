@@ -9,7 +9,15 @@
 /** Every ATS the catalog can hold (the jobs table check constraint). */
 import { pct } from "@/lib/admin/overview";
 
-export const CATALOG_ATS = ["greenhouse", "lever", "ashby", "workable", "workday", "unknown"] as const;
+export const CATALOG_ATS = [
+  "greenhouse",
+  "lever",
+  "ashby",
+  "workable",
+  "workday",
+  "dayforce",
+  "unknown"
+] as const;
 
 /** Where a job came from. `manual` means a user pasted the link themselves. */
 export const CATALOG_SOURCES = [

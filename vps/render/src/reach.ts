@@ -101,6 +101,7 @@ export async function applyStrategy(
         lever: "lever.co",
         workday: "myworkdayjobs.com",
         ashby: "ashbyhq.com",
+        dayforce: "dayforcehcm.com",
         // No provider to anchor on for unknown boards: any iframe with a src
         // is a candidate embed.
         generic: null

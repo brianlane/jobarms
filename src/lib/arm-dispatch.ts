@@ -4,7 +4,7 @@ import { lessonsFromStats } from "@/lib/answer-memory";
 import type { DispatchAts } from "@/lib/ats";
 
 /** ATSes with a tuned adapter, i.e. the members of SUPPORTED_ATS. */
-export type SupportedAts = "greenhouse" | "lever" | "workday" | "ashby";
+export type SupportedAts = "greenhouse" | "lever" | "workday" | "ashby" | "dayforce";
 
 export interface ResumeRow {
   file_name: string;
