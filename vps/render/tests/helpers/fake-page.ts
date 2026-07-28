@@ -25,6 +25,7 @@ export function loc(over: Record<string, unknown> = {}) {
     setInputFiles: vi.fn(async () => {}),
     waitFor: vi.fn(async () => {}),
     isEnabled: vi.fn(async () => true),
+    isVisible: vi.fn(async () => true),
     press: vi.fn(async () => {}),
     screenshot: vi.fn(async () => Buffer.from([1])),
     ...over
