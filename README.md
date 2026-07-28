@@ -744,7 +744,13 @@ apply-arm calls when a parked run needs its owner emailed.
   `SUPABASE_DB_PASSWORD`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
   `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN` (the scoped `jobarms-ci`
   token: Workers Scripts + jobarms.com zone Workers Routes / DNS / Email
-  Routing / Zone Settings).
+  Routing / Zone Settings). For the `sidecar-deploy` job: `KVM1_SSH_KEY`
+  (the KVM1 private key, materialized from newCoworker's vault, above),
+  `RENDER_TOKEN`, and the optional `RENDER_SOLVER_URL` +
+  `RENDER_SOLVER_TOKEN` (captcha callback) and `RENDER_DEPLOY_TARGET`
+  (`user@host`, defaults to the current KVM1 address). Note that
+  `KVM1_SSH_KEY` grants CI SSH into a box shared with newCoworker, so it is
+  set deliberately, not by default; until it is, the job no-ops.
 - **Worker secrets** (`wrangler secret put`, manual after adding a new one):
   listed under Environment variables above.
 - **Stripe webhook** registered at `https://jobarms.com/api/webhooks/stripe`
@@ -755,30 +761,38 @@ apply-arm calls when a parked run needs its owner emailed.
 - **Supabase auth config** is code: rerun
   `scripts/oneshot/configure-supabase-auth.ts` after editing templates,
   Site URL, or SMTP.
-- **Render sidecar**: deploy it (`vps/render/scripts/deploy.sh`), point a
+- **Render sidecar**: bootstrap it once (`vps/render/scripts/deploy.sh`), point a
   Cloudflare Tunnel hostname at `127.0.0.1:8085`, and set `RENDER_URL` +
   `RENDER_TOKEN` on the apply-arm worker and in Vercel. Without it arms cannot
   run: there is no browser anywhere else. It currently shares the internal KVM1
   box (`browser.jobarms.com`, its own `cloudflared-jobarms` unit alongside the
   connector already there), capped at one concurrent phase because that box has
-  a single vCPU. **The sidecar ships by script, not CI, so "merged" is not
-  "live"**: a change under `vps/render/` is not running until you redeploy. See
-  "Deploying and verifying the sidecar" below.
+  a single vCPU. After bootstrap, **CI redeploys the sidecar on pushes to main
+  whenever `vps/render/` changed** (the `sidecar-deploy` job), so "merged" is
+  "live" once the `KVM1_SSH_KEY` secret is set. The script stays the manual
+  fallback and the bootstrap path. See "Deploying and verifying the sidecar".
 - **Cloudflare plan**: the free plan is fine. Workers Paid was only ever needed
   for Browser Rendering minutes; revisit when run volume nears the free tier's
   3,000 workflow steps/day (roughly 300-400 arm runs/day).
 
 ## Deploying and verifying the sidecar
 
-CI never touches the box. Anything under `vps/render/` is inert until this runs,
-which is the single easiest thing to forget after a green merge.
+CI deploys the box on pushes to main when `vps/render/` changed (the
+`sidecar-deploy` job in `ci.yml`), using the `KVM1_SSH_KEY` secret. That is the
+normal path now. The steps below are for the FIRST bootstrap of a box, for
+materializing the key that CI needs, and for the manual fallback when you want to
+push a change to the box without a merge (the job skips gracefully whenever
+`KVM1_SSH_KEY` is unset, so nothing forces the box's key into CI before you
+choose to put it there). Verifying a change actually landed is still on you
+either way (below).
 
 **Getting in.** KVM1 accepts **publickey only**; password auth is off, so
 `HOSTINGER_ROOT_PASSWORD` cannot help and `sshpass` is a dead end. No key on the
 laptop is authorized. The working key lives in the **newCoworker** product's
 encrypted `vps_ssh_keys` vault, under business `8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`
 (NOT the clone business id recorded in `debug/.kvm1-smoke.json`, which has no key
-row). Materialize it with newCoworker's own helpers, then delete it afterwards:
+row). It is also what backs the `KVM1_SSH_KEY` GitHub secret the CI job uses.
+Materialize it with newCoworker's own helpers, then delete it afterwards:
 
 ```ts
 // throwaway in newCoworker/debug/, run with: npx tsx debug/<name>.ts
@@ -880,6 +894,11 @@ key, live Stripe, live Cloudflare): read before running.
   (`.github/scripts/supabase-deploy.sh`).
 - **workers-deploy** (main only): `wrangler deploy` per worker after the
   app deploy, using the scoped `CLOUDFLARE_API_TOKEN`.
+- **sidecar-deploy** (main only): runs `vps/render/scripts/deploy.sh` against
+  KVM1 after the app deploy, but ONLY when the push changed something under
+  `vps/render/`, so an unrelated merge never bounces the browser. Skips
+  gracefully while `KVM1_SSH_KEY` is unset (like workers-deploy without the
+  Cloudflare token).
 
 Dependabot is fully automated within the merge policy:
 
@@ -906,7 +925,10 @@ and `codeql.yml` (static analysis).
 **CI does automatically on every push to main** (ordered, each step
 blocking the next): apply pending Supabase migrations (`supabase db push`,
 fails loudly on ledger drift), bulk-deploy any edge functions, deploy the
-app to Vercel production, then deploy both Cloudflare workers.
+app to Vercel production, then deploy both Cloudflare workers. It ALSO
+redeploys the render sidecar to KVM1 when the push changed `vps/render/`
+(the `sidecar-deploy` job), so a browser change is live on merge rather than
+waiting for someone to remember `deploy.sh`.
 
 **Still manual after merge (when the change calls for it):**
 
@@ -914,6 +936,10 @@ app to Vercel production, then deploy both Cloudflare workers.
 - New Vercel env vars (or rerun `setup-vercel.ts`).
 - One-shot scripts (`scripts/oneshot/`), e.g. new Stripe prices or Supabase
   auth config changes.
+- **Verifying a sidecar deploy actually landed** is still on you even when CI
+  ran it: check the built `dist/` on the box and, for a browser-behavior
+  change, drive it with `submit: false` (see "Deploying and verifying the
+  sidecar").
 
 ## Writing style: banned words and characters
 

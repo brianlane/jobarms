@@ -255,6 +255,16 @@ Phase B - `vps/render` sidecar (the controllable browser):
 - [ ] **Manual**: generate `SOLVER_SHARED_SECRET`, put it on the apply-arm worker,
       and pass it to the sidecar deploy as `RENDER_SOLVER_TOKEN` along with
       `RENDER_SOLVER_URL=https://arm.jobarms.com/internal/solve-captcha`
+- [x] **CI deploys the sidecar** on pushes to main when `vps/render/` changed
+      (the `sidecar-deploy` job in ci.yml), so "merged" is "live" for browser
+      changes instead of relying on someone remembering `deploy.sh`. Path-gated
+      so unrelated merges never bounce the box; `deploy.sh` stays the fallback
+      and the bootstrap path.
+- [ ] **Manual**: set the `sidecar-deploy` GitHub secrets so the job is armed:
+      `KVM1_SSH_KEY` (from newCoworker's vault; grants CI SSH into the shared
+      box, so set deliberately), `RENDER_TOKEN`, and optionally
+      `RENDER_SOLVER_URL` / `RENDER_SOLVER_TOKEN` / `RENDER_DEPLOY_TARGET`. The
+      job no-ops until `KVM1_SSH_KEY` exists.
 
 Phase C - account vault + verification loop:
 
@@ -271,8 +281,10 @@ Phase C - account vault + verification loop:
       BEFORE the browser is touched so an outage cannot cost the user their mail
 - [x] `src/lib/render.ts` client: structured-error classification (a 200 with an
       error body is permanent; a non-2xx is transport and retryable)
-- [ ] **Manual**: `SITE_ACCOUNT_ENC_KEY` (openssl rand -hex 32) + `RENDER_URL` +
-      `RENDER_TOKEN` in .env and Vercel
+- [x] **Manual**: `SITE_ACCOUNT_ENC_KEY` (openssl rand -hex 32) + `RENDER_URL` +
+      `RENDER_TOKEN` in .env and Vercel (all three present in .env and synced to
+      Vercel production + preview; the enc key is permanent, rotating it orphans
+      the vault)
 
 Phase D - Workday:
 
