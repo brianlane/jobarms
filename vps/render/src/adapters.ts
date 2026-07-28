@@ -264,6 +264,39 @@ const ashby: AtsAdapter = {
 };
 
 /**
+ * Consent/cookie overlays intercept pointer events across the WHOLE page, so
+ * on an untuned board nothing (not even the Apply button) is clickable until
+ * one is dismissed; a bunq careers page proved it by timing out every click
+ * under a Framer cookie banner. Accept-shaped controls only, first visible
+ * match, best-effort: a page without a banner loses nothing.
+ *
+ * `:has-text()` matches case-insensitively, so one casing per phrase is
+ * enough. The attribute selector catches component-generated ids like
+ * `__framer-cookie-component-button-accept`.
+ */
+const CONSENT_SELECTORS = [
+  "#onetrust-accept-btn-handler",
+  '[id*="cookie"][id*="accept"]',
+  'button:has-text("Accept all")',
+  'button:has-text("Accept cookies")',
+  'button:has-text("I agree")',
+  'button:has-text("Allow all")',
+  'button:has-text("Got it")',
+  'button:has-text("Accept")'
+];
+
+async function dismissConsentOverlay(page: Page): Promise<void> {
+  for (const selector of CONSENT_SELECTORS) {
+    const control = page.locator(selector).first();
+    if ((await control.count()) > 0 && (await control.isVisible().catch(() => false))) {
+      await control.click().catch(() => {});
+      await page.waitForTimeout(500);
+      return;
+    }
+  }
+}
+
+/**
  * The best-effort adapter for boards nobody has tuned.
  *
  * It does the universal moves and nothing clever: everything harder is the
@@ -279,10 +312,13 @@ const generic: AtsAdapter = {
   requiresAccount: false,
 
   async openApplication(page) {
-    // If no fillable form is on screen, try the one universal move: click an
-    // Apply control and wait for something to mount.
+    // If no fillable form is on screen, try the two universal moves: clear a
+    // consent overlay, then click an Apply control and wait for something to
+    // mount.
     for (let attempt = 0; attempt < 3; attempt++) {
       if ((await page.locator("form input, form textarea, form select").count()) > 0) return;
+
+      await dismissConsentOverlay(page);
 
       const applyBtn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first();
       if ((await applyBtn.count()) > 0) {

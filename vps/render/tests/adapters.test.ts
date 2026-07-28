@@ -231,6 +231,47 @@ describe("generic", () => {
     await expect(generic.openApplication(asPage(fakePage()))).resolves.toBeUndefined();
   });
 
+  it("dismisses a consent overlay before clicking Apply", async () => {
+    const consent = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { "#onetrust-accept-btn-handler": consent, ':has-text("Apply")': apply }
+    });
+    await generic.openApplication(asPage(page));
+    expect(consent.click).toHaveBeenCalled();
+    expect(apply.click).toHaveBeenCalled();
+  });
+
+  it("ignores a consent control that is present but not visible", async () => {
+    const consent = loc({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => false) });
+    const page = fakePage({ locators: { "#onetrust-accept-btn-handler": consent } });
+    await generic.openApplication(asPage(page));
+    expect(consent.click).not.toHaveBeenCalled();
+  });
+
+  it("treats an isVisible failure as not visible, and swallows a consent click failure", async () => {
+    const flaky = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    await expect(
+      generic.openApplication(asPage(fakePage({ locators: { "#onetrust-accept-btn-handler": flaky } })))
+    ).resolves.toBeUndefined();
+    expect(flaky.click).not.toHaveBeenCalled();
+
+    const refusing = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("intercepted");
+      })
+    });
+    await expect(
+      generic.openApplication(asPage(fakePage({ locators: { "#onetrust-accept-btn-handler": refusing } })))
+    ).resolves.toBeUndefined();
+  });
+
   it("shrugs off a click or load-state failure (best-effort all the way down)", async () => {
     const apply = loc({
       count: vi.fn(async () => 1),
