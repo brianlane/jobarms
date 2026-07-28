@@ -43,6 +43,45 @@ describe("reachForm", () => {
     expect(result.recovery).toBeNull();
   });
 
+  it("sweeps the whole page for the generic adapter when <form> holds nothing", async () => {
+    // Component-built career sites render fields with no <form> element: the
+    // narrow scope fails, the page-wide sweep finds the real fields.
+    const page = pageWithExtractions([[], goodFields()]);
+    const result = await reachForm(
+      asPage(page),
+      "https://careers.example.com/jobs/1",
+      "generic",
+      {},
+      { throwIfNotFound: true }
+    );
+    expect(result.scope).toBe("body");
+    expect(result.recovery).toBeNull();
+    expect(result.rawFields).toHaveLength(3);
+  });
+
+  it("fails honestly when the generic page-wide sweep finds nothing either", async () => {
+    const page = pageWithExtractions([[], []]);
+    await expect(
+      reachForm(
+        asPage(page),
+        "https://careers.example.com/jobs/1",
+        "generic",
+        {},
+        { throwIfNotFound: true }
+      )
+    ).rejects.toThrow(FormNotFoundError);
+  });
+
+  it("does NOT give tuned adapters the bare page-wide sweep", async () => {
+    // The second extraction WOULD succeed page-wide, but lever must go
+    // through its recovery ladder instead of short-circuiting on landing-page
+    // chrome that happens to pass the sanity bar.
+    const page = pageWithExtractions([[], goodFields()]);
+    await expect(
+      reachForm(asPage(page), LEVER_URL, "lever", {}, { throwIfNotFound: true })
+    ).rejects.toThrow(FormNotFoundError);
+  });
+
   it("applies a stored playbook first and reports it as the recovery", async () => {
     // First extraction fails, the playbook runs, the second succeeds.
     const page = pageWithExtractions([[], goodFields()]);

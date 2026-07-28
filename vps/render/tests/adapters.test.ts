@@ -219,21 +219,56 @@ describe("generic", () => {
     expect(page.locator).toHaveBeenCalledTimes(1);
   });
 
-  it("recognizes a formless page by its email input and does not click Apply off it", async () => {
-    // Component-built career sites render fields without a <form>; the email
-    // input is the signal the application is already up, and clicking Apply
+  it("recognizes a formless application (email + phone, no password) and leaves Apply alone", async () => {
+    // Component-built career sites render fields without a <form>; email next
+    // to a phone/name field means the application is up, and clicking Apply
     // again could navigate away from it.
     const email = loc({ count: vi.fn(async () => 1) });
+    const phone = loc({ count: vi.fn(async () => 1) });
     const apply = loc({ count: vi.fn(async () => 1) });
     const page = fakePage({
-      locators: { 'input[type="email"]': email, ':has-text("Apply")': apply }
+      locators: {
+        'input[type="email"]': email,
+        'input[type="tel"]': phone,
+        ':has-text("Apply")': apply
+      }
     });
     await generic.openApplication(asPage(page));
     expect(apply.click).not.toHaveBeenCalled();
   });
 
-  it("scopes extraction to the whole page, not just <form> elements", () => {
-    expect(generic.formSelector).toContain("body");
+  it("recognizes a file upload as the application being up", async () => {
+    const file = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({ locators: { 'input[type="file"]': file, ':has-text("Apply")': apply } });
+    await generic.openApplication(asPage(page));
+    expect(apply.click).not.toHaveBeenCalled();
+  });
+
+  it("is not fooled by a newsletter box (email alone) or a login (email + password)", async () => {
+    const email = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const newsletter = fakePage({
+      locators: { 'input[type="email"]': email, ':has-text("Apply")': apply }
+    });
+    await generic.openApplication(asPage(newsletter));
+    expect(apply.click).toHaveBeenCalled();
+
+    const password = loc({ count: vi.fn(async () => 1) });
+    const applyLogin = loc({ count: vi.fn(async () => 1) });
+    const login = fakePage({
+      locators: {
+        'input[type="email"]': loc({ count: vi.fn(async () => 1) }),
+        'input[type="password"]': password,
+        ':has-text("Apply")': applyLogin
+      }
+    });
+    await generic.openApplication(asPage(login));
+    expect(applyLogin.click).toHaveBeenCalled();
+  });
+
+  it("keeps the narrow form scope (the page-wide fallback lives in reach.ts)", () => {
+    expect(generic.formSelector).toBe("form");
   });
 
   it("clicks Apply while no form is present, then gives up quietly", async () => {

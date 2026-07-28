@@ -177,6 +177,21 @@ export async function reachForm(
     };
   }
 
+  // Generic (untuned boards) only: component-built career sites render every
+  // field with NO <form> element (a bunq careers page held 41 fields that
+  // way), so sweep the whole page before spending any recovery rounds. The
+  // narrow scope above always wins first, and the sanity check still decides
+  // what counts as an application form. Tuned adapters deliberately do NOT
+  // get this: their selectors already carry the right fallbacks, and a
+  // premature wide pass on a landing page could mask the real, reachable
+  // form behind whatever chrome happens to pass the sanity bar.
+  if (ats === "generic") {
+    const wide = await acquire("body");
+    if (looksLikeApplicationForm(wide).ok) {
+      return { recovery: null, scope: "body", rawFields: wide, playbookFailed: false };
+    }
+  }
+
   const domain = new URL(page.url()).hostname;
   let playbookFailed = false;
 

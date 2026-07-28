@@ -308,25 +308,42 @@ async function dismissConsentOverlay(page: Page): Promise<void> {
  * than a claimed success.
  */
 const generic: AtsAdapter = {
-  // `body` is a real scope, not a fallback of last resort: component-built
-  // career sites (Framer and friends) render every field WITHOUT a <form>
-  // element, so a `form`-only scope reports form_not_found while 40 fields
-  // sit on screen (bunq's careers page did exactly that). The sanity check
-  // on the extracted fields is what decides whether the page holds an
-  // application form, so the wide scope stays honest.
-  formSelector: "form, body",
+  // Narrow on purpose: a real <form> must always win. Component-built career
+  // sites that render fields with NO <form> element are handled by the
+  // generic-only page-wide fallback in reach.ts, which runs only after this
+  // scope found nothing form-shaped.
+  formSelector: "form",
   requiresAccount: false,
 
   async openApplication(page) {
-    // If no fillable form is on screen, try the two universal moves: clear a
-    // consent overlay, then click an Apply control and wait for something to
-    // mount. An email input is the strongest formless-page signal that the
-    // application form is already up, in which case another Apply click could
-    // navigate away from it.
+    /**
+     * Is the APPLICATION form already on screen? If so, another Apply click
+     * could navigate away from it. Deliberately stricter than "any email
+     * input": landing pages carry newsletter boxes (email alone) and login
+     * widgets (email + password), and neither means the form is up. The
+     * signals: controls inside a real <form>, a file upload (nothing else on
+     * a career page wants a file), or an email field beside a phone/name
+     * field with no password in sight.
+     */
+    const applicationUp = async (): Promise<boolean> => {
+      if ((await page.locator("form input, form textarea, form select").count()) > 0) return true;
+      if ((await page.locator('input[type="file"]').count()) > 0) return true;
+      const emails = await page
+        .locator('input[type="email"], input[name*="email" i]')
+        .count();
+      if (emails === 0) return false;
+      if ((await page.locator('input[type="password"]').count()) > 0) return false;
+      return (
+        (await page
+          .locator('input[type="tel"], input[name*="phone" i], input[name*="name" i]')
+          .count()) > 0
+      );
+    };
+
+    // If the form is not up, try the two universal moves: clear a consent
+    // overlay, then click an Apply control and wait for something to mount.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const formish =
-        'form input, form textarea, form select, input[type="email"], input[name*="email" i]';
-      if ((await page.locator(formish).count()) > 0) return;
+      if (await applicationUp()) return;
 
       await dismissConsentOverlay(page);
 
