@@ -33,6 +33,11 @@ export function loc(over: Record<string, unknown> = {}) {
   l.first = over.first ?? vi.fn(() => l);
   l.nth = over.nth ?? vi.fn(() => l);
   l.filter = over.filter ?? vi.fn(() => l);
+  // Chained scoping (locator.locator / locator.getByRole) resolves to an empty
+  // locator unless a test wires it, so scoped lookups fall through to their
+  // page-wide fallbacks by default.
+  l.locator = over.locator ?? vi.fn(() => loc());
+  l.getByRole = over.getByRole ?? vi.fn(() => loc());
   return l;
 }
 
