@@ -249,6 +249,36 @@ describe("applyStrategy", () => {
     });
   });
 
+  it("resolves a relative embed src against the page URL", async () => {
+    const embed = loc({
+      count: vi.fn(async () => 1),
+      getAttribute: vi.fn(async () => "/embed/apply?posting=1")
+    });
+    const page = fakePage({
+      locators: { "iframe[src]": embed },
+      url: "https://careers.example.com/jobs/1"
+    });
+    await applyStrategy(asPage(page), "form", { action: "iframe" }, "generic");
+    expect(page.goto).toHaveBeenCalledWith("https://careers.example.com/embed/apply?posting=1", {
+      waitUntil: "domcontentloaded"
+    });
+  });
+
+  it("skips an embed src that cannot be resolved at all", async () => {
+    const embed = loc({
+      count: vi.fn(async () => 1),
+      // "http://" is malformed even against a base URL.
+      getAttribute: vi.fn(async () => "http://")
+    });
+    const page = fakePage({
+      locators: { "iframe[src]": embed },
+      url: "https://careers.example.com/jobs/1"
+    });
+    await applyStrategy(asPage(page), "form", { action: "iframe" }, "generic");
+    expect(page.goto).not.toHaveBeenCalled();
+    expect(page.mouse.wheel).toHaveBeenCalledTimes(5);
+  });
+
   it("refuses to navigate into an unsafe embed src", async () => {
     // The embed src comes from the PAGE, not the caller, so a loopback or
     // metadata target here would turn the recovery into an SSRF vector.

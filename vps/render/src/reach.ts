@@ -111,10 +111,20 @@ export async function applyStrategy(
         const embed = page.locator(embedSelector).first();
         if ((await embed.count()) > 0) {
           const src = await embed.getAttribute("src");
-          // Re-validated because the embed src comes from the PAGE, not the
-          // caller: on an untuned board any markup could offer an iframe, and
-          // a loopback or metadata target must never be navigated to.
-          const safe = src ? safeUrl(src) : null;
+          // Resolved against the page URL first (career sites commonly embed
+          // with relative paths), then re-validated because the value comes
+          // from the PAGE, not the caller: on an untuned board any markup
+          // could offer an iframe, and a loopback or metadata target must
+          // never be navigated to.
+          let resolved: string | null = null;
+          if (src) {
+            try {
+              resolved = new URL(src, page.url()).toString();
+            } catch {
+              resolved = null;
+            }
+          }
+          const safe = resolved ? safeUrl(resolved) : null;
           if (safe) {
             await page.goto(safe, { waitUntil: "domcontentloaded" });
             return;
