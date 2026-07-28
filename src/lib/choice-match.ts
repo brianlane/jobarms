@@ -44,6 +44,12 @@ export function checkboxLabelMatches(optionLabel: string, wanted: string[]): boo
 
 /**
  * Split a draft into the options it selects and the tokens matching none.
+ *
+ * Selection asks, for EVERY option, "does any token match it": that is the
+ * filler's own per-box loop, and one fuzzy token can legitimately select
+ * several boxes. Mapping each token to a single option under-reported what
+ * submit would actually tick.
+ *
  * The extras ride along untouched: an off-menu token the filler might still
  * place is the user's to keep or delete, never the UI's to silently drop.
  */
@@ -51,13 +57,11 @@ export function partitionGroupAnswer(
   value: string,
   options: string[]
 ): { selected: Set<string>; extras: string[] } {
-  const selected = new Set<string>();
-  const extras: string[] = [];
-  for (const token of splitAnswerValues(value)) {
-    const match = options.find((option) => checkboxLabelMatches(option, [token]));
-    if (match) selected.add(match);
-    else extras.push(token);
-  }
+  const tokens = splitAnswerValues(value);
+  const selected = new Set(options.filter((option) => checkboxLabelMatches(option, tokens)));
+  const extras = tokens.filter(
+    (token) => !options.some((option) => checkboxLabelMatches(option, [token]))
+  );
   return { selected, extras };
 }
 

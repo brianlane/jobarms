@@ -55,6 +55,18 @@ describe("partitionGroupAnswer", () => {
     expect([...selected]).toEqual(["Queer"]);
     expect(extras).toEqual(["made this up"]);
   });
+
+  it("lets one fuzzy token select several boxes, the way the filler does", () => {
+    // The filler asks per BOX whether any token matches, so one token can tick
+    // two boxes; the review must predict both, not the first.
+    const { selected, extras } = partitionGroupAnswer("prefer not", [
+      "I prefer not to answer",
+      "Prefer not to say",
+      "Other"
+    ]);
+    expect([...selected]).toEqual(["I prefer not to answer", "Prefer not to say"]);
+    expect(extras).toEqual([]);
+  });
 });
 
 describe("toggleGroupOption", () => {
