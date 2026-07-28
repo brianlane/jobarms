@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendScreenshot,
+  claimBatch,
   createApplication,
   createRun,
   findApplication,
@@ -216,6 +217,21 @@ describe("batch db helpers", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
     await expect(updateBatch(env, "b1", {})).rejects.toThrow(/updateBatch/);
+  });
+
+  it("claimBatch wins queued/running rows only, reporting whether it landed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok([{ id: "b1" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await claimBatch(env, "b1")).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain("status=in.(queued,running)");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ status: "running" });
+
+    // The app already gave up (row is failed): the claim loses.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([])));
+    expect(await claimBatch(env, "b1")).toBe(false);
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    await expect(claimBatch(env, "b1")).rejects.toThrow(/claimBatch/);
   });
 
   it("settleBatchFailure flips live states only, reporting whether it landed", async () => {

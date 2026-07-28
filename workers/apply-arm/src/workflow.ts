@@ -31,6 +31,7 @@ import { diagnosePage, generateAnswers } from "./gemini";
 import { notifyReviewNeeded } from "./notify";
 import {
   appendScreenshot,
+  claimBatch,
   createApplication,
   createRun,
   type FillTactics,
@@ -873,7 +874,15 @@ export class BatchApplyWorkflow extends WorkflowEntrypoint<Env, BatchParams> {
     try {
       // --- Sign in (parking on a PIN challenge exactly like a single run) ----
       const gate = await step.do("batch ensure account", async () => {
-        await updateBatch(env, params.batchId, { status: "running" });
+        // Claim the row before doing anything. If the app's dispatch call
+        // timed out, it gave up through a guarded queued-only write and
+        // released the reservation; the claim then fails and this batch must
+        // not run on quota that no longer exists.
+        if (!(await claimBatch(env, params.batchId))) {
+          throw new NonRetryableError(
+            "batch_not_claimable: the app abandoned this batch before it started"
+          );
+        }
         const session = await ensureSession(env, {
           userId: params.userId,
           jobUrl: `https://${BATCH_HOST}/`,

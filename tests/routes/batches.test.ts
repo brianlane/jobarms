@@ -34,6 +34,8 @@ function service(over: {
   profile?: unknown;
   resume?: unknown;
   granted?: unknown;
+  /** The guarded give-up write: rows it matched (default: it landed). */
+  gaveUp?: unknown;
 } = {}) {
   return fakeClient({
     from: fakeFrom({
@@ -46,7 +48,8 @@ function service(over: {
               ? { id: "res-1", file_name: "cv.pdf", storage_path: "u1/cv.pdf", mime_type: "application/pdf" }
               : over.resume
         }
-      ]
+      ],
+      apply_batches: [{ data: over.gaveUp === undefined ? [{ id: "batch-1" }] : over.gaveUp }]
     }),
     rpc: fakeRpc({
       try_reserve_arm_runs: [over.granted === undefined ? 10 : over.granted],
@@ -152,12 +155,33 @@ describe("POST /api/batches", () => {
     const res = await POST(post(goodBody));
     expect(res.status).toBe(503);
     expect((await res.json()).hint).toMatch(/isn't available/);
+    expect((holder.service as { rpc: ReturnType<typeof vi.fn> }).rpc).toHaveBeenCalledWith(
+      "release_arm_runs",
+      expect.objectContaining({ p_count: 10 })
+    );
 
     holder.service = service();
     buildAndDispatchBatch.mockResolvedValue({ ok: false, reason: "arm_error" });
     const res2 = await POST(post(goodBody));
     expect(res2.status).toBe(503);
     expect((await res2.json()).hint).toMatch(/couldn't start/);
+  });
+
+  it("keeps the batch (and its charge) when the worker won the dispatch-timeout race", async () => {
+    // The POST timed out client-side but the worker accepted it and claimed
+    // the row (queued -> running), so the guarded give-up write matches
+    // nothing: the batch is really running and nothing may be released.
+    holder.service = service({ gaveUp: [] });
+    buildAndDispatchBatch.mockResolvedValue({ ok: false, reason: "arm_error" });
+
+    const res = await POST(post(goodBody));
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ batch_id: "batch-1", reserved: 10 });
+    expect((holder.service as { rpc: ReturnType<typeof vi.fn> }).rpc).not.toHaveBeenCalledWith(
+      "release_arm_runs",
+      expect.anything()
+    );
   });
 
   it("dispatches with the vaulted credentials and a null resume when none is parsed", async () => {

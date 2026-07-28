@@ -151,6 +151,29 @@ export async function markBatchCanceled(env: Env, batchId: string): Promise<void
 }
 
 /**
+ * Claim a batch for execution: queued -> running, reporting whether the claim
+ * landed ("running" also passes so a retried first step is not a false loss).
+ *
+ * This is one side of the dispatch-timeout race: the app's POST can time out
+ * AFTER the worker accepted the batch. The app then gives up ONLY via a
+ * guarded queued-only write, and this claim ONLY wins live rows, so exactly
+ * one of them does - a batch never runs on quota the app already released.
+ */
+export async function claimBatch(env: Env, batchId: string): Promise<boolean> {
+  const filter = `id=eq.${encodeURIComponent(batchId)}&status=in.(queued,running)`;
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/apply_batches?${filter}`, {
+    method: "PATCH",
+    headers: { ...headers(env), Prefer: "return=representation" },
+    body: JSON.stringify({ status: "running" })
+  });
+  if (!res.ok) {
+    throw new Error(`claimBatch ${batchId} failed: ${res.status}`);
+  }
+  const rows = (await res.json()) as unknown[];
+  return rows.length > 0;
+}
+
+/**
  * Mark a batch failed, but only if it is still in a live state, reporting
  * whether the write landed. The batch's failure path releases the unspent
  * reservation ONLY when it landed: a batch the user already canceled had its

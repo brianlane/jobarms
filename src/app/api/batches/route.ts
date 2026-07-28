@@ -146,10 +146,21 @@ export async function POST(request: Request) {
     account: { email: creds.email, password: creds.password }
   });
   if (!dispatch.ok) {
-    await service
+    // A dispatch "failure" can be a timeout on a request the worker actually
+    // ACCEPTED, so give up only through a guarded queued-only write. The
+    // workflow's first step claims the row (queued -> running) the same way,
+    // so exactly one side wins: if this write lands the batch never runs and
+    // the reservation is released; if it does not, the batch is already
+    // running and stays fully charged.
+    const { data: gaveUp } = await service
       .from("apply_batches")
       .update({ status: "failed", error: dispatch.reason })
-      .eq("id", batchId);
+      .eq("id", batchId)
+      .eq("status", "queued")
+      .select("id");
+    if (!gaveUp || gaveUp.length === 0) {
+      return NextResponse.json({ batch_id: batchId, reserved }, { status: 202 });
+    }
     await service.rpc("release_arm_runs", {
       p_user_id: user.id,
       p_month_key: mk,

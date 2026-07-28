@@ -26,6 +26,7 @@ const db = vi.hoisted(() => ({
   updateApplication: vi.fn(async () => {}),
   releaseArmRunSlot: vi.fn(async () => {}),
   updateBatch: vi.fn(async () => {}),
+  claimBatch: vi.fn(async () => true),
   settleBatchFailure: vi.fn(async () => true),
   upsertJob: vi.fn(async () => "job-1" as string | null),
   findApplication: vi.fn(async () => null as { id: string; status: string } | null),
@@ -137,6 +138,7 @@ beforeEach(() => {
   db.createApplication.mockResolvedValue("app-1");
   db.createRun.mockResolvedValue("run-1");
   db.settleBatchFailure.mockResolvedValue(true);
+  db.claimBatch.mockResolvedValue(true);
 });
 
 describe("batchPace", () => {
@@ -455,6 +457,19 @@ describe("BatchApplyWorkflow", () => {
     );
     // Nothing was consumed, so everything reserved goes back.
     expect(db.releaseArmRuns).toHaveBeenCalledWith(env, "u1", "2026-07", 5);
+  });
+
+  it("refuses to run a batch the app already abandoned (dispatch-timeout race)", async () => {
+    // The app's give-up write landed first: the reservation is released and
+    // the row is failed, so the claim loses and NOTHING may be applied.
+    db.claimBatch.mockResolvedValue(false);
+    db.settleBatchFailure.mockResolvedValue(false);
+
+    await expect(run(batchParams())).rejects.toThrow(/batch_not_claimable/);
+
+    expect(render.ensureSession).not.toHaveBeenCalled();
+    expect(render.fillForm).not.toHaveBeenCalled();
+    expect(db.releaseArmRuns).not.toHaveBeenCalled();
   });
 
   it("leaves the release to the app when a cancel already settled the batch", async () => {
