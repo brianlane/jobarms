@@ -344,10 +344,12 @@ const dayforce: AtsAdapter = {
       await page.waitForTimeout(2500);
     }
 
-    // The manual-application form's controls are all prefixed
-    // `jobPostingApplication_` (personalInfo, files, etc.); wait for hydration.
+    // Wait for the guest application form SPECIFICALLY, by its
+    // `jobPostingApplication_`-prefixed controls (personalInfo, files, etc.),
+    // never a bare `form`: the portal keeps search and chrome forms in the DOM,
+    // and matching those would extract the wrong form before the wizard mounts.
     await page
-      .waitForSelector('input[name^="jobPostingApplication"], form', { timeout: 20_000 })
+      .waitForSelector('input[name^="jobPostingApplication"]', { timeout: 20_000 })
       .catch(() => {});
   },
 

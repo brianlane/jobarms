@@ -41,10 +41,12 @@ export function parseDayforceUrl(
   url: URL
 ): { tenant: string; site: string; locale: string; jobId: string } | null {
   // https://jobs.dayforcehcm.com/<locale>/<tenant>/<site>/jobs/<id>[/apply...]
+  // The shape is exact: "jobs" is always the FOURTH segment. Requiring the
+  // exact index (not just ">= 3") stops a deeper or reshaped path from being
+  // misread as locale/tenant/site off the first three segments.
   const parts = url.pathname.split("/").filter(Boolean);
   const jobsIdx = parts.indexOf("jobs");
-  // Need locale, tenant, site before "jobs", and an id after it.
-  if (jobsIdx < 3 || !parts[jobsIdx + 1]) return null;
+  if (jobsIdx !== 3 || !parts[jobsIdx + 1]) return null;
   const [locale, tenant, site] = parts;
   if (!DAYFORCE_LOCALE_RE.test(locale)) return null;
   return { tenant, site, locale, jobId: parts[jobsIdx + 1] };

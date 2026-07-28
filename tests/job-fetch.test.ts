@@ -77,6 +77,13 @@ describe("parseDayforceUrl", () => {
       parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/careers/mercola/SITE/jobs/439"))
     ).toBeNull();
   });
+  it("returns null when extra segments push jobs past the fourth position", () => {
+    // A deeper/reshaped path must not be misread as locale/tenant/site off the
+    // first three segments.
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/x/en-US/mercola/SITE/jobs/439"))
+    ).toBeNull();
+  });
   it("returns null when there is no job id", () => {
     expect(
       parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL/jobs"))
