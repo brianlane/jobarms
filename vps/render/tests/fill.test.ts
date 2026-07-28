@@ -278,7 +278,7 @@ describe("resolving which element to fill", () => {
       evaluate: vi.fn(async () => ({ tag: "fieldset", type: "", cls: "checkbox", role: "", autocomplete: "" }))
     });
     const page = fakePage({
-      locators: { 'input[name="q[]"]': boxes, 'type="checkbox"': boxes, "#q": fieldset }
+      locators: { 'input[name="q[]"]': boxes, 'type="checkbox"': boxes, '[id="q[]"]': fieldset }
     });
     return { page, boxes, wanted, other, fieldset };
   };
@@ -316,10 +316,31 @@ describe("resolving which element to fill", () => {
       count: vi.fn(async () => 1),
       evaluate: vi.fn(async () => ({ tag: "input", type: "text", cls: "", role: "", autocomplete: "" }))
     });
-    const page = fakePage({ locators: { "input#weird": byId } });
+    const page = fakePage({ locators: { 'input[id="weird"]': byId } });
 
     await fillField(asPage(page), "form", { name: "weird", label: "W", value: "v" });
     expect(byId.pressSequentially).toHaveBeenCalled();
+  });
+
+  it("resolves a UUID-named field without building an invalid #id selector", async () => {
+    // The regression: Ashby names custom fields with UUIDs, and a CSS identifier
+    // cannot start with a digit, so `input#329cb038-...` threw a SyntaxError from
+    // querySelectorAll that failed the entire fill phase on every Ashby posting.
+    const uuid = "329cb038-3f1e-431e-94c6-49e9b166c581_cf0f1bc7-7ce6-4eb3-aebc-b6562141cb68";
+    const byId = loc({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ tag: "input", type: "text", cls: "", role: "", autocomplete: "" }))
+    });
+    const page = fakePage({ locators: { [`input[id="${uuid}"]`]: byId } });
+
+    await fillField(asPage(page), "form", { name: uuid, label: "Custom", value: "v" });
+    expect(byId.pressSequentially).toHaveBeenCalled();
+
+    // No selector anywhere in the resolution used the #id form.
+    for (const [selector] of (page.locator as unknown as { mock: { calls: string[][] } }).mock
+      .calls) {
+      expect(selector).not.toContain("#");
+    }
   });
 });
 

@@ -46,11 +46,6 @@ export function alternativeTactics(current: Tactics): Tactics {
   };
 }
 
-/** Escape a string for use inside a CSS id selector. */
-export function cssEscape(value: string): string {
-  return value.replace(/([^a-zA-Z0-9_-])/g, "\\$1");
-}
-
 /** Move the mouse to an element's center in a couple of steps (human-like). */
 async function moveMouseTo(page: Page, el: Locator): Promise<void> {
   const box = await el.boundingBox();
@@ -352,9 +347,13 @@ async function resolveControl(
   answer: Answer
 ): Promise<Locator | null> {
   const esc = attrEscape(answer.name);
-  const id = cssEscape(answer.name);
   const byName = CONTROL_TAGS.map((tag) => `${tag}[name="${esc}"]`);
-  const byId = CONTROL_TAGS.map((tag) => `${tag}#${id}`);
+  // [id="..."] rather than #id: an id selector must be a valid CSS identifier,
+  // and an identifier cannot START with a digit. Ashby names every custom field
+  // with a UUID, so `#329cb038-...` was a querySelectorAll SyntaxError that
+  // killed the whole fill phase. The attribute form matches the same elements
+  // with no identifier grammar to violate, and attrEscape already guards it.
+  const byId = CONTROL_TAGS.map((tag) => `${tag}[id="${esc}"]`);
 
   const attempts = [
     scopedSelector(scope, byName),
