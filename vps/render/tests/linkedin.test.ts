@@ -22,15 +22,16 @@ const call = (page: ReturnType<typeof fakePage>, creds = TEST_CREDS) =>
   signInLinkedIn(page as unknown as Page, creds);
 
 describe("signInLinkedIn", () => {
-  it("returns authenticated immediately when the session is still valid", async () => {
-    // No login form and not a checkpoint: the restored cookies are still good.
-    const page = fakePage();
+  it("returns authenticated immediately when a live session is visible", async () => {
+    // The member's top nav is on screen, so the restored cookies are good.
+    const page = fakePage({ locators: { "#global-nav": loc({ count: vi.fn(async () => 1) }) } });
     expect(await call(page)).toEqual({ status: "authenticated" });
     // It never navigated to the login page.
     expect((page.goto as ReturnType<typeof vi.fn>).mock.calls.some((c) => /\/login/.test(c[0]))).toBe(
       false
     );
   });
+
 
   it("resumes a checkpoint the restored session is already sitting on", async () => {
     // The last run left a PIN challenge open; landing on the feed redirects

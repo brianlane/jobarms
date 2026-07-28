@@ -94,6 +94,25 @@ async function hasLoginForm(page: Page): Promise<boolean> {
   return email !== null && password;
 }
 
+/** Chrome LinkedIn renders only for a signed-in member (the top nav / me menu). */
+const SIGNED_IN_SELECTORS = [
+  "#global-nav",
+  ".global-nav",
+  "img.global-nav__me-photo",
+  '[data-control-name="identity_welcome_message"]'
+];
+
+/**
+ * A POSITIVE signal that a live member session is on screen.
+ *
+ * Used to fast-path past sign-in only when we can actually see we are in, rather
+ * than inferring it from the mere absence of a login form (a logged-out
+ * interstitial has neither).
+ */
+async function isSignedIn(page: Page): Promise<boolean> {
+  return (await firstMatch(page, SIGNED_IN_SELECTORS)) !== null;
+}
+
 /**
  * Decide where a sign-in attempt landed.
  *
@@ -130,18 +149,19 @@ export async function signInLinkedIn(
   page: Page,
   creds: { email: string; password: string }
 ): Promise<LinkedInAuthResult> {
-  // Cheapest check first: land on the feed and see where the restored session
-  // stands. No login form means we are either already in OR resuming mid-PIN
-  // (a challenge the last run left open); classify tells the two apart, so we
-  // return authenticated or needs_login_code WITHOUT navigating to the login
-  // page, which would abandon a live checkpoint.
+  // Land on the feed and see where the restored session stands. Skip sign-in
+  // only when a live session is POSITIVELY visible, or when we are resuming a
+  // PIN the last run left open (navigating to the login page would abandon that
+  // live checkpoint). Anything else, including a feed that merely lacks the
+  // login form, falls through to an explicit sign-in rather than assuming we
+  // are in.
   await page.goto(FEED_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
   await page.waitForTimeout(1000);
+  if (await isSignedIn(page)) return { status: "authenticated" };
   if (!(await hasLoginForm(page))) {
     const landed = await classify(page);
-    if (landed.status !== "login_failed") return landed;
-    // An odd state with no form and no actionable challenge: fall through and
-    // try an explicit sign-in rather than give up.
+    if (landed.status === "needs_login_code") return landed;
+    // No live session, no login form, no challenge: fall through and sign in.
   }
 
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
