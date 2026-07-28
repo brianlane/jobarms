@@ -125,16 +125,22 @@ async function classify(page: Page): Promise<LinkedInAuthResult> {
   const url = page.url();
   const text = await visibleText(page);
 
+  // The one unambiguous "enter your PIN" signal is a code field we can actually
+  // drive; broad wording alone is not enough to call it a challenge.
   const looksLikeChallenge = CHECKPOINT_URL_RE.test(url) || CODE_PROMPT_RE.test(text);
-  if (looksLikeChallenge) {
-    if (await firstMatch(page, CODE_SELECTORS)) {
-      return { status: "needs_login_code", checkpointUrl: url };
-    }
-    return { status: "login_failed" };
+  if (looksLikeChallenge && (await firstMatch(page, CODE_SELECTORS))) {
+    return { status: "needs_login_code", checkpointUrl: url };
   }
 
-  if (LOGIN_ERROR_RE.test(text)) return { status: "login_failed" };
-  if (await hasLoginForm(page)) return { status: "login_failed" };
+  // A positively visible member session wins over everything below: benign page
+  // copy like "security verification" must not fail a sign-in we completed.
+  if (await isSignedIn(page)) return { status: "authenticated" };
+
+  // Not signed in: a challenge with nothing to type, a rejected password, or a
+  // login form still on screen all mean the sign-in did not land.
+  if (looksLikeChallenge || LOGIN_ERROR_RE.test(text) || (await hasLoginForm(page))) {
+    return { status: "login_failed" };
+  }
   return { status: "authenticated" };
 }
 

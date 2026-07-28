@@ -189,8 +189,15 @@ describe("submitLoginCode", () => {
     });
 
   it("types the code at the checkpoint URL and reports authenticated", async () => {
-    const page = codePage();
-    // After submit the session lands on the feed.
+    // After submit the session lands on the feed, with the member top-nav
+    // visible (the positive signal classify confirms on).
+    const page = codePage({
+      locators: {
+        'input[name="pin"]': loc({ count: vi.fn(async () => 1) }),
+        "#email-pin-submit-button": loc({ count: vi.fn(async () => 1) }),
+        "#global-nav": loc({ count: vi.fn(async () => 1) })
+      }
+    });
     page.goto = vi.fn(async () => {});
     page.url = vi.fn(() => "https://www.linkedin.com/feed/");
 
