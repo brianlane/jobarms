@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   approveRun,
   armWorkerUrl,
+  cancelBatch,
   cancelRun,
+  dispatchBatch,
   dispatchRun,
   resumeAccountVerification,
+  submitBatchLoginCode,
   submitLoginCode
 } from "@/lib/arm";
 
@@ -98,5 +101,42 @@ describe("arm worker client", () => {
     expect(await submitLoginCode("r1", "483920")).toEqual({ ok: true });
     expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/runs/r1/login-code`);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "483920" });
+  });
+
+  it("dispatchBatch posts the batch payload to /batches", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await dispatchBatch({
+      batchId: "b1",
+      userId: "u1",
+      keywords: "react",
+      location: "Denver",
+      remote: true,
+      reserved: 5,
+      monthKey: "2026-07",
+      profile: {},
+      resume: { signedUrl: null, fileName: "r.pdf", mimeType: "application/pdf" },
+      memory: { answers: [], lessons: [] },
+      account: { email: "me@example.com", password: "pw" }
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/batches`);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      batchId: "b1",
+      reserved: 5
+    });
+  });
+
+  it("cancelBatch and submitBatchLoginCode hit the batch endpoints", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await cancelBatch("b1")).toEqual({ ok: true });
+    expect(await submitBatchLoginCode("b1", "112233")).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/batches/b1/cancel`);
+    expect(fetchMock.mock.calls[1][0]).toBe(`${BASE}/batches/b1/login-code`);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ code: "112233" });
   });
 });

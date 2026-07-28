@@ -6,6 +6,7 @@ const render = vi.hoisted(() => ({
   completeLoginCode: vi.fn(),
   extractForm: vi.fn(),
   fillForm: vi.fn(),
+  searchJobs: vi.fn(),
   fetchResumeBase64: vi.fn(async () => null as string | null),
   decodeScreenshot: vi.fn(() => new Uint8Array([1]) as Uint8Array | null)
 }));
@@ -23,7 +24,15 @@ const db = vi.hoisted(() => ({
   uploadScreenshot: vi.fn(async (..._args: unknown[]) => "shot/path.png"),
   appendScreenshot: vi.fn(async () => {}),
   updateApplication: vi.fn(async () => {}),
-  releaseArmRunSlot: vi.fn(async () => {})
+  releaseArmRunSlot: vi.fn(async () => {}),
+  // Batch support (exercised in batch-workflow.test.ts; mocked here so the
+  // module's imports resolve).
+  updateBatch: vi.fn(async () => {}),
+  upsertJob: vi.fn(async () => "job-1" as string | null),
+  findApplication: vi.fn(async () => null as { id: string; status: string } | null),
+  createApplication: vi.fn(async () => "app-1" as string | null),
+  createRun: vi.fn(async () => "run-1" as string | null),
+  releaseArmRuns: vi.fn(async () => {})
 }));
 vi.mock("../src/render", () => render);
 vi.mock("../src/gemini", () => gemini);

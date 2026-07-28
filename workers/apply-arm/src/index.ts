@@ -7,6 +7,10 @@
  *   POST /runs/:id/account-verified     resume a run parked on its ATS account
  *                                       email being confirmed
  *   POST /runs/:id/cancel               terminate a run
+ *   POST /batches                       start a search-driven Easy Apply batch
+ *   POST /batches/:id/login-code        hand a parked batch its LinkedIn PIN
+ *   POST /batches/:id/cancel            terminate a batch (the app releases
+ *                                       the unused metered slots)
  *   POST /internal/solve-captcha        the render sidecar asking which captcha
  *                                       grid cells to click (its own secret)
  *   GET  /health                        unauthenticated liveness
@@ -14,11 +18,11 @@
  * Every mutating request must carry the ARM_WORKER_SHARED_SECRET bearer -
  * the same secret the app uses to call us.
  */
-import type { Answer, Env, RunParams } from "./types";
-import { updateRun } from "./db";
+import type { Answer, BatchParams, Env, RunParams } from "./types";
+import { markBatchCanceled, updateRun } from "./db";
 import { solveImageGrid } from "./gemini";
 
-export { ApplyRunWorkflow } from "./workflow";
+export { ApplyRunWorkflow, BatchApplyWorkflow } from "./workflow";
 
 /** Length-independent, constant-time string compare (no early-exit leak). */
 function timingSafeEqual(a: string, b: string): boolean {
@@ -201,6 +205,52 @@ export default {
 
       await instance.terminate();
       await updateRun(env, runId, { status: "canceled" });
+      return Response.json({ ok: true });
+    }
+
+    // Batches ride a second Workflow binding; without it the feature is off.
+    if (url.pathname.startsWith("/batches") && !env.BATCH_RUN) {
+      return Response.json(
+        { error: "arm_offline", hint: "BATCH_RUN workflows binding missing" },
+        { status: 503 }
+      );
+    }
+
+    // POST /batches
+    if (url.pathname === "/batches") {
+      const params = (await request.json().catch(() => null)) as BatchParams | null;
+      if (!params?.batchId || !params.userId || !params.account || !(params.reserved > 0)) {
+        return Response.json({ error: "invalid_body" }, { status: 400 });
+      }
+      const instance = await env.BATCH_RUN!.create({ id: params.batchId, params });
+      return Response.json({ ok: true, instance_id: instance.id }, { status: 202 });
+    }
+
+    // POST /batches/:id/login-code | /batches/:id/cancel
+    const batchMatch = url.pathname.match(/^\/batches\/([0-9a-f-]{36})\/(login-code|cancel)$/);
+    if (batchMatch) {
+      const [, batchId, action] = batchMatch;
+      let instance;
+      try {
+        instance = await env.BATCH_RUN!.get(batchId);
+      } catch {
+        return Response.json({ error: "batch_not_found" }, { status: 404 });
+      }
+
+      if (action === "login-code") {
+        const body = (await request.json().catch(() => ({}))) as { code?: string };
+        const code = typeof body.code === "string" ? body.code.trim() : "";
+        if (!code) return Response.json({ error: "invalid_body" }, { status: 400 });
+        await instance.sendEvent({ type: "login-code", payload: { code } });
+        return Response.json({ ok: true });
+      }
+
+      // cancel: stop the instance and mark the row; the APP releases the unused
+      // slots, since it can read reserved/consumed and owns metering elsewhere.
+      // markBatchCanceled only flips LIVE states, so a cancel racing the batch's
+      // own settle step cannot clobber a completed row (or double-release).
+      await instance.terminate();
+      await markBatchCanceled(env, batchId);
       return Response.json({ ok: true });
     }
 

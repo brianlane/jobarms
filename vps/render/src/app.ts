@@ -56,7 +56,10 @@ import {
 } from "./fill.js";
 import { collectFields, readFilledState } from "./extract.js";
 import { completeVerification, ensureAccount } from "./account.js";
-import { signInLinkedIn, submitLoginCode } from "./linkedin.js";
+import { searchEasyApply, signInLinkedIn, submitLoginCode } from "./linkedin.js";
+
+/** The fixed host every LinkedIn session (login, apply, search) is keyed by. */
+const LINKEDIN_HOST = "www.linkedin.com";
 import { detectChallenge, httpSolver, solveChallenge, type AskSolver } from "./captcha.js";
 import { type JobPayload, readJob, runningJobs, startJob } from "./jobs.js";
 import { blocksSubmit, checkAnswers, type FillCheck } from "./verify.js";
@@ -443,6 +446,32 @@ export function createApp(deps: AppDeps = {}): Express {
     if (!userId || !tenantHost) return void res.status(400).json({ error: "invalid_body" });
     await dropSession(sessionKey(userId, tenantHost));
     return void res.json({ ok: true });
+  });
+
+  // Search LinkedIn for Easy Apply jobs in the held session. Started, not
+  // awaited (it navigates and scrolls), so it returns a job id the caller polls,
+  // same as the form phases.
+  app.post("/search", (req, res) => {
+    const body = req.body ?? {};
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const keywords = typeof body.keywords === "string" ? body.keywords : "";
+    const location = typeof body.location === "string" ? body.location : "";
+    const remote = body.remote === true;
+    const limit = typeof body.limit === "number" && body.limit > 0 ? Math.floor(body.limit) : 0;
+    if (!userId || !limit) return void res.status(400).json({ error: "invalid_body" });
+
+    return void startPhase(res, async () => {
+      try {
+        const cards = await withSlot(() =>
+          runPhase(userId, LINKEDIN_HOST, ({ page }) =>
+            searchEasyApply(page, { keywords, location, remote, limit })
+          )
+        );
+        return { cards };
+      } catch (err) {
+        return errorPayload("render_failed", String(err));
+      }
+    });
   });
 
   // ------------------------------------------------------------------ extract

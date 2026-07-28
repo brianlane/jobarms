@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateRun = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../src/db", () => ({ updateRun }));
+const markBatchCanceled = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../src/db", () => ({ updateRun, markBatchCanceled }));
 
 import worker from "../src/index";
 import type { Env } from "../src/types";
@@ -14,6 +15,10 @@ function makeEnv(over: Partial<Env> = {}): Env {
     ARM_WORKER_SHARED_SECRET: SECRET,
     APPLY_RUN: {
       create: vi.fn(async () => ({ id: "inst-1" })),
+      get: vi.fn(async () => ({ sendEvent: vi.fn(async () => {}), terminate: vi.fn(async () => {}) }))
+    },
+    BATCH_RUN: {
+      create: vi.fn(async () => ({ id: "batch-inst-1" })),
       get: vi.fn(async () => ({ sendEvent: vi.fn(async () => {}), terminate: vi.fn(async () => {}) }))
     },
     // Arms need the orchestrator AND a reachable browser sidecar.
@@ -154,6 +159,89 @@ describe("apply-arm HTTP surface", () => {
     const env = makeEnv();
     (env.APPLY_RUN!.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
     const res = await worker.fetch(req(`/runs/${RUN_ID}/approve`, { method: "POST", headers: auth, body: "{}" }), env);
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /batches 503s when the BATCH_RUN binding is missing", async () => {
+    const res = await worker.fetch(
+      req("/batches", { method: "POST", headers: auth, body: "{}" }),
+      makeEnv({ BATCH_RUN: undefined })
+    );
+    expect(res.status).toBe(503);
+    expect((await res.json()).hint).toMatch(/BATCH_RUN/);
+  });
+
+  it("POST /batches starts a batch workflow instance", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      req("/batches", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          batchId: RUN_ID,
+          userId: "u1",
+          reserved: 5,
+          account: { email: "a@b.c", password: "p" }
+        })
+      }),
+      env
+    );
+    expect(res.status).toBe(202);
+    expect((await res.json()).instance_id).toBe("batch-inst-1");
+    expect(env.BATCH_RUN!.create).toHaveBeenCalledWith({
+      id: RUN_ID,
+      params: expect.objectContaining({ batchId: RUN_ID })
+    });
+  });
+
+  it("POST /batches 400s on a body missing its essentials", async () => {
+    for (const body of [
+      "{not json",
+      JSON.stringify({ batchId: RUN_ID, userId: "u1", reserved: 0, account: { email: "a", password: "p" } }),
+      JSON.stringify({ batchId: RUN_ID, userId: "u1", reserved: 3 })
+    ]) {
+      const res = await worker.fetch(req("/batches", { method: "POST", headers: auth, body }), makeEnv());
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("POST /batches/:id/login-code forwards the code event", async () => {
+    const sendEvent = vi.fn(async () => {});
+    const env = makeEnv();
+    (env.BATCH_RUN!.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sendEvent, terminate: vi.fn() });
+    const res = await worker.fetch(
+      req(`/batches/${RUN_ID}/login-code`, { method: "POST", headers: auth, body: JSON.stringify({ code: " 112233 " }) }),
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(sendEvent).toHaveBeenCalledWith({ type: "login-code", payload: { code: "112233" } });
+  });
+
+  it("POST /batches/:id/login-code 400s without a code", async () => {
+    const res = await worker.fetch(
+      req(`/batches/${RUN_ID}/login-code`, { method: "POST", headers: auth, body: "{not json" }),
+      makeEnv()
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /batches/:id/cancel terminates and marks canceled (live states only)", async () => {
+    const terminate = vi.fn(async () => {});
+    const env = makeEnv();
+    (env.BATCH_RUN!.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sendEvent: vi.fn(), terminate });
+    const res = await worker.fetch(req(`/batches/${RUN_ID}/cancel`, { method: "POST", headers: auth }), env);
+    expect(res.status).toBe(200);
+    expect(terminate).toHaveBeenCalled();
+    expect(markBatchCanceled).toHaveBeenCalledWith(env, RUN_ID);
+  });
+
+  it("404 when the batch workflow instance is not found", async () => {
+    const env = makeEnv();
+    (env.BATCH_RUN!.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
+    const res = await worker.fetch(
+      req(`/batches/${RUN_ID}/cancel`, { method: "POST", headers: auth }),
+      env
+    );
     expect(res.status).toBe(404);
   });
 

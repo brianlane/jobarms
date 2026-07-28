@@ -31,6 +31,7 @@ import ProfilePage from "@/app/dashboard/profile/page";
 import DiscoverPage from "@/app/dashboard/discover/page";
 import BillingPage from "@/app/dashboard/billing/page";
 import SettingsPage from "@/app/dashboard/settings/page";
+import BatchPage from "@/app/dashboard/batch/page";
 import ApplicationDetailPage from "@/app/dashboard/applications/[id]/page";
 
 function client(tables: Record<string, Result[]>) {
@@ -268,6 +269,28 @@ describe("SettingsPage", () => {
     render(await SettingsPage());
     expect(screen.getByText("me@example.com")).toBeInTheDocument();
     expect(screen.getByText("Disconnect")).toBeInTheDocument();
+  });
+});
+
+describe("BatchPage", () => {
+  it("renders the batch form for a paid, connected user", async () => {
+    holder.service = fakeClient({
+      from: fakeFrom({
+        site_accounts: [{ data: { email: "me@example.com", status: "verified" } }],
+        subscriptions: [{ data: { plan: "premium", status: "active" } }]
+      })
+    });
+    render(await BatchPage());
+    expect(screen.getByText("Start a batch")).toBeInTheDocument();
+  });
+
+  it("gates a free user before the form", async () => {
+    holder.service = fakeClient({
+      from: fakeFrom({ site_accounts: [{ data: null }], subscriptions: [{ data: null }] })
+    });
+    render(await BatchPage());
+    expect(screen.getByText(/paid\s+feature/)).toBeInTheDocument();
+    expect(screen.queryByText("Start a batch")).not.toBeInTheDocument();
   });
 });
 

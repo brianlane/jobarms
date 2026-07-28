@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendScreenshot,
+  createApplication,
+  createRun,
+  findApplication,
   getFillTactics,
   getPlaybook,
+  markBatchCanceled,
   recordFillTactic,
   recordFillTacticFailure,
   logStep,
   recordPlaybook,
   recordPlaybookFailure,
+  releaseArmRuns,
   releaseArmRunSlot,
   updateApplication,
+  updateBatch,
   updateRun,
-  uploadScreenshot
+  uploadScreenshot,
+  upsertJob
 } from "../src/db";
 import type { Env } from "../src/types";
 
@@ -195,5 +202,163 @@ describe("fill tactics", () => {
     await expect(
       recordFillTacticFailure(env, "d.com", "greenhouse", "choice")
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("batch db helpers", () => {
+  it("updateBatch PATCHes the batch and throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await updateBatch(env, "b1", { status: "running" });
+    expect(fetchMock.mock.calls[0][0]).toContain("/rest/v1/apply_batches?id=eq.b1");
+    expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    await expect(updateBatch(env, "b1", {})).rejects.toThrow(/updateBatch/);
+  });
+
+  it("markBatchCanceled only targets live states, and throws on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await markBatchCanceled(env, "b1");
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "status=in.(queued,searching,running,needs_login_code)"
+    );
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    await expect(markBatchCanceled(env, "b1")).rejects.toThrow(/markBatchCanceled/);
+  });
+
+  it("upsertJob inserts with ignore-duplicates, then reads back the winner's id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(ok()) // insert
+      .mockResolvedValueOnce(ok([{ id: "job-1" }])); // read-back
+    vi.stubGlobal("fetch", fetchMock);
+
+    const id = await upsertJob(env, {
+      url: "https://www.linkedin.com/jobs/view/123/",
+      ats: "linkedin",
+      company: "Acme",
+      title: "Eng",
+      location: "Remote"
+    });
+
+    expect(id).toBe("job-1");
+    expect(fetchMock.mock.calls[0][0]).toContain("/rest/v1/jobs?on_conflict=url");
+    expect(fetchMock.mock.calls[0][1].headers.Prefer).toBe("resolution=ignore-duplicates");
+  });
+
+  it("upsertJob survives an insert failure (conflict) and still resolves the id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error("conflict"))
+        .mockResolvedValueOnce(ok([{ id: "job-2" }]))
+    );
+    expect(
+      await upsertJob(env, { url: "u", ats: "linkedin", company: "", title: "", location: "" })
+    ).toBe("job-2");
+  });
+
+  it("upsertJob is null when the read-back fails or finds nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(ok()).mockResolvedValueOnce(bad()));
+    expect(
+      await upsertJob(env, { url: "u", ats: "linkedin", company: "", title: "", location: "" })
+    ).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok([])));
+    expect(
+      await upsertJob(env, { url: "u", ats: "linkedin", company: "", title: "", location: "" })
+    ).toBeNull();
+  });
+
+  it("findApplication returns the user's row, null when absent or unreadable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([{ id: "a1", status: "applied" }])));
+    expect(await findApplication(env, "u1", "j1")).toEqual({ id: "a1", status: "applied" });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([])));
+    expect(await findApplication(env, "u1", "j1")).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    expect(await findApplication(env, "u1", "j1")).toBeNull();
+  });
+
+  it("createApplication returns the new id, null on failure or an empty reply", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok([{ id: "a1" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await createApplication(env, "u1", "j1")).toBe("a1");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      user_id: "u1",
+      job_id: "j1",
+      source: "arm"
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    expect(await createApplication(env, "u1", "j1")).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([])));
+    expect(await createApplication(env, "u1", "j1")).toBeNull();
+  });
+
+  it("createRun returns the new id (full-auto, batch-tagged), null on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok([{ id: "r1" }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(
+      await createRun(env, {
+        applicationId: "a1",
+        userId: "u1",
+        monthKey: "2026-07",
+        batchId: "b1",
+        tenantHost: "www.linkedin.com"
+      })
+    ).toBe("r1");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      autonomy: "full_auto",
+      batch_id: "b1",
+      status: "running"
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(bad()));
+    expect(
+      await createRun(env, {
+        applicationId: "a1",
+        userId: "u1",
+        monthKey: "2026-07",
+        batchId: "b1",
+        tenantHost: "www.linkedin.com"
+      })
+    ).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok([])));
+    expect(
+      await createRun(env, {
+        applicationId: "a1",
+        userId: "u1",
+        monthKey: "2026-07",
+        batchId: "b1",
+        tenantHost: "www.linkedin.com"
+      })
+    ).toBeNull();
+  });
+
+  it("releaseArmRuns posts the count, skips zero, and never throws", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    await releaseArmRuns(env, "u1", "2026-07", 3);
+    expect(fetchMock.mock.calls[0][0]).toContain("/rpc/release_arm_runs");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      p_user_id: "u1",
+      p_month_key: "2026-07",
+      p_count: 3
+    });
+
+    fetchMock.mockClear();
+    await releaseArmRuns(env, "u1", "2026-07", 0);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    await expect(releaseArmRuns(env, "u1", "2026-07", 2)).resolves.toBeUndefined();
   });
 });

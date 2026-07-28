@@ -112,6 +112,155 @@ export async function releaseArmRunSlot(env: Env, runId: string): Promise<void> 
   }
 }
 
+// --- Batch support (search-driven Easy Apply) -------------------------------
+// A batch discovers its jobs at run time, so the WORKER creates the job,
+// application, and run rows per card (the app only knows them for single runs).
+
+/** Update an apply_batches row (status, counters, error). */
+export async function updateBatch(
+  env: Env,
+  batchId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/apply_batches?id=eq.${encodeURIComponent(batchId)}`,
+    { method: "PATCH", headers: headers(env), body: JSON.stringify(patch) }
+  );
+  if (!res.ok) {
+    throw new Error(`updateBatch ${batchId} failed: ${res.status}`);
+  }
+}
+
+/**
+ * Mark a batch canceled, but only if it is still in a live state. A cancel that
+ * races the batch's own settle step must not overwrite "completed"/"failed"
+ * (the app decides whether to release slots by whether this landed).
+ */
+export async function markBatchCanceled(env: Env, batchId: string): Promise<void> {
+  const filter =
+    `id=eq.${encodeURIComponent(batchId)}` +
+    `&status=in.(queued,searching,running,needs_login_code)`;
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/apply_batches?${filter}`, {
+    method: "PATCH",
+    headers: headers(env),
+    body: JSON.stringify({ status: "canceled" })
+  });
+  if (!res.ok) {
+    throw new Error(`markBatchCanceled ${batchId} failed: ${res.status}`);
+  }
+}
+
+/**
+ * Ensure a jobs row for this URL and return its id.
+ *
+ * ignore-duplicates, never merge: `jobs` is shared across users, so a batch must
+ * not overwrite metadata another user (or ingest) already recorded. A conflict
+ * skips the insert and the follow-up read returns the winner.
+ */
+export async function upsertJob(
+  env: Env,
+  job: { url: string; ats: string; company: string; title: string; location: string }
+): Promise<string | null> {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/jobs?on_conflict=url`, {
+    method: "POST",
+    headers: { ...headers(env), Prefer: "resolution=ignore-duplicates" },
+    body: JSON.stringify({
+      url: job.url,
+      ats: job.ats,
+      source: "arm",
+      company: job.company,
+      title: job.title,
+      location: job.location
+    })
+  }).catch(() => {});
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/jobs?url=eq.${encodeURIComponent(job.url)}&select=id`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
+/** This user's existing application for a job, if any (for batch dedup). */
+export async function findApplication(
+  env: Env,
+  userId: string,
+  jobId: string
+): Promise<{ id: string; status: string } | null> {
+  const res = await fetch(
+    `${env.SUPABASE_URL}/rest/v1/applications?user_id=eq.${encodeURIComponent(userId)}&job_id=eq.${encodeURIComponent(jobId)}&select=id,status`,
+    { headers: headers(env) }
+  );
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Array<{ id: string; status: string }>;
+  return rows[0] ?? null;
+}
+
+/** Create an application row (arm-sourced), returning its id. */
+export async function createApplication(
+  env: Env,
+  userId: string,
+  jobId: string
+): Promise<string | null> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/applications`, {
+    method: "POST",
+    headers: { ...headers(env), Prefer: "return=representation" },
+    body: JSON.stringify({ user_id: userId, job_id: jobId, source: "arm", status: "applying" })
+  });
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
+/** Create a run row for a batch job, returning its id. */
+export async function createRun(
+  env: Env,
+  args: {
+    applicationId: string;
+    userId: string;
+    monthKey: string;
+    batchId: string;
+    tenantHost: string;
+  }
+): Promise<string | null> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/application_runs`, {
+    method: "POST",
+    headers: { ...headers(env), Prefer: "return=representation" },
+    body: JSON.stringify({
+      application_id: args.applicationId,
+      user_id: args.userId,
+      autonomy: "full_auto",
+      month_key: args.monthKey,
+      batch_id: args.batchId,
+      tenant_host: args.tenantHost,
+      status: "running"
+    })
+  });
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
+/** Hand back reserved-but-unused batch slots (release_arm_runs RPC). Best-effort. */
+export async function releaseArmRuns(
+  env: Env,
+  userId: string,
+  monthKey: string,
+  count: number
+): Promise<void> {
+  if (count <= 0) return;
+  try {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/release_arm_runs`, {
+      method: "POST",
+      headers: headers(env),
+      body: JSON.stringify({ p_user_id: userId, p_month_key: monthKey, p_count: count })
+    });
+  } catch {
+    // advisory only
+  }
+}
+
 // --- AI spend ledger --------------------------------------------------------
 
 /**

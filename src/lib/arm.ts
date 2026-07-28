@@ -62,6 +62,41 @@ export function dispatchRun(payload: DispatchRunPayload): Promise<ArmDispatchRes
   return armPost("/runs", payload);
 }
 
+export interface DispatchBatchPayload {
+  batchId: string;
+  userId: string;
+  keywords: string;
+  location: string;
+  remote: boolean;
+  /** Slots metering granted: the batch applies to at most this many jobs. */
+  reserved: number;
+  /** The meter key the reservation was made under, for releasing unused slots. */
+  monthKey: string;
+  profile: Record<string, unknown>;
+  resume: { signedUrl: string | null; fileName: string; mimeType: string };
+  memory: {
+    answers: Array<{ label: string; answer: string; source: string }>;
+    lessons: string[];
+  };
+  /** The user's connected LinkedIn login (batches are LinkedIn-only). */
+  account: { email: string; password: string };
+}
+
+/** Start a search-driven LinkedIn Easy Apply batch. */
+export function dispatchBatch(payload: DispatchBatchPayload): Promise<ArmDispatchResult> {
+  return armPost("/batches", payload);
+}
+
+/** Cancel a running batch. */
+export function cancelBatch(batchId: string): Promise<ArmDispatchResult> {
+  return armPost(`/batches/${batchId}/cancel`, {});
+}
+
+/** Hand a batch parked on a LinkedIn PIN the code the user entered. */
+export function submitBatchLoginCode(batchId: string, code: string): Promise<ArmDispatchResult> {
+  return armPost(`/batches/${batchId}/login-code`, { code });
+}
+
 export function approveRun(
   runId: string,
   answers: unknown[] | undefined
