@@ -16,11 +16,14 @@ describe("adapter contract", () => {
     expect(ADAPTERS.workday.requiresAccount).toBe(true);
   });
 
-  it("gives wizard hooks only to the multi-page ATS", () => {
+  it("gives wizard hooks to the multi-page ATSes (Workday and generic)", () => {
     expect(ADAPTERS.greenhouse.nextPage).toBeUndefined();
     expect(ADAPTERS.lever.nextPage).toBeUndefined();
     expect(ADAPTERS.ashby.nextPage).toBeUndefined();
-    expect(ADAPTERS.generic.nextPage).toBeUndefined();
+    // Generic gained wizard hooks: untuned forms (Dayforce guest flow) span
+    // pages too, and a single-page form simply reports nextPage=false.
+    expect(ADAPTERS.generic.nextPage).toBeTypeOf("function");
+    expect(ADAPTERS.generic.isLastPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.nextPage).toBeTypeOf("function");
     expect(ADAPTERS.workday.isLastPage).toBeTypeOf("function");
   });
@@ -348,6 +351,118 @@ describe("generic", () => {
       content: "<p>Success!</p>"
     });
     expect(await generic.confirmSubmitted(asPage(vague))).toBe(false);
+  });
+
+  it("dismisses a privacy card by its exact Accept text (Dayforce ant-card case)", async () => {
+    // The Dayforce consent card is a fixed .ant-card with a plain "Accept"
+    // button and no id; vision had read it as an unclearable modal. Matched by
+    // :text-is so it cannot also catch a "Do not accept"-style control.
+    const accept = loc({ count: vi.fn(async () => 1) });
+    const apply = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'button:text-is("Accept")': accept, ':has-text("Apply")': apply }
+    });
+    await generic.openApplication(asPage(page));
+    expect(accept.click).toHaveBeenCalled();
+  });
+
+  it("does not treat a hidden off-step Submit as the last wizard page", async () => {
+    // Wizards keep a hidden Submit in the DOM on earlier pages; counting it
+    // would freeze paging on page one.
+    const hiddenSubmit = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => false)
+    });
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const page = fakePage({
+      locators: {
+        'button:has-text("Submit")': hiddenSubmit,
+        'button:has-text("Next")': next
+      }
+    });
+    expect(await generic.isLastPage!(asPage(page))).toBe(false);
+    // ...and paging still advances past it.
+    expect(await generic.nextPage!(asPage(page))).toBe(true);
+    expect(next.click).toHaveBeenCalled();
+  });
+
+  it("treats a submit whose visibility read throws as not the last page", async () => {
+    const flaky = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { 'button:has-text("Submit")': flaky } });
+    expect(await generic.isLastPage!(asPage(page))).toBe(false);
+  });
+
+  it("reports the last page by a Submit-text control, ignoring type=submit Next buttons", async () => {
+    // isLastPage keys off button TEXT, not type=submit: a wizard's Next button
+    // is often type=submit, and keying off the attribute would freeze page one.
+    const submit = fakePage({
+      locators: { 'button:has-text("Submit")': loc({ count: vi.fn(async () => 1) }) }
+    });
+    expect(await generic.isLastPage!(asPage(submit))).toBe(true);
+    expect(await generic.isLastPage!(asPage(fakePage()))).toBe(false);
+  });
+
+  it("advances a wizard via the first enabled Next control when no Submit is present", async () => {
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const page = fakePage({ locators: { 'button:has-text("Next")': next } });
+    expect(await generic.nextPage!(asPage(page))).toBe(true);
+    expect(next.click).toHaveBeenCalled();
+  });
+
+  it("does not advance past the last page (a Submit control is present)", async () => {
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const page = fakePage({
+      locators: {
+        'button:has-text("Submit")': loc({ count: vi.fn(async () => 1) }),
+        'button:has-text("Next")': next
+      }
+    });
+    expect(await generic.nextPage!(asPage(page))).toBe(false);
+    expect(next.click).not.toHaveBeenCalled();
+  });
+
+  it("reports no advance for a plain single-page form (no Next, no Submit)", async () => {
+    expect(await generic.nextPage!(asPage(fakePage()))).toBe(false);
+  });
+
+  it("does not advance on a disabled Next control", async () => {
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => false) });
+    const page = fakePage({ locators: { 'button:has-text("Next")': next } });
+    expect(await generic.nextPage!(asPage(page))).toBe(false);
+    expect(next.click).not.toHaveBeenCalled();
+  });
+
+  it("treats an isEnabled failure as not advanceable", async () => {
+    const next = loc({
+      count: vi.fn(async () => 1),
+      isEnabled: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { 'button:has-text("Next")': next } });
+    expect(await generic.nextPage!(asPage(page))).toBe(false);
+  });
+
+  it("still reports an advance when the click or load wait misbehaves", async () => {
+    // Whether the page actually moved is the wizard loop's next isLastPage
+    // check to decide; a flaky click must not crash the fill phase.
+    const next = loc({
+      count: vi.fn(async () => 1),
+      isEnabled: vi.fn(async () => true),
+      click: vi.fn(async () => {
+        throw new Error("intercepted");
+      })
+    });
+    const page = fakePage({ locators: { 'button:has-text("Next")': next } });
+    page.waitForLoadState = vi.fn(async () => {
+      throw new Error("navigation aborted");
+    });
+    expect(await generic.nextPage!(asPage(page))).toBe(true);
   });
 });
 

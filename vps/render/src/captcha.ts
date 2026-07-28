@@ -37,7 +37,15 @@ export type AskSolver = (
 /** Is a visible, interactive challenge widget present? Never throws. */
 export async function detectChallenge(page: Page): Promise<ChallengeKind> {
   try {
-    if ((await page.locator('iframe[src*="recaptcha/api2/anchor"]').count()) > 0) {
+    // Enterprise reCAPTCHA serves the SAME checkbox/grid widget as v2, just
+    // from an `/enterprise/anchor` iframe (Dayforce and other ATSes use it), so
+    // it routes into the same worker-solved grid flow. Invisible/score-based
+    // reCAPTCHA has no anchor iframe and no grid to look at; it stays an honest
+    // captcha_blocked, which is the residential-proxy roadmap item's job.
+    if (
+      (await page.locator('iframe[src*="recaptcha/api2/anchor"]').count()) > 0 ||
+      (await page.locator('iframe[src*="recaptcha/enterprise/anchor"]').count()) > 0
+    ) {
       return "recaptcha_v2";
     }
     if (
@@ -124,7 +132,10 @@ async function solveRecaptchaV2(
   deadline: number,
   now: () => number
 ): Promise<boolean> {
-  const anchor = page.frameLocator('iframe[src*="recaptcha/api2/anchor"]');
+  // Match both the classic and enterprise iframes: same widget, different path.
+  const anchor = page.frameLocator(
+    'iframe[src*="recaptcha/api2/anchor"], iframe[src*="recaptcha/enterprise/anchor"]'
+  );
   // Click the "I'm not a robot" checkbox.
   try {
     await anchor.locator("#recaptcha-anchor").click({ timeout: 8000 });
@@ -143,7 +154,9 @@ async function solveRecaptchaV2(
   // A passive pass: the checkbox alone satisfied it and no grid ever appeared.
   if (await isChecked()) return true;
 
-  const bframe = page.frameLocator('iframe[src*="recaptcha/api2/bframe"]');
+  const bframe = page.frameLocator(
+    'iframe[src*="recaptcha/api2/bframe"], iframe[src*="recaptcha/enterprise/bframe"]'
+  );
 
   // Up to three grids: reCAPTCHA serves a fresh one after a wrong answer.
   for (let round = 0; round < 3 && now() < deadline; round++) {
