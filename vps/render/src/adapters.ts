@@ -309,6 +309,81 @@ async function dismissConsentOverlay(page: Page): Promise<void> {
   }
 }
 
+const dayforce: AtsAdapter = {
+  // The Ceridian Dayforce candidate portal renders one <form> per wizard page.
+  formSelector: "form",
+  requiresAccount: false,
+
+  async openApplication(page) {
+    // The consent card is a fixed ant-card that vision reads as a blocking
+    // modal; clear it first so the flow is unobstructed.
+    await dismissConsentOverlay(page);
+
+    // Posting page (/jobs/<id>) -> the Apply button leads to a flow-selection
+    // screen offering guest vs account application.
+    if (!page.url().includes("/apply")) {
+      await page
+        .locator('a:has-text("Apply"), button:has-text("Apply")')
+        .first()
+        .click()
+        .catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+
+    // Always take the guest path: JobArms never creates an account on an
+    // employer tenant for a non-account-gated ATS.
+    const guest = page
+      .locator(
+        'button:has-text("Apply without an Account"), a:has-text("Apply without an Account")'
+      )
+      .first();
+    if ((await guest.count()) > 0) {
+      await guest.click().catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+
+    // The manual-application form's controls are all prefixed
+    // `jobPostingApplication_` (personalInfo, files, etc.); wait for hydration.
+    await page
+      .waitForSelector('input[name^="jobPostingApplication"], form', { timeout: 20_000 })
+      .catch(() => {});
+  },
+
+  async submit(page) {
+    await page.locator(GENERIC_SUBMIT_TEXT).first().click();
+    await page.waitForTimeout(5000);
+  },
+
+  async confirmSubmitted(page) {
+    try {
+      await page
+        .locator(
+          "text=/application (has been |was )?submitted|thank you for (applying|your application)|your application has been received/i"
+        )
+        .first()
+        .waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return /application (has been |was )?submitted|thank you for (applying|your application)|your application has been received/i.test(
+        await page.content()
+      );
+    }
+  },
+
+  // The guest application is a multi-page wizard (page one ends on "Next"),
+  // driven by the shared loop in app.ts with the same text-based Next/Submit
+  // detection as the generic adapter.
+  async isLastPage(page) {
+    return hasGenericSubmit(page);
+  },
+
+  async nextPage(page) {
+    return advanceByNext(page);
+  }
+};
+
 /**
  * The best-effort adapter for boards nobody has tuned.
  *
@@ -398,20 +473,29 @@ const generic: AtsAdapter = {
   },
 
   async nextPage(page) {
-    // A submit control means this is the last page, not one to advance past.
-    if (await hasGenericSubmit(page)) return false;
-    for (const selector of GENERIC_NEXT) {
-      const button = page.locator(selector).first();
-      if ((await button.count()) > 0 && (await button.isEnabled().catch(() => false))) {
-        await button.click().catch(() => {});
-        await page.waitForLoadState("domcontentloaded").catch(() => {});
-        await page.waitForTimeout(2000);
-        return true;
-      }
-    }
-    return false;
+    return advanceByNext(page);
   }
 };
+
+/**
+ * Advance a multi-page wizard: click the first enabled Next-shaped control,
+ * unless a submit control shows this is already the last page. Shared by the
+ * generic and Dayforce adapters so the advance behavior (and its best-effort
+ * failure handling) lives, and is tested, in one place.
+ */
+async function advanceByNext(page: Page): Promise<boolean> {
+  if (await hasGenericSubmit(page)) return false;
+  for (const selector of GENERIC_NEXT) {
+    const button = page.locator(selector).first();
+    if ((await button.count()) > 0 && (await button.isEnabled().catch(() => false))) {
+      await button.click().catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2000);
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * A submittable final page, detected by button TEXT, never by `type="submit"`:
@@ -439,4 +523,11 @@ const GENERIC_NEXT = [
   'a:has-text("Next")'
 ];
 
-export const ADAPTERS: Record<Ats, AtsAdapter> = { greenhouse, lever, workday, ashby, generic };
+export const ADAPTERS: Record<Ats, AtsAdapter> = {
+  greenhouse,
+  lever,
+  workday,
+  ashby,
+  dayforce,
+  generic
+};

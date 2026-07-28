@@ -35,6 +35,21 @@ export function parseAshbyUrl(url: URL): { org: string; jobId: string } | null {
   return null;
 }
 
+const DAYFORCE_LOCALE_RE = /^[a-z]{2}-[A-Za-z]{2}$/;
+
+export function parseDayforceUrl(
+  url: URL
+): { tenant: string; site: string; locale: string; jobId: string } | null {
+  // https://jobs.dayforcehcm.com/<locale>/<tenant>/<site>/jobs/<id>[/apply...]
+  const parts = url.pathname.split("/").filter(Boolean);
+  const jobsIdx = parts.indexOf("jobs");
+  // Need locale, tenant, site before "jobs", and an id after it.
+  if (jobsIdx < 3 || !parts[jobsIdx + 1]) return null;
+  const [locale, tenant, site] = parts;
+  if (!DAYFORCE_LOCALE_RE.test(locale)) return null;
+  return { tenant, site, locale, jobId: parts[jobsIdx + 1] };
+}
+
 const HTML_ENTITIES: Record<string, string> = {
   "&nbsp;": " ",
   "&lt;": "<",
@@ -140,6 +155,42 @@ export async function fetchJobMeta(rawUrl: string): Promise<JobMeta> {
         title: job.title ?? "",
         location: job.location ?? "",
         description: (job.descriptionPlain ?? "").slice(0, 20_000),
+        ats
+      };
+    }
+
+    if (ats === "dayforce") {
+      const parsed = parseDayforceUrl(url);
+      if (!parsed) return fallback;
+      const host = url.hostname;
+      // The board id keys the posting endpoint; read it from the site context
+      // (public, unauthenticated) rather than assuming 1.
+      const ctxRes = await fetch(
+        `https://${host}/api/geo/${parsed.tenant}/sitecontext/${parsed.tenant}/${parsed.site}/${parsed.locale}`,
+        { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) }
+      );
+      if (!ctxRes.ok) return fallback;
+      const ctx = (await ctxRes.json()) as { jobBoardId?: number };
+      const boardId = ctx.jobBoardId ?? 1;
+
+      const res = await fetch(
+        `https://${host}/api/geo/${parsed.tenant}/jobposting/${parsed.tenant}/${parsed.locale}/${boardId}/${parsed.jobId}`,
+        { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) }
+      );
+      if (!res.ok) return fallback;
+      const body = (await res.json()) as {
+        jobTitle?: string;
+        jobPostingContent?: { jobDescription?: string };
+        postingLocations?: Array<{ formattedAddress?: string }>;
+      };
+      return {
+        // The posting API carries no employer name; the tenant slug is the best
+        // public identifier, same trade-off as Lever and Ashby.
+        company: parsed.tenant,
+        title: body.jobTitle ?? "",
+        location: body.postingLocations?.[0]?.formattedAddress ?? "",
+        // jobDescription is HTML.
+        description: stripHtml(body.jobPostingContent?.jobDescription ?? "").slice(0, 20_000),
         ats
       };
     }
