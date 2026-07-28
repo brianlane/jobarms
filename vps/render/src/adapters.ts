@@ -9,6 +9,8 @@
  *    ATSes.
  */
 import type { Page } from "playwright";
+import { collectFields } from "./extract.js";
+import { looksLikeApplicationForm } from "./form-sanity.js";
 import type { Ats } from "./types.js";
 
 export interface AtsAdapter {
@@ -318,24 +320,18 @@ const generic: AtsAdapter = {
   async openApplication(page) {
     /**
      * Is the APPLICATION form already on screen? If so, another Apply click
-     * could navigate away from it. Deliberately stricter than "any email
-     * input": landing pages carry newsletter boxes (email alone) and login
-     * widgets (email + password), and neither means the form is up. The
-     * signals: controls inside a real <form>, a file upload (nothing else on
-     * a career page wants a file), or an email field beside a name field with
-     * no password in sight. Email + NAME, not email + phone, so this stays
-     * aligned with what looksLikeApplicationForm will later accept: a page
-     * that convinces us to skip Apply must also survive extraction.
+     * could navigate away from it. Answered by the SAME extraction + sanity
+     * pair the reach path uses, not by a lookalike heuristic: every attempt
+     * to approximate it (email input? email + name attribute?) either
+     * mistook a newsletter box for the form or skipped Apply on a page whose
+     * extraction was about to fail, because the sanity check also accepts
+     * label text, opaque field names, and sheer field volume. One check, one
+     * verdict. The password guard is the single extra rule, since a login
+     * widget can carry enough chrome to pass the sanity bar.
      */
     const applicationUp = async (): Promise<boolean> => {
-      if ((await page.locator("form input, form textarea, form select").count()) > 0) return true;
-      if ((await page.locator('input[type="file"]').count()) > 0) return true;
-      const emails = await page
-        .locator('input[type="email"], input[name*="email" i]')
-        .count();
-      if (emails === 0) return false;
       if ((await page.locator('input[type="password"]').count()) > 0) return false;
-      return (await page.locator('input[name*="name" i]').count()) > 0;
+      return looksLikeApplicationForm(await collectFields(page, "body")).ok;
     };
 
     // If the form is not up, try the two universal moves: clear a consent

@@ -45,8 +45,11 @@ describe("reachForm", () => {
 
   it("sweeps the whole page for the generic adapter when <form> holds nothing", async () => {
     // Component-built career sites render fields with no <form> element: the
-    // narrow scope fails, the page-wide sweep finds the real fields.
-    const page = pageWithExtractions([[], goodFields()]);
+    // narrow scope fails, the page-wide sweep finds the real fields. The
+    // first three extractions belong to openApplication's is-the-form-up
+    // checks (one per Apply attempt), then reach reads the form scope (empty)
+    // and finally the page-wide sweep.
+    const page = pageWithExtractions([[], [], [], [], goodFields()]);
     const result = await reachForm(
       asPage(page),
       "https://careers.example.com/jobs/1",
