@@ -379,25 +379,36 @@ const linkedin: AtsAdapter = {
 };
 
 /**
- * Consent/cookie overlays intercept pointer events across the WHOLE page, so
- * on an untuned board nothing (not even the Apply button) is clickable until
- * one is dismissed; a bunq careers page proved it by timing out every click
- * under a Framer cookie banner. Accept-shaped controls only, first visible
+ * Consent/cookie/privacy overlays either intercept pointer events across the
+ * WHOLE page (a Framer cookie banner on a bunq careers page timed out every
+ * click under it) or visually dominate it enough that vision reads the page as
+ * an unclearable modal and gives up (a Dayforce posting's fixed `.ant-card`
+ * consent card was diagnosed as "a privacy notice modal overlaying the page").
+ * Dismissing them first fixes both. Accept-shaped controls only, first visible
  * match, best-effort: a page without a banner loses nothing.
  *
  * `:has-text()` matches case-insensitively, so one casing per phrase is
  * enough. The attribute selector catches component-generated ids like
- * `__framer-cookie-component-button-accept`.
+ * `__framer-cookie-component-button-accept`. Phrases stay accept-shaped and
+ * avoid bare "Continue"/"OK", which double as wizard controls.
  */
+// `:has-text()` is a case-insensitive SUBSTRING match, so a bare
+// `has-text("Agree")` also matches a "Disagree" reject button. Ambiguous
+// single words therefore use `:text-is()` (exact, trimmed) instead; multi-word
+// accept phrases keep substring matching, which no reject control contains.
 const CONSENT_SELECTORS = [
   "#onetrust-accept-btn-handler",
   '[id*="cookie"][id*="accept"]',
   'button:has-text("Accept all")',
   'button:has-text("Accept cookies")',
+  'button:has-text("Accept and continue")',
+  'button:has-text("I accept")',
   'button:has-text("I agree")',
+  'button:has-text("Agree and continue")',
+  'button:text-is("Agree")',
+  'button:text-is("Accept")',
   'button:has-text("Allow all")',
-  'button:has-text("Got it")',
-  'button:has-text("Accept")'
+  'button:has-text("Got it")'
 ];
 
 async function dismissConsentOverlay(page: Page): Promise<void> {
@@ -410,6 +421,83 @@ async function dismissConsentOverlay(page: Page): Promise<void> {
     }
   }
 }
+
+const dayforce: AtsAdapter = {
+  // The Ceridian Dayforce candidate portal renders one <form> per wizard page.
+  formSelector: "form",
+  requiresAccount: false,
+
+  async openApplication(page) {
+    // The consent card is a fixed ant-card that vision reads as a blocking
+    // modal; clear it first so the flow is unobstructed.
+    await dismissConsentOverlay(page);
+
+    // Posting page (/jobs/<id>) -> the Apply button leads to a flow-selection
+    // screen offering guest vs account application.
+    if (!page.url().includes("/apply")) {
+      await page
+        .locator('a:has-text("Apply"), button:has-text("Apply")')
+        .first()
+        .click()
+        .catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+
+    // Always take the guest path: JobArms never creates an account on an
+    // employer tenant for a non-account-gated ATS.
+    const guest = page
+      .locator(
+        'button:has-text("Apply without an Account"), a:has-text("Apply without an Account")'
+      )
+      .first();
+    if ((await guest.count()) > 0) {
+      await guest.click().catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+
+    // Wait for the guest application form SPECIFICALLY, by its
+    // `jobPostingApplication_`-prefixed controls (personalInfo, files, etc.),
+    // never a bare `form`: the portal keeps search and chrome forms in the DOM,
+    // and matching those would extract the wrong form before the wizard mounts.
+    await page
+      .waitForSelector('input[name^="jobPostingApplication"]', { timeout: 20_000 })
+      .catch(() => {});
+  },
+
+  async submit(page) {
+    await page.locator(GENERIC_SUBMIT_TEXT).first().click();
+    await page.waitForTimeout(5000);
+  },
+
+  async confirmSubmitted(page) {
+    try {
+      await page
+        .locator(
+          "text=/application (has been |was )?submitted|thank you for (applying|your application)|your application has been received/i"
+        )
+        .first()
+        .waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return /application (has been |was )?submitted|thank you for (applying|your application)|your application has been received/i.test(
+        await page.content()
+      );
+    }
+  },
+
+  // The guest application is a multi-page wizard (page one ends on "Next"),
+  // driven by the shared loop in app.ts with the same text-based Next/Submit
+  // detection as the generic adapter.
+  async isLastPage(page) {
+    return hasGenericSubmit(page);
+  },
+
+  async nextPage(page) {
+    return advanceByNext(page);
+  }
+};
 
 /**
  * The best-effort adapter for boards nobody has tuned.
@@ -487,14 +575,75 @@ const generic: AtsAdapter = {
         await page.content()
       );
     }
+  },
+
+  // Wizard hooks: many untuned application forms span pages (a Dayforce guest
+  // application ends page one on "Next", not "Submit"). The shared wizard loop
+  // in app.ts drives these, accumulating every page's fields into one review
+  // payload and replaying answers per page, bounded by maxWizardPages. A plain
+  // single-page form reports isLastPage=false and nextPage=false, so the loop
+  // stops after page one, unchanged.
+  async isLastPage(page) {
+    return hasGenericSubmit(page);
+  },
+
+  async nextPage(page) {
+    return advanceByNext(page);
   }
 };
+
+/**
+ * Advance a multi-page wizard: click the first enabled Next-shaped control,
+ * unless a submit control shows this is already the last page. Shared by the
+ * generic and Dayforce adapters so the advance behavior (and its best-effort
+ * failure handling) lives, and is tested, in one place.
+ */
+async function advanceByNext(page: Page): Promise<boolean> {
+  if (await hasGenericSubmit(page)) return false;
+  for (const selector of GENERIC_NEXT) {
+    const button = page.locator(selector).first();
+    if ((await button.count()) > 0 && (await button.isEnabled().catch(() => false))) {
+      await button.click().catch(() => {});
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await page.waitForTimeout(2000);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A submittable final page, detected by button TEXT, never by `type="submit"`:
+ * a wizard's "Next" button is frequently `type="submit"` inside the page form,
+ * so keying off the attribute would read page one as the last page and refuse
+ * to advance. The actual submit click (below) keeps the broader attribute
+ * selector, because by then we have decided this IS the last page.
+ */
+async function hasGenericSubmit(page: Page): Promise<boolean> {
+  // Visibility matters: a wizard often keeps an off-step Submit button in the
+  // DOM (hidden) on earlier pages, and counting it would read page one as the
+  // last page and freeze paging. Only a VISIBLE submit control ends the wizard.
+  const button = page.locator(GENERIC_SUBMIT_TEXT).first();
+  return (await button.count()) > 0 && (await button.isVisible().catch(() => false));
+}
+
+const GENERIC_SUBMIT_TEXT = 'button:has-text("Submit application"), button:has-text("Submit")';
+
+/** Advance controls, in preference order, for a generic multi-page wizard. */
+const GENERIC_NEXT = [
+  'button:has-text("Save and continue")',
+  'button:has-text("Save and Continue")',
+  'button:has-text("Continue")',
+  'button:has-text("Next")',
+  'a:has-text("Next")'
+];
 
 export const ADAPTERS: Record<Ats, AtsAdapter> = {
   greenhouse,
   lever,
   workday,
   ashby,
+  dayforce,
   linkedin,
   generic
 };

@@ -22,7 +22,7 @@ export interface Env {
 interface CompanyRow {
   id: string;
   name: string;
-  ats: "greenhouse" | "lever" | "ashby" | "workable";
+  ats: "greenhouse" | "lever" | "ashby" | "workable" | "workday" | "dayforce";
   board_token: string;
 }
 

@@ -4,7 +4,8 @@ import {
   comboboxValueInPage,
   elementInfoInPage,
   fileInputIsWidgetOwnedInPage,
-  resumeAcceptedInPage
+  resumeAcceptedInPage,
+  resumeFileInputIndexInPage
 } from "../src/fill";
 import { visibleTextInPage } from "../src/account";
 import { num } from "../src/config";
@@ -238,7 +239,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
   });
 
   it("is false for a plain input holding nothing", () => {
@@ -250,7 +251,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("is false for a plain input with no file list at all", () => {
@@ -258,7 +259,7 @@ describe("resumeAcceptedInPage", () => {
       querySelector: () => ({ getBoundingClientRect: rect(200, 30), closest: () => null }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("is false when the container has no text to read", () => {
@@ -270,7 +271,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("ignores the file list when a widget owns a hidden input", () => {
@@ -283,7 +284,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("accepts a hidden input once the widget renders the name", () => {
@@ -295,7 +296,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
   });
 
   it("falls back to the whole page when the hidden input has no container", () => {
@@ -307,18 +308,18 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "cv.pdf uploaded" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
   });
 
   it("reads the rendered name after the widget removed its own input", () => {
     withDoc({ querySelector: () => null, body: { textContent: "Resume/CV* cv.pdf" } });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
 
     withDoc({ querySelector: () => null, body: { textContent: "Attach" } });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
 
     withDoc({ querySelector: () => null, body: null });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("does NOT call a filename beside an error an upload", () => {
@@ -336,7 +337,7 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("is not put off by the widget's own help text", () => {
@@ -352,32 +353,63 @@ describe("resumeAcceptedInPage", () => {
       }),
       body: { textContent: "" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
   });
 
   it("catches an error left behind after the widget removed its input", () => {
+    // The stubs answer per-selector now that the function ALSO queries for file
+    // inputs by index: a selector-blind stub would hand the complaint node back
+    // as the input itself.
+    const bySelector = (nodes: unknown[]) => (sel: string) =>
+      sel.startsWith("input") ? [] : nodes;
+
     withDoc({
       querySelector: () => null,
-      querySelectorAll: () => [{ textContent: "cv.pdf Upload failed, try again" }],
+      querySelectorAll: bySelector([{ textContent: "cv.pdf Upload failed, try again" }]),
       body: { textContent: "cv.pdf Upload failed, try again" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
 
     // The same shape, but the complaining node is about something else entirely.
     withDoc({
       querySelector: () => null,
-      querySelectorAll: () => [{ textContent: "cv.pdf" }],
+      querySelectorAll: bySelector([{ textContent: "cv.pdf" }]),
       body: { textContent: "cv.pdf" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
 
     // A node carrying no text at all is not evidence of anything.
     withDoc({
       querySelector: () => null,
-      querySelectorAll: () => [{}],
+      querySelectorAll: bySelector([{}]),
       body: { textContent: "cv.pdf" }
     });
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
+  });
+
+  it("judges the upload by the input the attach targeted, not the first one", () => {
+    // Ashby: the autofill pane's input comes first and never shows the name;
+    // the Resume field's own widget (index 1) renders it. Reading index 0 here
+    // called a successful upload a failure.
+    const paneInput = {
+      getBoundingClientRect: rect(1, 1),
+      files: { length: 0 },
+      closest: () => ({ textContent: "Autofill from resume Upload file" })
+    };
+    const fieldInput = {
+      getBoundingClientRect: rect(1, 1),
+      files: { length: 0 },
+      closest: () => ({ textContent: "Resume cv.pdf Replace" })
+    };
+    withDoc({
+      querySelector: () => paneInput,
+      querySelectorAll: (sel: string) => (sel.startsWith("input") ? [paneInput, fieldInput] : []),
+      body: { textContent: "" }
+    });
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf", index: 1 })).toBe(true);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf", index: 0 })).toBe(false);
+    // An index the page no longer has falls back to the first input.
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf", index: 9 })).toBe(false);
   });
 
   it("treats a display:none input as widget-owned", () => {
@@ -392,7 +424,7 @@ describe("resumeAcceptedInPage", () => {
       },
       { display: "none" }
     );
-    expect(resumeAcceptedInPage("cv.pdf")).toBe(false);
+    expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(false);
   });
 
   it("treats visibility:hidden and opacity:0 as widget-owned too", () => {
@@ -408,7 +440,7 @@ describe("resumeAcceptedInPage", () => {
         },
         style
       );
-      expect(resumeAcceptedInPage("cv.pdf")).toBe(true);
+      expect(resumeAcceptedInPage({ fileName: "cv.pdf" })).toBe(true);
     }
   });
 });
@@ -454,5 +486,73 @@ describe("fileInputIsWidgetOwnedInPage", () => {
   it("has nothing to say when there is no file input", () => {
     withDoc({ querySelector: () => null });
     expect(fileInputIsWidgetOwnedInPage()).toBe(false);
+  });
+
+  it("answers about the indexed input when the page carries several", () => {
+    const hidden = input(1, 1);
+    const visible = input(200, 30);
+    withDoc({
+      querySelector: () => hidden,
+      querySelectorAll: () => [hidden, visible]
+    });
+    expect(fileInputIsWidgetOwnedInPage(1)).toBe(false);
+    expect(fileInputIsWidgetOwnedInPage(0)).toBe(true);
+    // An index the page no longer has falls back to the first input.
+    expect(fileInputIsWidgetOwnedInPage(5)).toBe(true);
+    // No index at all reads the first entry of the collection.
+    expect(fileInputIsWidgetOwnedInPage()).toBe(true);
+  });
+});
+
+describe("resumeFileInputIndexInPage", () => {
+  const withDoc = (doc: unknown) => {
+    (globalThis as unknown as { document: unknown }).document = doc;
+  };
+  const fileInput = (containerText: string, containerCls = "") => ({
+    closest: () => ({ textContent: containerText, className: containerCls })
+  });
+
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+  });
+
+  it("prefers the Resume field's input over Ashby's autofill pane", () => {
+    // The exact shape that failed live: the pane's input comes FIRST in the
+    // DOM, so `.first()` fed a convenience widget while the required Resume
+    // field stayed empty.
+    withDoc({
+      querySelectorAll: () => [
+        fileInput("Autofill from resume Upload your resume here", "autofill-uploader"),
+        fileInput("Resume Upload File or drag and drop here")
+      ]
+    });
+    expect(resumeFileInputIndexInPage()).toBe(1);
+  });
+
+  it("keeps index 0 for the single-input ATSes", () => {
+    withDoc({ querySelectorAll: () => [fileInput("Resume/CV Attach")] });
+    expect(resumeFileInputIndexInPage()).toBe(0);
+    withDoc({ querySelectorAll: () => [] });
+    expect(resumeFileInputIndexInPage()).toBe(0);
+    // A document stub with no collection query at all still answers.
+    withDoc({});
+    expect(resumeFileInputIndexInPage()).toBe(0);
+  });
+
+  it("keeps the first input when nothing distinguishes them", () => {
+    withDoc({
+      querySelectorAll: () => [fileInput("Attach a document"), fileInput("Attach another")]
+    });
+    expect(resumeFileInputIndexInPage()).toBe(0);
+  });
+
+  it("survives inputs with no recognizable container", () => {
+    withDoc({
+      querySelectorAll: () => [
+        { closest: () => null },
+        fileInput("Resume Upload File")
+      ]
+    });
+    expect(resumeFileInputIndexInPage()).toBe(1);
   });
 });

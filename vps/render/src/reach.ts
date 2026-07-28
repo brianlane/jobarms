@@ -101,6 +101,7 @@ export async function applyStrategy(
         lever: "lever.co",
         workday: "myworkdayjobs.com",
         ashby: "ashbyhq.com",
+        dayforce: "dayforcehcm.com",
         // LinkedIn renders Easy Apply inline in a modal, never in an iframe, so
         // there is no embed host to anchor on.
         linkedin: null,

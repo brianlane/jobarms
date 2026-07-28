@@ -80,6 +80,34 @@ function friendlyStep(step: { step: string; detail?: string }): string | null {
 }
 
 /**
+ * Human copy for a failed run's error, from most to least specific.
+ *
+ * Two rules the branches must keep. Say WHOSE fault it was when that is known:
+ * a system failure on our side reads very differently from an employer's
+ * anti-bot wall, and "a problem" with no category tells the user nothing (a
+ * live incident shipped exactly that and the failed run was unreadable from
+ * the dashboard). And never promise "nothing was submitted" for a failure in
+ * the submit phase, where the click may have landed before the crash.
+ */
+function runErrorCopy(error: string): string {
+  if (error.includes("captcha_blocked"))
+    return "This employer's anti-bot check blocked the automated submit. Your answers are saved; finish on the employer's site from the posting link. This run counted, since the arm did the full application.";
+  if (error.includes("verification_failed"))
+    return "Your arm filled the form, read it back, and found the form was not holding what you approved, so it refused to submit rather than send a wrong answer. Retry below, or open the posting and finish it yourself. This run counted, since the arm did the full application.";
+  if (error.includes("submit_unconfirmed"))
+    return "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site.";
+  if (error.includes("review_timeout"))
+    return "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted.";
+  if (error.includes("form_not_found"))
+    return "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms).";
+  if (error.includes("during submit"))
+    return "A technical problem on our side interrupted the arm mid-submit, so it couldn't confirm whether the application went through. Check the screenshots below or the employer's site before retrying.";
+  if (error.includes("render_failed") || error.includes("render_unreachable"))
+    return "A technical problem on our side stopped the arm while it was working on the form. Nothing was submitted, and your answers are saved. This one is on us; retrying usually works.";
+  return "The arm ran into a problem it couldn't recover from. Your tracker entry is saved.";
+}
+
+/**
  * Latest arm run, presented for humans: a friendly status + progress story,
  * a clear review-and-approve flow when the arm is waiting, and the raw
  * technical log tucked behind a disclosure.
@@ -188,19 +216,7 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
 
       {run.error && (
         <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          <p>
-            {run.error.includes("captcha_blocked")
-              ? "This employer's anti-bot check blocked the automated submit. Your answers are saved; finish on the employer's site from the posting link. This run counted, since the arm did the full application."
-              : run.error.includes("verification_failed")
-                ? "Your arm filled the form, read it back, and found the form was not holding what you approved, so it refused to submit rather than send a wrong answer. Retry below, or open the posting and finish it yourself. This run counted, since the arm did the full application."
-                : run.error.includes("submit_unconfirmed")
-                ? "The application was submitted, but the site never showed a confirmation. Check the screenshots below or verify on the employer's site."
-                : run.error.includes("review_timeout")
-                  ? "This review sat for 7 days without a decision, so the run ended on its own. Nothing was submitted."
-                  : run.error.includes("form_not_found")
-                    ? "Your arm looked at this page every way it knows and couldn't find a real application form (some career sites block automation or hide their forms)."
-                    : "The arm ran into a problem it couldn't recover from. Your tracker entry is saved."}
-          </p>
+          <p>{runErrorCopy(run.error)}</p>
           {run.slot_refunded && (
             <p className="mt-1.5 font-medium text-red-800">
               This run did not count against your arm runs.

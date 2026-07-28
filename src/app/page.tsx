@@ -65,7 +65,7 @@ const faqs = [
   },
   {
     q: "Which job sites can the arms handle?",
-    a: "Arms are tuned for Greenhouse, Lever, Workday, and Ashby, which cover a large share of startup and tech hiring. Paste any other job link and the arm will try its best in review mode: you approve everything before it submits, and we tell you up front that untuned boards can fail."
+    a: "Arms are tuned for Greenhouse, Lever, Workday, Ashby, and Dayforce, which cover a large share of startup and tech hiring. Paste any other job link and the arm will try its best in review mode: you approve everything before it submits, and we tell you up front that untuned boards can fail."
   },
   {
     q: "Is it really free?",

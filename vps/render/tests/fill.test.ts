@@ -7,7 +7,8 @@ import {
   fillAnswers,
   fillCheckboxGroup,
   fillCombobox,
-  fillField
+  fillField,
+  resumeFileInputIndexInPage
 } from "../src/fill";
 import { fakePage, loc } from "./helpers/fake-page";
 
@@ -468,6 +469,7 @@ describe("attachResume", () => {
         // A plain visible input, so the widget path is skipped and this stays a
         // test about the retry rather than about which control gets clicked.
         if (fn === fileInputIsWidgetOwnedInPage) return false;
+        if (fn === resumeFileInputIndexInPage) return 0;
         const now = accepted;
         accepted = true; // the widget finishes mounting between attempts
         return now;
@@ -806,5 +808,100 @@ describe("handing the resume to a widget that owns its own input", () => {
     await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
     expect(input.setInputFiles).toHaveBeenCalled();
     expect(control.click).not.toHaveBeenCalled();
+  });
+
+  it("feeds the Resume field's widget, never the autofill pane's", async () => {
+    // The Ashby failure: TWO hidden file inputs, and both the page-wide first
+    // input and the page-wide first "upload" button belong to the autofill
+    // pane. The attach must follow the picker's index to the Resume field's
+    // input and click the button inside THAT widget, or a convenience pane
+    // eats the file while the required field stays empty.
+    const setFiles = vi.fn(async () => {});
+    const scopedControl = loc({ count: vi.fn(async () => 1) });
+    const container = loc({ getByRole: vi.fn(() => scopedControl) });
+    const fieldInput = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const inputs = loc({});
+    inputs.nth = vi.fn(() => fieldInput);
+    const pageWideControl = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'input[type="file"]': inputs },
+      getByRole: () => pageWideControl,
+      evaluate: (fn) => (fn === resumeFileInputIndexInPage ? 1 : true),
+      waitForEvent: () => ({ setFiles })
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+
+    expect(inputs.nth).toHaveBeenCalledWith(1);
+    expect(scopedControl.click).toHaveBeenCalled();
+    expect(pageWideControl.click).not.toHaveBeenCalled();
+    // The ancestor scope must recognize every container shape the in-page
+    // pickers do, fieldset TAGS included, or a picked input inside one would
+    // fall back to the page-wide button and feed the wrong widget.
+    expect(fieldInput.locator).toHaveBeenCalledWith(expect.stringContaining("self::fieldset"));
+    expect(setFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "cv.pdf", mimeType: "application/pdf" })
+    );
+  });
+
+  it("falls back page-wide when the scoped widget cannot even be counted", async () => {
+    // A detached container must degrade to the old page-wide button lookup,
+    // not fail the attach.
+    const setFiles = vi.fn(async () => {});
+    const scopedControl = loc({
+      count: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const container = loc({ getByRole: vi.fn(() => scopedControl) });
+    const input = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const pageWideControl = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({
+      locators: { 'input[type="file"]': input },
+      getByRole: () => pageWideControl,
+      evaluate: () => true,
+      waitForEvent: () => ({ setFiles })
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(pageWideControl.click).toHaveBeenCalled();
+  });
+
+  it("falls back to the first input when the picked index went stale mid-attempt", async () => {
+    // A widget can swap its inputs between the pick and the look. An empty
+    // nth() while an input still exists means stale, not gone, so the attach
+    // must not abandon the resume over it.
+    const gone = loc({ count: vi.fn(async () => 0) });
+    const remaining = loc({ count: vi.fn(async () => 1) });
+    const inputs = loc({});
+    inputs.nth = vi.fn(() => gone);
+    inputs.first = vi.fn(() => remaining);
+    const page = fakePage({
+      locators: { 'input[type="file"]': inputs },
+      evaluate: (fn) =>
+        fn === resumeFileInputIndexInPage ? 1 : fn === fileInputIsWidgetOwnedInPage ? false : true
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(remaining.setInputFiles).toHaveBeenCalled();
+    expect(gone.setInputFiles).not.toHaveBeenCalled();
+    // The checks must follow the fallback: judging widget ownership or
+    // acceptance at the stale index would inspect a control nobody fed.
+    expect(page.evaluate).toHaveBeenCalledWith(fileInputIsWidgetOwnedInPage, 0);
+  });
+
+  it("treats a picker answer that is not a usable index as the first input", async () => {
+    // page.evaluate can hand back anything on a hostile page; a junk index must
+    // degrade to the old behavior, not become nth(NaN).
+    const input = loc({ count: vi.fn(async () => 1) });
+    const inputs = loc({});
+    inputs.nth = vi.fn(() => input);
+    const page = fakePage({
+      locators: { 'input[type="file"]': inputs },
+      evaluate: (fn) => (fn === resumeFileInputIndexInPage ? "junk" : fn === fileInputIsWidgetOwnedInPage ? false : true)
+    });
+
+    await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
+    expect(inputs.nth).toHaveBeenCalledWith(0);
   });
 });

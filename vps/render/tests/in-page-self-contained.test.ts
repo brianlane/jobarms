@@ -4,7 +4,8 @@ import {
   comboboxValueInPage,
   elementInfoInPage,
   fileInputIsWidgetOwnedInPage,
-  resumeAcceptedInPage
+  resumeAcceptedInPage,
+  resumeFileInputIndexInPage
 } from "../src/fill";
 import { collectFieldsInPage, readFilledStateInPage } from "../src/extract";
 import { visibleTextInPage } from "../src/account";
@@ -49,14 +50,25 @@ describe("in-page callbacks survive being rebuilt in the browser", () => {
     };
     const rebuilt = asTheBrowserWouldSeeIt(resumeAcceptedInPage);
     // A module-scope reference would throw here instead of answering.
-    expect(rebuilt("cv.pdf")).toBe(true);
+    expect(rebuilt({ fileName: "cv.pdf" })).toBe(true);
 
     (globalThis as any).document = {
       querySelector: () => null,
-      querySelectorAll: () => [{ textContent: "cv.pdf Upload failed" }],
+      querySelectorAll: (sel: string) =>
+        sel.startsWith("input") ? [] : [{ textContent: "cv.pdf Upload failed" }],
       body: { textContent: "cv.pdf Upload failed" }
     };
-    expect(asTheBrowserWouldSeeIt(resumeAcceptedInPage)("cv.pdf")).toBe(false);
+    expect(asTheBrowserWouldSeeIt(resumeAcceptedInPage)({ fileName: "cv.pdf" })).toBe(false);
+  });
+
+  it("resumeFileInputIndexInPage carries everything it needs", () => {
+    (globalThis as any).document = {
+      querySelectorAll: () => [
+        { closest: () => ({ textContent: "Autofill from resume", className: "autofill" }) },
+        { closest: () => ({ textContent: "Resume Upload File", className: "" }) }
+      ]
+    };
+    expect(asTheBrowserWouldSeeIt(resumeFileInputIndexInPage)()).toBe(1);
   });
 
   it("fileInputIsWidgetOwnedInPage carries everything it needs", () => {

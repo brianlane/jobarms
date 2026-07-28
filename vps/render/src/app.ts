@@ -67,6 +67,7 @@ const ATS_VALUES: readonly Ats[] = [
   "lever",
   "workday",
   "ashby",
+  "dayforce",
   "linkedin",
   "generic"
 ];

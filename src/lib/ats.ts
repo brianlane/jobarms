@@ -5,6 +5,7 @@ export type Ats =
   | "lever"
   | "workday"
   | "ashby"
+  | "dayforce"
   | "workable"
   | "linkedin"
   | "unknown";
@@ -24,6 +25,9 @@ const ATS_HOSTS: ReadonlyArray<{ suffix: string; ats: Ats }> = [
   { suffix: "myworkdayjobs.com", ats: "workday" },
   { suffix: "myworkdaysite.com", ats: "workday" },
   { suffix: "ashbyhq.com", ats: "ashby" },
+  // Ceridian Dayforce candidate portals: <tenant>.dayforcehcm.com and the
+  // shared jobs.dayforcehcm.com host both serve from dayforcehcm.com.
+  { suffix: "dayforcehcm.com", ats: "dayforce" },
   { suffix: "workable.com", ats: "workable" },
   // LinkedIn Easy Apply. Unlike every other ATS, the "account" here is the
   // user's own LinkedIn login (see the site-account vault), not one the arm
@@ -51,6 +55,7 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
   "lever",
   "workday",
   "ashby",
+  "dayforce",
   "linkedin"
 ]);
 
@@ -62,7 +67,14 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
  * re-enforces): review-gate only, never account creation, and an explicit
  * user acknowledgment that the attempt may fail and still consume a run.
  */
-export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "linkedin" | "generic";
+export type DispatchAts =
+  | "greenhouse"
+  | "lever"
+  | "workday"
+  | "ashby"
+  | "dayforce"
+  | "linkedin"
+  | "generic";
 
 export function dispatchAtsOf(ats: Ats): DispatchAts {
   return SUPPORTED_ATS.has(ats) ? (ats as DispatchAts) : "generic";

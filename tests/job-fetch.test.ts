@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJobMeta, parseAshbyUrl, parseGreenhouseUrl, parseLeverUrl } from "@/lib/job-fetch";
+import {
+  fetchJobMeta,
+  parseAshbyUrl,
+  parseDayforceUrl,
+  parseGreenhouseUrl,
+  parseLeverUrl
+} from "@/lib/job-fetch";
 
 describe("parseGreenhouseUrl", () => {
   it("parses /jobs/<id> paths", () => {
@@ -44,6 +50,134 @@ describe("parseAshbyUrl", () => {
   });
   it("returns null when too short", () => {
     expect(parseAshbyUrl(new URL("https://jobs.ashbyhq.com/Valon"))).toBeNull();
+  });
+});
+
+describe("parseDayforceUrl", () => {
+  it("parses /<locale>/<tenant>/<site>/jobs/<id>", () => {
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL/jobs/439"))
+    ).toEqual({ tenant: "mercola", site: "CANDIDATEPORTAL", locale: "en-US", jobId: "439" });
+  });
+  it("parses through an /apply suffix", () => {
+    expect(
+      parseDayforceUrl(
+        new URL("https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL/jobs/439/apply")
+      )
+    ).toEqual({ tenant: "mercola", site: "CANDIDATEPORTAL", locale: "en-US", jobId: "439" });
+  });
+  it("returns null without a leading locale segment", () => {
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/mercola/CANDIDATEPORTAL/jobs/439"))
+    ).toBeNull();
+  });
+  it("returns null when the leading segment is not a locale", () => {
+    // Enough segments before "jobs", but the first is not <ll>-<CC>.
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/careers/mercola/SITE/jobs/439"))
+    ).toBeNull();
+  });
+  it("returns null when extra segments push jobs past the fourth position", () => {
+    // A deeper/reshaped path must not be misread as locale/tenant/site off the
+    // first three segments.
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/x/en-US/mercola/SITE/jobs/439"))
+    ).toBeNull();
+  });
+  it("returns null when there is no job id", () => {
+    expect(
+      parseDayforceUrl(new URL("https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL/jobs"))
+    ).toBeNull();
+  });
+});
+
+describe("fetchJobMeta (Dayforce)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const JOB_URL = "https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL/jobs/439";
+
+  it("reads the board id from site context, then the posting endpoint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobBoardId: 1 }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobTitle: "Full Stack Developer",
+          jobPostingContent: { jobDescription: "<p>Build&nbsp;things &amp; ship</p>" },
+          postingLocations: [{ formattedAddress: "Cape Coral, FL, USA" }]
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({
+      company: "mercola",
+      title: "Full Stack Developer",
+      location: "Cape Coral, FL, USA",
+      description: "Build things & ship",
+      ats: "dayforce"
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://jobs.dayforcehcm.com/api/geo/mercola/sitecontext/mercola/CANDIDATEPORTAL/en-US"
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "https://jobs.dayforcehcm.com/api/geo/mercola/jobposting/mercola/en-US/1/439"
+    );
+  });
+
+  it("defaults the board id to 1 when site context omits it", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobTitle: "Eng" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchJobMeta(JOB_URL);
+    expect(fetchMock.mock.calls[1][0]).toContain("/jobposting/mercola/en-US/1/439");
+  });
+
+  it("returns fallback when the URL is not a posting", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const meta = await fetchJobMeta("https://jobs.dayforcehcm.com/en-US/mercola/CANDIDATEPORTAL");
+    expect(meta).toMatchObject({ title: "", ats: "dayforce" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns fallback when site context is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+    expect((await fetchJobMeta(JOB_URL)).title).toBe("");
+  });
+
+  it("returns fallback when the posting endpoint responds non-2xx", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobBoardId: 1 }) })
+      .mockResolvedValueOnce({ ok: false, status: 404 });
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await fetchJobMeta(JOB_URL)).title).toBe("");
+  });
+
+  it("handles a posting missing optional fields", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobBoardId: 2 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobTitle: "Eng" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const meta = await fetchJobMeta(JOB_URL);
+    expect(meta).toMatchObject({ company: "mercola", title: "Eng", location: "", description: "" });
+  });
+
+  it("caps a pathologically long description", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobBoardId: 1 }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobPostingContent: { jobDescription: "x".repeat(25_000) } })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await fetchJobMeta(JOB_URL)).description).toHaveLength(20_000);
   });
 });
 
