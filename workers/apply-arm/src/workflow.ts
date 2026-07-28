@@ -742,9 +742,11 @@ export async function applyToCard(
   if (!jobId) return "system_failed";
 
   const existing = await findApplication(env, batch.userId, jobId).catch(() => null);
-  // Anything beyond "saved" means the user already has a live application (or a
-  // submitted one) for this job; re-applying would spam the employer.
-  if (existing && existing.status !== "saved") return "skipped";
+  // A live or submitted application means re-applying would spam the employer;
+  // skip it. "saved" and "failed" are re-appliable, the same rule the app's
+  // create route uses: a prior attempt that died must not permanently fence
+  // this user off the job.
+  if (existing && existing.status !== "saved" && existing.status !== "failed") return "skipped";
 
   const applicationId =
     existing?.id ?? (await createApplication(env, batch.userId, jobId).catch(() => null));

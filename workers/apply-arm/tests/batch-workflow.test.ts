@@ -192,6 +192,15 @@ describe("applyToCard", () => {
     expect(db.createRun).toHaveBeenCalledWith(env, expect.objectContaining({ applicationId: "app-9" }));
   });
 
+  it("re-applies to a previously failed application rather than skipping it", async () => {
+    // A prior attempt died after creating the row; the same rule as the app's
+    // create route: failed is re-appliable, not a fence.
+    db.findApplication.mockResolvedValueOnce({ id: "app-9", status: "failed" });
+    const outcome = await applyToCard(env, batchParams(), card());
+    expect(outcome).toBe("applied");
+    expect(db.createApplication).not.toHaveBeenCalled();
+  });
+
   it("survives a dedup-lookup failure and proceeds as a fresh application", async () => {
     db.findApplication.mockRejectedValueOnce(new Error("read failed"));
     expect(await applyToCard(env, batchParams(), card())).toBe("applied");
