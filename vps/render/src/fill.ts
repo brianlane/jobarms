@@ -102,8 +102,14 @@ export const checkboxLabelInPage = (node: any): string => {
  * So a hidden input means a widget owns the upload and only the rendered name
  * counts, while a plain visible input has no widget to satisfy and holding the
  * file is all there is. Exported so tests can drive it against a fake document.
+ *
+ * `index` says WHICH file input the attach targeted (Ashby has two, and the
+ * autofill pane's comes first in the DOM); reading the wrong one here would
+ * judge the upload by a widget nobody fed.
  */
-export const resumeAcceptedInPage = (fileName: string): boolean => {
+export const resumeAcceptedInPage = (arg: { fileName: string; index?: number }): boolean => {
+  const fileName = arg.fileName;
+  const index = arg.index ?? 0;
   const doc = (globalThis as any).document;
 
   /**
@@ -123,7 +129,9 @@ export const resumeAcceptedInPage = (fileName: string): boolean => {
       (el?.textContent ?? "").replace(/\s+/g, " ")
     );
 
-  const input = doc.querySelector('input[type="file"]');
+  const list = doc.querySelectorAll?.('input[type="file"]');
+  const input =
+    (list && list.length > index ? list[index] : null) ?? doc.querySelector('input[type="file"]');
   if (!input) {
     // The widget replaced its own input, which the working ones do once they have
     // the file. The rendered name is the only evidence left, so scope the
@@ -152,16 +160,56 @@ export const resumeAcceptedInPage = (fileName: string): boolean => {
 };
 
 /**
+ * Runs IN THE PAGE. Which file input is the RESUME field's own?
+ *
+ * "The first one" was the answer until Ashby, whose form carries TWO hidden
+ * file inputs: an "Autofill from resume" convenience pane at the top and the
+ * actual Resume field further down. Feeding the pane parses the file and
+ * prefills some answers, but the required Resume field stays empty, so every
+ * Ashby run honestly reported resume_not_attached. Score each input by the
+ * text around it instead: a container talking about a resume wins, a container
+ * talking about autofill loses, and a lone input keeps index 0 so the
+ * single-input ATSes behave exactly as before.
+ */
+export const resumeFileInputIndexInPage = (): number => {
+  const doc = (globalThis as any).document;
+  const inputs = [...(doc.querySelectorAll?.('input[type="file"]') ?? [])];
+  if (inputs.length <= 1) return 0;
+  let best = 0;
+  let bestScore = -Infinity;
+  inputs.forEach((input: any, i: number) => {
+    const container =
+      input.closest?.('[class*="field"], [class*="upload"], [role="group"], fieldset') ?? null;
+    const around = `${container?.textContent ?? ""} ${container?.className ?? ""}`.slice(0, 500);
+    let score = 0;
+    if (/resume|curriculum|\bcv\b/i.test(around)) score += 2;
+    if (/autofill/i.test(around)) score -= 3;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return best;
+};
+
+/**
  * Runs IN THE PAGE. Is the file input hidden behind a widget of the site's own?
  *
  * Such a widget owns the upload: writing to its input behind its back fires a
  * change event into a handler whose uploader was never built, because that only
  * happens on the path a real click takes. A plain visible input has no such
  * machinery and is best left alone.
+ *
+ * `index` is which file input to look at (see resumeFileInputIndexInPage);
+ * falling back to the first keeps a page whose inputs shifted between the pick
+ * and this check from answering about nothing.
  */
-export const fileInputIsWidgetOwnedInPage = (): boolean => {
+export const fileInputIsWidgetOwnedInPage = (index?: number): boolean => {
   const doc = (globalThis as any).document;
-  const input = doc.querySelector('input[type="file"]');
+  const list = doc.querySelectorAll?.('input[type="file"]');
+  const input =
+    (list && list.length > (index ?? 0) ? list[index ?? 0] : null) ??
+    doc.querySelector('input[type="file"]');
   if (!input) return false;
   const rect = input.getBoundingClientRect();
   const style = (globalThis as any).getComputedStyle(input);
@@ -514,7 +562,9 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
   const file = { name, mimeType: resume.mimeType || "application/pdf", buffer };
 
   for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
-    const input = page.locator('input[type="file"]').first();
+    // Re-picked every attempt because widgets add and remove inputs as they work.
+    const index = await resumeInputIndex(page);
+    const input = page.locator('input[type="file"]').nth(index);
     // No input left and not yet accepted means there is nowhere to put it.
     if ((await input.count()) === 0) break;
 
@@ -522,21 +572,30 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
     // take the file. Writing to the input directly fires a change event into a
     // handler whose uploader was never constructed, which is how a Greenhouse
     // upload died on "reading 'uploadFile'" while still showing the filename.
-    const widgetOwned = await page.evaluate(fileInputIsWidgetOwnedInPage).catch(() => false);
-    if (!widgetOwned || !(await attachThroughWidget(page, file))) {
+    const widgetOwned = await page.evaluate(fileInputIsWidgetOwnedInPage, index).catch(() => false);
+    if (!widgetOwned || !(await attachThroughWidget(page, input, file))) {
       await input.setInputFiles(file).catch(() => {});
     }
 
     await page.waitForTimeout(RESUME_SETTLE_MS);
-    if (await resumeAccepted(page, name)) break;
+    if (await resumeAccepted(page, name, index)) break;
   }
 
-  if (!(await resumeAccepted(page, name))) return "failed";
+  if (!(await resumeAccepted(page, name, await resumeInputIndex(page)))) return "failed";
   // Give ATS-side resume parsing a moment before typed answers land, so their
   // autofill cannot overwrite what the arm is about to type.
   await page.waitForTimeout(3000);
   return "attached";
 }
+
+/** Where the chosen file input sits: the index into the page's file inputs. */
+async function resumeInputIndex(page: Page): Promise<number> {
+  const index = await page.evaluate(resumeFileInputIndexInPage).catch(() => 0);
+  return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
+}
+
+/** The button that belongs to the widget wrapped around the given file input. */
+const UPLOAD_BUTTON = /attach|upload|choose file|select file|browse/i;
 
 /**
  * Hand the file to the widget the way a person would: click its own control and
@@ -546,13 +605,26 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
  * offering Dropbox, Google Drive, and "Enter manually", and clicking one of those
  * leads somewhere with no chooser and no way back.
  *
+ * The button is looked for inside the INPUT's own widget first: Ashby's page
+ * carries an "Autofill from resume" pane whose own "Upload file" button comes
+ * first page-wide, and clicking it feeds the pane instead of the Resume field.
+ * Page-wide stays as the fallback for widgets whose button lives outside any
+ * recognizable container.
+ *
  * Returns false when there is nothing to click or the click opened no chooser, so
  * the caller can fall back rather than skip the resume entirely.
  */
-async function attachThroughWidget(page: Page, file: ResumeFile): Promise<boolean> {
-  const control = page
-    .getByRole("button", { name: /attach|upload|choose file|select file|browse/i })
+async function attachThroughWidget(page: Page, input: Locator, file: ResumeFile): Promise<boolean> {
+  const scoped = input
+    .locator(
+      'xpath=ancestor::*[contains(@class, "field") or contains(@class, "upload") or @role="group"][1]'
+    )
+    .getByRole("button", { name: UPLOAD_BUTTON })
     .first();
+  const control =
+    (await scoped.count().catch(() => 0)) > 0
+      ? scoped
+      : page.getByRole("button", { name: UPLOAD_BUTTON }).first();
   if ((await control.count().catch(() => 0)) === 0) return false;
 
   try {
@@ -570,8 +642,10 @@ async function attachThroughWidget(page: Page, file: ResumeFile): Promise<boolea
 }
 
 /** Ask the page whether the upload took, never assuming from a lack of throw. */
-async function resumeAccepted(page: Page, fileName: string): Promise<boolean> {
-  const accepted = await page.evaluate(resumeAcceptedInPage, fileName).catch(() => false);
+async function resumeAccepted(page: Page, fileName: string, index: number): Promise<boolean> {
+  const accepted = await page
+    .evaluate(resumeAcceptedInPage, { fileName, index })
+    .catch(() => false);
   // Strict: anything but a definite yes is a no, because the cost of a false
   // "attached" is a required field the user never knew was empty.
   return accepted === true;
