@@ -1,4 +1,4 @@
-import { detectAts, parseWorkdayUrl, type Ats } from "@/lib/ats";
+import { detectAts, parseLinkedInJobId, parseWorkdayUrl, type Ats } from "@/lib/ats";
 
 /** Best-effort job metadata for the tracker, from public ATS APIs. */
 export interface JobMeta {
@@ -140,6 +140,33 @@ export async function fetchJobMeta(rawUrl: string): Promise<JobMeta> {
         title: job.title ?? "",
         location: job.location ?? "",
         description: (job.descriptionPlain ?? "").slice(0, 20_000),
+        ats
+      };
+    }
+
+    if (ats === "linkedin") {
+      const id = parseLinkedInJobId(url);
+      if (!id) return fallback;
+      // The public "guest" job fragment the logged-out job page itself renders
+      // from. No auth and no official API, so this is a best-effort scrape for
+      // the tracker row; a datacenter-IP rate-limit just yields the fallback.
+      const res = await fetch(
+        `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${id}`,
+        {
+          headers: { "user-agent": "Mozilla/5.0", accept: "text/html" },
+          signal: AbortSignal.timeout(10_000)
+        }
+      );
+      if (!res.ok) return fallback;
+      const html = await res.text();
+      const group = (re: RegExp): string => stripHtml(html.match(re)?.[1] ?? "").slice(0, 500);
+      return {
+        company: group(/topcard__org-name-link[^>]*>([\s\S]*?)<\/a>/),
+        title: group(/top-card-layout__title[^>]*>([\s\S]*?)<\/h2>/),
+        location: group(/topcard__flavor--bullet[^>]*>([\s\S]*?)<\/span>/),
+        description: stripHtml(
+          html.match(/show-more-less-html__markup[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? ""
+        ).slice(0, 20_000),
         ats
       };
     }

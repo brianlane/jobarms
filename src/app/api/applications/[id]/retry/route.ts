@@ -4,6 +4,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/service";
 import { ACCOUNT_REQUIRED_ATS, dispatchAtsOf, tenantHostOf, type Ats } from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
 import { ensureSiteAccount } from "@/lib/site-accounts";
+import { getLinkedInCredentials } from "@/lib/linkedin";
 import {
   armRunQuota,
   canFullAuto,
@@ -159,7 +160,24 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   // touch the account path.
   const tenantHost = tenantHostOf(job.url);
   let account: { email: string; password: string } | null = null;
-  if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(job.ats) && tenantHost) {
+  if (dispatchAts === "linkedin") {
+    // Reuse the user's connected LinkedIn login. A disconnect between the
+    // original run and this retry is a 409 pointing back at Settings.
+    const creds = await getLinkedInCredentials(service, user.id);
+    if (!creds || creds.status === "locked") {
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: creds ? "ats_account_locked" : "linkedin_not_connected",
+          hint: creds
+            ? "LinkedIn kept rejecting the sign-in, so it is locked. Reconnect your account in Settings."
+            : "Reconnect your LinkedIn account in Settings before retrying this job."
+        },
+        { status: creds ? 422 : 409 }
+      );
+    }
+    account = { email: creds.email, password: creds.password };
+  } else if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(job.ats) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     const siteAccount = alias
       ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats: job.ats, email: alias })

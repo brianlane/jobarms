@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fakeClient, fakeFrom } from "./helpers/supabase";
-import { decryptPassword } from "@/lib/site-accounts";
+import { decryptPassword, encryptPassword } from "@/lib/site-accounts";
 import {
   deleteLinkedInAccount,
   getLinkedInAccount,
+  getLinkedInCredentials,
   LINKEDIN_TENANT_HOST,
   setLinkedInCredentials
 } from "@/lib/linkedin";
@@ -67,6 +68,31 @@ describe("getLinkedInAccount", () => {
 
   it("returns null when no account is connected", async () => {
     expect(await getLinkedInAccount(service(null), "u1")).toBeNull();
+  });
+});
+
+describe("getLinkedInCredentials", () => {
+  function service(data: unknown) {
+    return fakeClient({
+      from: fakeFrom({ site_accounts: [{ data }] })
+    }) as unknown as SupabaseClient;
+  }
+
+  it("returns the decrypted password with the email and status", async () => {
+    const row = {
+      email: "me@example.com",
+      password_encrypted: encryptPassword(SECRET),
+      status: "verified"
+    };
+    expect(await getLinkedInCredentials(service(row), "u1")).toEqual({
+      email: "me@example.com",
+      password: SECRET,
+      status: "verified"
+    });
+  });
+
+  it("returns null when the account is not connected", async () => {
+    expect(await getLinkedInCredentials(service(null), "u1")).toBeNull();
   });
 });
 

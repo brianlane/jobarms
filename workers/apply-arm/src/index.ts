@@ -162,9 +162,10 @@ export default {
       return Response.json({ ok: true, instance_id: instance.id }, { status: 202 });
     }
 
-    // POST /runs/:id/approve | /runs/:id/account-verified | /runs/:id/cancel
+    // POST /runs/:id/approve | /runs/:id/account-verified | /runs/:id/login-code
+    //     | /runs/:id/cancel
     const match = url.pathname.match(
-      /^\/runs\/([0-9a-f-]{36})\/(approve|account-verified|cancel)$/
+      /^\/runs\/([0-9a-f-]{36})\/(approve|account-verified|login-code|cancel)$/
     );
     if (match) {
       const [, runId, action] = match;
@@ -185,6 +186,16 @@ export default {
         // The app confirmed the employer's account email through the sidecar and
         // is releasing the run. No payload: the workflow just resumes.
         await instance.sendEvent({ type: "account-verified", payload: {} });
+        return Response.json({ ok: true });
+      }
+
+      if (action === "login-code") {
+        // A run parked on a LinkedIn PIN challenge: the user entered the code in
+        // the dashboard, and it rides the event into the waiting workflow.
+        const body = (await request.json().catch(() => ({}))) as { code?: string };
+        const code = typeof body.code === "string" ? body.code.trim() : "";
+        if (!code) return Response.json({ error: "invalid_body" }, { status: 400 });
+        await instance.sendEvent({ type: "login-code", payload: { code } });
         return Response.json({ ok: true });
       }
 

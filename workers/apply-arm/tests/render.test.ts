@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/types";
 import {
   decodeScreenshot,
+  completeLoginCode,
   ensureSession,
   extractForm,
   fetchResumeBase64,
@@ -185,6 +186,25 @@ describe("the phase calls", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/session/ensure");
     const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
     expect(JSON.parse(init.body).account).toEqual(account);
+  });
+
+  it("completeLoginCode posts the code synchronously to /login-code", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ status: "authenticated" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await completeLoginCode(env, {
+      userId: "u1",
+      tenantHost: "www.linkedin.com",
+      code: "483920",
+      checkpointUrl: "https://www.linkedin.com/checkpoint/1"
+    });
+
+    expect(result).toEqual({ ok: true, data: { status: "authenticated" } });
+    // A single exchange, not a job poll.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://browser.jobarms.com/login-code");
+    const init = fetchMock.mock.calls[0][1] as unknown as { body: string };
+    expect(JSON.parse(init.body)).toMatchObject({ code: "483920", tenantHost: "www.linkedin.com" });
   });
 
   it("fillForm posts answers, resume bytes, and the submit flag", async () => {

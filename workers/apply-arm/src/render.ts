@@ -154,8 +154,10 @@ export function decodeScreenshot(base64: string | null | undefined): Uint8Array 
 }
 
 export interface EnsureSessionResponse {
-  status: "authenticated" | "needs_email_verification" | "login_failed";
+  status: "authenticated" | "needs_email_verification" | "needs_login_code" | "login_failed";
   accountRequired: boolean;
+  /** For LinkedIn PIN challenges: where the code-entry step resumes. */
+  checkpointUrl?: string | null;
   screenshotBase64?: string | null;
 }
 
@@ -170,6 +172,23 @@ export function ensureSession(
   }
 ): Promise<RenderResult<EnsureSessionResponse>> {
   return runPhase(env, "/session/ensure", args);
+}
+
+export interface LoginCodeResponse {
+  status: "authenticated" | "needs_login_code" | "login_failed";
+  screenshotBase64?: string | null;
+}
+
+/**
+ * Finish a LinkedIn PIN challenge in the held session with the code the user
+ * entered. Synchronous on the sidecar (one navigation + submit), so this is a
+ * plain call rather than a polled phase.
+ */
+export function completeLoginCode(
+  env: Env,
+  args: { userId: string; tenantHost: string; code: string; checkpointUrl?: string | null }
+): Promise<RenderResult<LoginCodeResponse>> {
+  return call(env, "POST", "/login-code", args);
 }
 
 export interface ExtractResponse {

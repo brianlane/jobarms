@@ -3,7 +3,9 @@ import {
   ACCOUNT_REQUIRED_ATS,
   detectAts,
   dispatchAtsOf,
+  LINKEDIN_HOST,
   normalizeJobUrl,
+  parseLinkedInJobId,
   parseWorkdayUrl,
   SUPPORTED_ATS,
   tenantHostOf
@@ -18,6 +20,8 @@ describe("detectAts", () => {
     expect(detectAts("https://apply.workable.com/acme/j/ABC123/")).toBe("workable");
     expect(detectAts("https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/x_JR1")).toBe("workday");
     expect(detectAts("https://acme.wd5.myworkdaysite.com/Careers/job/x_JR1")).toBe("workday");
+    expect(detectAts("https://www.linkedin.com/jobs/view/4442245127/")).toBe("linkedin");
+    expect(detectAts("https://linkedin.com/jobs/view/1")).toBe("linkedin");
   });
 
   it("matches a bare apex domain as well as a subdomain", () => {
@@ -40,11 +44,12 @@ describe("detectAts", () => {
     expect(detectAts("not a url")).toBe("unknown");
   });
 
-  it("supports greenhouse, lever, workday, and ashby", () => {
+  it("supports greenhouse, lever, workday, ashby, and linkedin", () => {
     expect(SUPPORTED_ATS.has("greenhouse")).toBe(true);
     expect(SUPPORTED_ATS.has("lever")).toBe(true);
     expect(SUPPORTED_ATS.has("workday")).toBe(true);
     expect(SUPPORTED_ATS.has("ashby")).toBe(true);
+    expect(SUPPORTED_ATS.has("linkedin")).toBe(true);
     expect(SUPPORTED_ATS.has("workable")).toBe(false);
     expect(SUPPORTED_ATS.has("unknown")).toBe(false);
   });
@@ -54,14 +59,42 @@ describe("detectAts", () => {
     expect(dispatchAtsOf("lever")).toBe("lever");
     expect(dispatchAtsOf("workday")).toBe("workday");
     expect(dispatchAtsOf("ashby")).toBe("ashby");
+    expect(dispatchAtsOf("linkedin")).toBe("linkedin");
     expect(dispatchAtsOf("workable")).toBe("generic");
     expect(dispatchAtsOf("unknown")).toBe("generic");
   });
 
-  it("marks only workday as needing an account per employer tenant", () => {
+  it("marks workday and linkedin as needing an account, but not the rest", () => {
     expect(ACCOUNT_REQUIRED_ATS.has("workday")).toBe(true);
+    expect(ACCOUNT_REQUIRED_ATS.has("linkedin")).toBe(true);
     expect(ACCOUNT_REQUIRED_ATS.has("greenhouse")).toBe(false);
     expect(ACCOUNT_REQUIRED_ATS.has("lever")).toBe(false);
+  });
+});
+
+describe("parseLinkedInJobId", () => {
+  const parse = (raw: string) => parseLinkedInJobId(new URL(raw));
+
+  it("reads the id from a canonical view URL", () => {
+    expect(parse("https://www.linkedin.com/jobs/view/4442245127/")).toBe("4442245127");
+    expect(parse("https://www.linkedin.com/jobs/view/4442245127")).toBe("4442245127");
+  });
+
+  it("reads the id from a search/collection currentJobId param", () => {
+    expect(
+      parse("https://www.linkedin.com/jobs/search/?currentJobId=4442245127&keywords=eng")
+    ).toBe("4442245127");
+    expect(
+      parse("https://www.linkedin.com/jobs/collections/recommended/?currentJobId=999")
+    ).toBe("999");
+  });
+
+  it("returns null when there is no numeric id to find", () => {
+    expect(parse("https://www.linkedin.com/jobs/")).toBeNull();
+    expect(parse("https://www.linkedin.com/jobs/view/not-a-number/")).toBeNull();
+    expect(parse("https://www.linkedin.com/jobs/search/?currentJobId=abc")).toBeNull();
+    // "view" as the final segment: nothing follows it to read.
+    expect(parse("https://www.linkedin.com/jobs/view")).toBeNull();
   });
 });
 
@@ -142,5 +175,19 @@ describe("normalizeJobUrl", () => {
   it("rejects non-http(s) and invalid urls", () => {
     expect(normalizeJobUrl("ftp://example.com/job")).toBeNull();
     expect(normalizeJobUrl("nope")).toBeNull();
+  });
+
+  it("collapses every LinkedIn posting shape to the canonical view URL", () => {
+    const canonical = `https://${LINKEDIN_HOST}/jobs/view/4442245127/`;
+    expect(normalizeJobUrl("https://www.linkedin.com/jobs/view/4442245127/")).toBe(canonical);
+    expect(
+      normalizeJobUrl("https://www.linkedin.com/jobs/search/?currentJobId=4442245127&keywords=x")
+    ).toBe(canonical);
+    // A different subdomain still normalizes onto the one session host.
+    expect(normalizeJobUrl("https://linkedin.com/jobs/view/4442245127")).toBe(canonical);
+  });
+
+  it("rejects a LinkedIn URL with no parseable posting id", () => {
+    expect(normalizeJobUrl("https://www.linkedin.com/feed/")).toBeNull();
   });
 });

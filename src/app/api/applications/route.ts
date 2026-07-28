@@ -11,6 +11,7 @@ import {
 } from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
 import { ensureSiteAccount } from "@/lib/site-accounts";
+import { getLinkedInCredentials } from "@/lib/linkedin";
 import { fetchJobMeta } from "@/lib/job-fetch";
 import {
   aiCallQuota,
@@ -292,7 +293,35 @@ export async function POST(request: Request) {
   // The generic guard is defense in depth: an ATS added to ACCOUNT_REQUIRED_ATS
   // before it earns a tuned adapter must never create accounts on the
   // best-effort path.
-  if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+  if (dispatchAts === "linkedin") {
+    // LinkedIn is account-gated, but the account is the user's OWN login, not
+    // one the arm creates: read the connected credentials from the vault rather
+    // than provisioning anything. Not connected is a 409 that points at Settings.
+    const creds = await getLinkedInCredentials(service, user.id);
+    if (!creds) {
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: "linkedin_not_connected",
+          application_id: applicationId,
+          hint: "Connect your LinkedIn account in Settings before sending an arm to a LinkedIn job."
+        },
+        { status: 409 }
+      );
+    }
+    if (creds.status === "locked") {
+      await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });
+      return NextResponse.json(
+        {
+          error: "ats_account_locked",
+          application_id: applicationId,
+          hint: "LinkedIn kept rejecting the sign-in, so it is locked. Reconnect your account in Settings to try again."
+        },
+        { status: 422 }
+      );
+    }
+    account = { email: creds.email, password: creds.password };
+  } else if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     if (!alias) {
       await service.rpc("release_arm_run", { p_user_id: user.id, p_month_key: mk });

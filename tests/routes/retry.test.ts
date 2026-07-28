@@ -22,10 +22,12 @@ const ensureSiteAccount = vi.hoisted(() =>
       }) as { tenantHost: string; email: string; password: string; status: string } | null
   )
 );
+const getLinkedInCredentials = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/arm", () => ({ cancelRun }));
 vi.mock("@/lib/arm-dispatch", () => ({ buildAndDispatchRun }));
 vi.mock("@/lib/applicant-email", () => ({ ensureApplicantAlias }));
 vi.mock("@/lib/site-accounts", () => ({ ensureSiteAccount }));
+vi.mock("@/lib/linkedin", () => ({ getLinkedInCredentials }));
 
 import { POST } from "@/app/api/applications/[id]/retry/route";
 
@@ -67,6 +69,12 @@ beforeEach(() => {
     tenantHost: "acme.wd1.myworkdayjobs.com",
     email: "a-abcdefghjk@jobarms.com",
     password: ["fixture", "value"].join("-"),
+    status: "verified"
+  });
+  getLinkedInCredentials.mockClear();
+  getLinkedInCredentials.mockResolvedValue({
+    email: "me@example.com",
+    password: ["li", "fixture"].join("-"),
     status: "verified"
   });
 });
@@ -295,5 +303,59 @@ describe("retrying an account-gated application", () => {
     expect(res.status).toBe(422);
     // Without an alias there is no account to look up at all.
     expect(ensureSiteAccount).not.toHaveBeenCalled();
+  });
+});
+
+describe("retrying a LinkedIn application", () => {
+  const LI_JOB = {
+    url: "https://www.linkedin.com/jobs/view/4442245127/",
+    ats: "linkedin",
+    title: "Eng",
+    company: "Acme",
+    description: "d"
+  };
+
+  it("reuses the connected LinkedIn login and never touches the account vault", async () => {
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: LI_JOB } }, { data: null });
+    holder.service = service({
+      application_runs: [{ data: { id: "run2" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(200);
+    const dispatched = buildAndDispatchRun.mock.calls[0][1] as { account?: unknown; ats?: string };
+    expect(dispatched.ats).toBe("linkedin");
+    expect(dispatched.account).toEqual({ email: "me@example.com", password: ["li", "fixture"].join("-") });
+    expect(ensureApplicantAlias).not.toHaveBeenCalled();
+    expect(ensureSiteAccount).not.toHaveBeenCalled();
+  });
+
+  it("409s and releases the slot when LinkedIn was disconnected", async () => {
+    getLinkedInCredentials.mockResolvedValueOnce(null);
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: LI_JOB } }, { data: null });
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = service({ application_runs: [{ data: { id: "run2" } }, { data: null }], rpc });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("linkedin_not_connected");
+    expect(rpc).toHaveBeenCalledWith("release_arm_run", expect.anything());
+    expect(buildAndDispatchRun).not.toHaveBeenCalled();
+  });
+
+  it("422s when the connected account is locked", async () => {
+    getLinkedInCredentials.mockResolvedValueOnce({ email: "me@example.com", password: "x", status: "locked" });
+    holder.server = server({ data: { id: "app-1", resume_id: null, jobs: LI_JOB } }, { data: null });
+    const rpc = fakeRpc({ try_reserve_arm_run: [true] });
+    holder.service = service({ application_runs: [{ data: { id: "run2" } }, { data: null }], rpc });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("ats_account_locked");
+    expect(buildAndDispatchRun).not.toHaveBeenCalled();
   });
 });

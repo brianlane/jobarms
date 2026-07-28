@@ -1,6 +1,13 @@
 /** ATS detection + job-page URL normalization (pure, unit-tested). */
 
-export type Ats = "greenhouse" | "lever" | "workday" | "ashby" | "workable" | "unknown";
+export type Ats =
+  | "greenhouse"
+  | "lever"
+  | "workday"
+  | "ashby"
+  | "workable"
+  | "linkedin"
+  | "unknown";
 
 /**
  * Host suffixes, matched as the domain itself or a subdomain of it.
@@ -17,7 +24,11 @@ const ATS_HOSTS: ReadonlyArray<{ suffix: string; ats: Ats }> = [
   { suffix: "myworkdayjobs.com", ats: "workday" },
   { suffix: "myworkdaysite.com", ats: "workday" },
   { suffix: "ashbyhq.com", ats: "ashby" },
-  { suffix: "workable.com", ats: "workable" }
+  { suffix: "workable.com", ats: "workable" },
+  // LinkedIn Easy Apply. Unlike every other ATS, the "account" here is the
+  // user's own LinkedIn login (see the site-account vault), not one the arm
+  // creates, so this is account-gated but never account-creating.
+  { suffix: "linkedin.com", ats: "linkedin" }
 ];
 
 export function detectAts(rawUrl: string): Ats {
@@ -35,7 +46,13 @@ export function detectAts(rawUrl: string): Ats {
 }
 
 /** ATSes the arm has a tuned adapter for today. */
-export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "workday", "ashby"]);
+export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set([
+  "greenhouse",
+  "lever",
+  "workday",
+  "ashby",
+  "linkedin"
+]);
 
 /**
  * The adapter a run dispatches with: the tuned adapter for supported ATSes,
@@ -45,7 +62,7 @@ export const SUPPORTED_ATS: ReadonlySet<Ats> = new Set(["greenhouse", "lever", "
  * re-enforces): review-gate only, never account creation, and an explicit
  * user acknowledgment that the attempt may fail and still consume a run.
  */
-export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "generic";
+export type DispatchAts = "greenhouse" | "lever" | "workday" | "ashby" | "linkedin" | "generic";
 
 export function dispatchAtsOf(ats: Ats): DispatchAts {
   return SUPPORTED_ATS.has(ats) ? (ats as DispatchAts) : "generic";
@@ -56,7 +73,33 @@ export function dispatchAtsOf(ats: Ats): DispatchAts {
  * application can be submitted. Drives the account-vault and email-verification
  * path at dispatch; mirrors `requiresAccount` on the sidecar's adapters.
  */
-export const ACCOUNT_REQUIRED_ATS: ReadonlySet<Ats> = new Set(["workday"]);
+export const ACCOUNT_REQUIRED_ATS: ReadonlySet<Ats> = new Set(["workday", "linkedin"]);
+
+/**
+ * The fixed host every LinkedIn session, job URL, and vault row is keyed by.
+ * A run's tenant host is normalized to this so the browser session, the
+ * `site_accounts` row, and the dispatch all agree on one key.
+ */
+export const LINKEDIN_HOST = "www.linkedin.com";
+
+/**
+ * The numeric posting id from any LinkedIn job URL shape, or null.
+ *
+ * LinkedIn surfaces the same posting under several URLs: the canonical
+ * `/jobs/view/<id>/`, and search/collection pages that carry the id in a
+ * `currentJobId` query param. Both must normalize to one catalog key so a job
+ * pasted from search and the same job opened directly are not tracked twice.
+ */
+export function parseLinkedInJobId(url: URL): string | null {
+  const fromQuery = url.searchParams.get("currentJobId");
+  if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
+
+  const parts = url.pathname.split("/").filter(Boolean);
+  const viewIdx = parts.indexOf("view");
+  if (viewIdx !== -1 && /^\d+$/.test(parts[viewIdx + 1] ?? "")) return parts[viewIdx + 1];
+
+  return null;
+}
 
 export interface WorkdayRef {
   /** Tenant, the first host label: `nvidia` in nvidia.wd5.myworkdayjobs.com. */
@@ -117,6 +160,16 @@ export function normalizeJobUrl(rawUrl: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+
+  // LinkedIn: collapse every posting shape to the canonical view URL on the
+  // fixed host, so search-result and direct-open URLs share one catalog key and
+  // one session. A LinkedIn URL with no parseable posting id is not a job.
+  const host = url.hostname.toLowerCase();
+  if (host === "linkedin.com" || host.endsWith(".linkedin.com")) {
+    const id = parseLinkedInJobId(url);
+    return id ? `https://${LINKEDIN_HOST}/jobs/view/${id}/` : null;
+  }
+
   // Strip trackers; keep meaningful params (gh_jid for embedded boards).
   const keep = new Set(["gh_jid", "lever-origin"]);
   // Workday postings carry no meaningful query params, and its `?q=` search
