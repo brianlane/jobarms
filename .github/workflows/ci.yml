@@ -441,10 +441,6 @@ jobs:
             echo "Set it (plus RENDER_TOKEN) to let CI ship the box; deploy.sh is the manual fallback."
             exit 0
           fi
-          if [ -z "$RENDER_TOKEN" ]; then
-            echo "::error::KVM1_SSH_KEY is set but RENDER_TOKEN is not - cannot deploy the sidecar."
-            exit 1
-          fi
           TARGET="${RENDER_DEPLOY_TARGET:-root@177.7.46.142}"
           HOST="${TARGET#*@}"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -467,6 +463,13 @@ jobs:
             exit 0
           fi
           echo "Box runs '${HAVE:-(no recorded tree)}', main wants $WANT: deploying."
+          # Validated only on the deploy path: a missing token must not fail a
+          # push whose box already matches main and needs nothing.
+          if [ -z "$RENDER_TOKEN" ]; then
+            echo "::error::KVM1_SSH_KEY is set but RENDER_TOKEN is not - cannot deploy the sidecar."
+            rm -f "$KEY_FILE"
+            exit 1
+          fi
 
           set +e
           SSH_KEY="$KEY_FILE" \
