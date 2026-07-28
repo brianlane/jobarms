@@ -102,7 +102,11 @@ describe("POST /api/applications/[id]/retry", () => {
     holder.server = fakeClient({
       user: { id: "u1" },
       from: fakeFrom({
-        applications: [{ data: { id: "app-1", jobs: { ...JOB, ats: "workable" } } }],
+        // A genuinely untuned URL: retry re-detects the ATS from it, so a stale
+        // stored column cannot be relied on to force the generic path.
+        applications: [
+          { data: { id: "app-1", jobs: { ...JOB, url: "https://acme.workable.com/j/AB12/", ats: "workable" } } }
+        ],
         application_runs: [{ data: null }]
       })
     });
@@ -113,7 +117,7 @@ describe("POST /api/applications/[id]/retry", () => {
 
   it("retries an untuned board as generic, review-gate only, no account path", async () => {
     holder.server = server(
-      { data: { id: "app-1", resume_id: null, jobs: { ...JOB, ats: "workable" } } },
+      { data: { id: "app-1", resume_id: null, jobs: { ...JOB, url: "https://acme.workable.com/j/AB12/", ats: "workable" } } },
       // A prior run is the evidence the best-effort terms were accepted.
       { data: { id: "r1", status: "failed", answers: null, created_at: new Date().toISOString() } }
     );
@@ -330,6 +334,24 @@ describe("retrying a LinkedIn application", () => {
     expect(dispatched.account).toEqual({ email: "me@example.com", password: ["li", "fixture"].join("-") });
     expect(ensureApplicantAlias).not.toHaveBeenCalled();
     expect(ensureSiteAccount).not.toHaveBeenCalled();
+  });
+
+  it("re-detects LinkedIn from the URL even when the catalog row is stale", async () => {
+    // A shared catalog row created before LinkedIn support still reads unknown;
+    // retry must route on the URL, not the stored column.
+    holder.server = server(
+      { data: { id: "app-1", resume_id: null, jobs: { ...LI_JOB, ats: "unknown" } } },
+      { data: null }
+    );
+    holder.service = service({
+      application_runs: [{ data: { id: "run2" } }, { data: null }],
+      rpc: { try_reserve_arm_run: [true] }
+    });
+
+    const res = await POST(req(), ctx);
+
+    expect(res.status).toBe(200);
+    expect((buildAndDispatchRun.mock.calls[0][1] as { ats?: string }).ats).toBe("linkedin");
   });
 
   it("409s and releases the slot when LinkedIn was disconnected", async () => {

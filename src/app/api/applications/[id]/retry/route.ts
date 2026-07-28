@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service";
-import { ACCOUNT_REQUIRED_ATS, dispatchAtsOf, tenantHostOf, type Ats } from "@/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, detectAts, dispatchAtsOf, tenantHostOf, type Ats } from "@/lib/ats";
 import { ensureApplicantAlias } from "@/lib/applicant-email";
 import { ensureSiteAccount } from "@/lib/site-accounts";
 import { getLinkedInCredentials } from "@/lib/linkedin";
@@ -49,7 +49,12 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     description: string;
   } | null;
   if (!job) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const dispatchAts = dispatchAtsOf(job.ats);
+  // Re-detect from the URL rather than trust the stored `jobs.ats`: the catalog
+  // row is shared and may predate a detector (a LinkedIn posting ingested before
+  // LinkedIn support still reads `unknown`), and the create route already routes
+  // on the URL, so this keeps retry from silently dispatching the wrong adapter.
+  const detected = detectAts(job.url);
+  const dispatchAts = dispatchAtsOf(detected);
 
   const { data: latestRun } = await supabase
     .from("application_runs")
@@ -177,7 +182,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       );
     }
     account = { email: creds.email, password: creds.password };
-  } else if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(job.ats) && tenantHost) {
+  } else if (dispatchAts !== "generic" && ACCOUNT_REQUIRED_ATS.has(detected) && tenantHost) {
     const alias = await ensureApplicantAlias(service, user.id);
     const siteAccount = alias
       ? await ensureSiteAccount(service, { userId: user.id, tenantHost, ats: job.ats, email: alias })
