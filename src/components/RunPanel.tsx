@@ -1,5 +1,7 @@
 "use client";
 
+import { partitionGroupAnswer, toggleGroupOption } from "@/lib/choice-match";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -134,29 +136,6 @@ function fieldMap(raw: unknown): Map<string, ReviewField> {
     });
   }
   return map;
-}
-
-/**
- * The options currently selected in a joined group answer. Splits on the SAME
- * separators the filler does (semicolon or comma, see the sidecar's
- * splitAnswerValues): a comma-joined draft must not render as unselected here
- * while still filling fine after approval.
- */
-function selectedOptions(value: string): Set<string> {
-  return new Set(
-    value
-      .split(/[;,]/)
-      .map((v) => v.trim())
-      .filter(Boolean)
-  );
-}
-
-/** Toggle one option, keeping the group's own option order in the answer. */
-function toggleOption(value: string, options: string[], option: string): string {
-  const next = selectedOptions(value);
-  if (next.has(option)) next.delete(option);
-  else next.add(option);
-  return options.filter((o) => next.has(o)).join("; ");
 }
 
 /**
@@ -465,12 +444,17 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
                         <label key={o} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm">
                           <input
                             type="checkbox"
-                            checked={selectedOptions(a.value).has(o)}
-                            onChange={() => update(toggleOption(a.value, multi, o))}
+                            checked={partitionGroupAnswer(a.value, multi).selected.has(o)}
+                            onChange={() => update(toggleGroupOption(a.value, multi, o))}
                           />
                           {o}
                         </label>
                       ))}
+                      {partitionGroupAnswer(a.value, multi).extras.length > 0 && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          also keeping the off-list text: {partitionGroupAnswer(a.value, multi).extras.join("; ")}
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <textarea

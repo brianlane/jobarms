@@ -159,6 +159,57 @@ describe("RunPanel review gate", () => {
     expect(body.answers[0].value).toBe("Bisexual");
   });
 
+  it("keeps off-list draft text when toggling boxes, and says so", async () => {
+    // The old textarea editor never lost anything; the checkbox list must not
+    // either. Off-menu tokens ride along and are called out, not dropped.
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "grp", label: "Which apply?", type: "checkbox", required: false, options: ["A", "B"] }
+          ],
+          answers: [{ name: "grp", label: "Which apply?", value: "A; my own words" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText(/also keeping the off-list text: my own words/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "B" }));
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    const body = JSON.parse(
+      (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => c[0] === "/api/runs/run-1/approve"
+      )![1].body as string
+    );
+    expect(body.answers[0].value).toBe("A; B; my own words");
+  });
+
+  it("checks a box whose draft wording drifted, the way the filler would", () => {
+    // The filler's containment matching would tick this box, so the review
+    // must show it ticked; exact-only matching rendered it unselected and
+    // invited edits that rewrote a working answer.
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "grp", label: "Which apply?", type: "checkbox", required: false, options: ["Yes, I am authorized to work", "Other"] }
+          ],
+          answers: [{ name: "grp", label: "Which apply?", value: "I am authorized" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(
+      (screen.getByRole("checkbox", { name: "Yes, I am authorized to work" }) as HTMLInputElement).checked
+    ).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "Other" }) as HTMLInputElement).checked).toBe(false);
+  });
+
   it("reads a comma-joined draft the way the filler would", () => {
     // The sidecar's splitAnswerValues accepts semicolons AND commas; a
     // comma-joined model draft must not render as nothing selected while
