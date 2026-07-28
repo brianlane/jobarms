@@ -91,12 +91,15 @@ export const LINKEDIN_HOST = "www.linkedin.com";
  * pasted from search and the same job opened directly are not tracked twice.
  */
 export function parseLinkedInJobId(url: URL): string | null {
-  const fromQuery = url.searchParams.get("currentJobId");
-  if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
-
+  // The /jobs/view/<id> path is the authoritative posting, so it wins over a
+  // currentJobId query param a share or search link may also carry. The query
+  // param is the fallback for search/collection pages that have no view path.
   const parts = url.pathname.split("/").filter(Boolean);
   const viewIdx = parts.indexOf("view");
   if (viewIdx !== -1 && /^\d+$/.test(parts[viewIdx + 1] ?? "")) return parts[viewIdx + 1];
+
+  const fromQuery = url.searchParams.get("currentJobId");
+  if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
 
   return null;
 }

@@ -80,6 +80,12 @@ describe("parseLinkedInJobId", () => {
     expect(parse("https://www.linkedin.com/jobs/view/4442245127")).toBe("4442245127");
   });
 
+  it("prefers the view-path id over a currentJobId query param", () => {
+    expect(
+      parse("https://www.linkedin.com/jobs/view/123/?currentJobId=456")
+    ).toBe("123");
+  });
+
   it("reads the id from a search/collection currentJobId param", () => {
     expect(
       parse("https://www.linkedin.com/jobs/search/?currentJobId=4442245127&keywords=eng")
