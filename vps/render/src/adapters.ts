@@ -279,6 +279,10 @@ const ashby: AtsAdapter = {
  * `__framer-cookie-component-button-accept`. Phrases stay accept-shaped and
  * avoid bare "Continue"/"OK", which double as wizard controls.
  */
+// `:has-text()` is a case-insensitive SUBSTRING match, so a bare
+// `has-text("Agree")` also matches a "Disagree" reject button. Ambiguous
+// single words therefore use `:text-is()` (exact, trimmed) instead; multi-word
+// accept phrases keep substring matching, which no reject control contains.
 const CONSENT_SELECTORS = [
   "#onetrust-accept-btn-handler",
   '[id*="cookie"][id*="accept"]',
@@ -288,10 +292,10 @@ const CONSENT_SELECTORS = [
   'button:has-text("I accept")',
   'button:has-text("I agree")',
   'button:has-text("Agree and continue")',
-  'button:has-text("Agree")',
+  'button:text-is("Agree")',
+  'button:text-is("Accept")',
   'button:has-text("Allow all")',
-  'button:has-text("Got it")',
-  'button:has-text("Accept")'
+  'button:has-text("Got it")'
 ];
 
 async function dismissConsentOverlay(page: Page): Promise<void> {
@@ -417,7 +421,11 @@ const generic: AtsAdapter = {
  * selector, because by then we have decided this IS the last page.
  */
 async function hasGenericSubmit(page: Page): Promise<boolean> {
-  return (await page.locator(GENERIC_SUBMIT_TEXT).first().count()) > 0;
+  // Visibility matters: a wizard often keeps an off-step Submit button in the
+  // DOM (hidden) on earlier pages, and counting it would read page one as the
+  // last page and freeze paging. Only a VISIBLE submit control ends the wizard.
+  const button = page.locator(GENERIC_SUBMIT_TEXT).first();
+  return (await button.count()) > 0 && (await button.isVisible().catch(() => false));
 }
 
 const GENERIC_SUBMIT_TEXT = 'button:has-text("Submit application"), button:has-text("Submit")';

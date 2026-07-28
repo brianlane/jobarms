@@ -353,16 +353,48 @@ describe("generic", () => {
     expect(await generic.confirmSubmitted(asPage(vague))).toBe(false);
   });
 
-  it("dismisses a privacy card by its accept-shaped text (Dayforce ant-card case)", async () => {
+  it("dismisses a privacy card by its exact Accept text (Dayforce ant-card case)", async () => {
     // The Dayforce consent card is a fixed .ant-card with a plain "Accept"
-    // button and no id; vision had read it as an unclearable modal.
+    // button and no id; vision had read it as an unclearable modal. Matched by
+    // :text-is so it cannot also catch a "Do not accept"-style control.
     const accept = loc({ count: vi.fn(async () => 1) });
     const apply = loc({ count: vi.fn(async () => 1) });
     const page = fakePage({
-      locators: { 'button:has-text("Accept")': accept, ':has-text("Apply")': apply }
+      locators: { 'button:text-is("Accept")': accept, ':has-text("Apply")': apply }
     });
     await generic.openApplication(asPage(page));
     expect(accept.click).toHaveBeenCalled();
+  });
+
+  it("does not treat a hidden off-step Submit as the last wizard page", async () => {
+    // Wizards keep a hidden Submit in the DOM on earlier pages; counting it
+    // would freeze paging on page one.
+    const hiddenSubmit = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => false)
+    });
+    const next = loc({ count: vi.fn(async () => 1), isEnabled: vi.fn(async () => true) });
+    const page = fakePage({
+      locators: {
+        'button:has-text("Submit")': hiddenSubmit,
+        'button:has-text("Next")': next
+      }
+    });
+    expect(await generic.isLastPage!(asPage(page))).toBe(false);
+    // ...and paging still advances past it.
+    expect(await generic.nextPage!(asPage(page))).toBe(true);
+    expect(next.click).toHaveBeenCalled();
+  });
+
+  it("treats a submit whose visibility read throws as not the last page", async () => {
+    const flaky = loc({
+      count: vi.fn(async () => 1),
+      isVisible: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const page = fakePage({ locators: { 'button:has-text("Submit")': flaky } });
+    expect(await generic.isLastPage!(asPage(page))).toBe(false);
   });
 
   it("reports the last page by a Submit-text control, ignoring type=submit Next buttons", async () => {
