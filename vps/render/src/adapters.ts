@@ -263,4 +263,61 @@ const ashby: AtsAdapter = {
   }
 };
 
-export const ADAPTERS: Record<Ats, AtsAdapter> = { greenhouse, lever, workday, ashby };
+/**
+ * The best-effort adapter for boards nobody has tuned.
+ *
+ * It does the universal moves and nothing clever: everything harder is the
+ * job of the recovery machinery (playbooks, vision, page-wide extraction),
+ * which is keyed per domain and therefore learns each untuned site with use.
+ * Generic runs are review-gate only and `confirmSubmitted` is deliberately
+ * strict: with no known confirmation shape, only explicit success wording
+ * counts, and anything less ends as an honest `submit_unconfirmed` rather
+ * than a claimed success.
+ */
+const generic: AtsAdapter = {
+  formSelector: "form",
+  requiresAccount: false,
+
+  async openApplication(page) {
+    // If no fillable form is on screen, try the one universal move: click an
+    // Apply control and wait for something to mount.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if ((await page.locator("form input, form textarea, form select").count()) > 0) return;
+
+      const applyBtn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first();
+      if ((await applyBtn.count()) > 0) {
+        await applyBtn.click().catch(() => {});
+        await page.waitForLoadState("domcontentloaded").catch(() => {});
+      }
+      await page.waitForTimeout(2000);
+    }
+  },
+
+  async submit(page) {
+    await page
+      .locator(
+        'form button[type="submit"], form input[type="submit"], button:has-text("Submit")'
+      )
+      .first()
+      .click();
+    await page.waitForTimeout(5000);
+  },
+
+  async confirmSubmitted(page) {
+    try {
+      await page
+        .locator(
+          "text=/application (has been |was )?submitted|thank you for (applying|your application)/i"
+        )
+        .first()
+        .waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return /application (has been |was )?submitted|thank you for (applying|your application)/i.test(
+        await page.content()
+      );
+    }
+  }
+};
+
+export const ADAPTERS: Record<Ats, AtsAdapter> = { greenhouse, lever, workday, ashby, generic };

@@ -43,11 +43,13 @@ This repository includes:
 | Premium | $19/mo | up to 200 / month | tailoring + cover letters (100/mo each), full-auto |
 | Max | $199/mo | 100 / DAY | tailoring + cover letters + parses (300/mo each), full-auto |
 
-Arm-run metering counts SUCCESSFUL runs only: the slot is reserved at
-dispatch and refunded by the worker when a run dies from a system failure
-(workflow error, unconfirmed submit). User cancels, including review-gate
-timeouts, still count. Quotas live in [src/lib/plans.ts](src/lib/plans.ts);
-tier mapping from Stripe prices in [src/lib/billing.ts](src/lib/billing.ts).
+Arm-run metering counts runs the arm did real work for: the slot is reserved
+at dispatch and refunded by the worker only when a run dies from a SYSTEM
+failure (a workflow error with nothing to show). Work done is paid for even
+when the outcome is imperfect: captcha blocks, unconfirmed submits, user
+cancels, and review-gate timeouts all count. Quotas live in
+[src/lib/plans.ts](src/lib/plans.ts); tier mapping from Stripe prices in
+[src/lib/billing.ts](src/lib/billing.ts).
 
 The table above is fully enforced in code: three tiers with window-aware
 quotas (month, day for Max arm runs, lifetime for free parses), Stripe
@@ -64,8 +66,9 @@ which keeps the logged-in session alive between them.
 
 1. User pastes a job URL (`POST /api/applications`). The app normalizes the
    URL, detects the ATS ([src/lib/ats.ts](src/lib/ats.ts) - Greenhouse, Lever,
-   Workday, and Ashby drive today), upserts the job (public ATS APIs provide
-   title/company/description), **reserves a metered run**
+   Workday, and Ashby have tuned adapters; anything else dispatches the
+   best-effort `generic` adapter, below), upserts the job (public ATS APIs
+   provide title/company/description), **reserves a metered run**
    (`try_reserve_arm_run` RPC, row-locked monthly cap), snapshots the
    profile + the user's answer memory + a 24h signed resume URL, provisions the
    tenant account for account-gated ATSes, and dispatches to the worker.
@@ -453,11 +456,14 @@ their release/refund twins). Quotas are window-aware
 | Cover letters | 0 (paid feature) | 100 / month | 300 / month | 402 fair-use message |
 | Full-auto mode | no (review-gate only) | yes | yes | forced to review_gate server-side |
 
-Arm-run metering counts SUCCESSFUL runs only, with outcome-based refunds:
+Arm-run metering follows "work done = paid", with outcome-based refunds:
 
 - The slot is reserved at dispatch. The worker refunds it (idempotent
   `refund_arm_run` RPC, `slot_refunded` flag row-locked with the decrement)
-  ONLY for system failures: workflow errors and unconfirmed submits.
+  ONLY for system failures: workflow errors that left nothing to show.
+- Real work consumes even when the outcome is imperfect: captcha blocks,
+  unconfirmed submits, and verification-failed refusals all count, since the
+  arm did the full application.
 - User behavior consumes: user cancels and review-gate timeouts count
   (`canceled_by` provenance distinguishes user from system cancels).
 - The retry endpoint (`POST /api/applications/:id/retry`) follows the same
@@ -661,10 +667,38 @@ then walk a multi-page wizard, all in one session.
   company's `board_token` is `<tenant>.<cluster>/<site>` (e.g. `acme.wd1/Careers`)
   because a posting URL needs all three parts.
 
+## The generic best-effort arm (any link)
+
+Boards without a tuned adapter are not rejected: they dispatch with
+`ats: "generic"` (`dispatchAtsOf` in [src/lib/ats.ts](src/lib/ats.ts)), a
+deliberate trade of reliability for coverage with three guardrails that hold
+at every layer:
+
+- **The user opts in, per link.** The apply form shows the terms (may fail,
+  a failed attempt can still use a run) and the create route refuses to
+  dispatch without `accept_best_effort` in the body, so a direct API call
+  cannot skip the acknowledgment. A retry only proceeds when a prior run
+  exists, which is the evidence the terms were accepted at dispatch time.
+- **Review-gate only, on any plan.** Enforced in the create and retry routes
+  AND re-enforced by the worker (defense in depth): an untuned board never
+  submits without a human look.
+- **Never account creation.** The generic path refuses the account-vault
+  flow even for an ATS someone later marks account-required, and the
+  sidecar's generic adapter carries `requiresAccount: false`.
+
+The generic adapter itself does only the universal moves (find a `form`,
+click Apply, strict success-text confirmation); everything harder is the
+recovery machinery's job. Playbooks and fill tactics are keyed per
+domain+ats, so each untuned site the arm visits teaches it that site,
+which is what makes best-effort get better with use. `confirmSubmitted` is
+deliberately strict: with no known confirmation shape, anything less than
+explicit success wording ends as an honest `submit_unconfirmed` (which
+consumes the run, exactly what the user acknowledged).
+
 ## Adding an ATS adapter (required checklist)
 
-An ATS the arm can drive must be wired at EVERY layer, or jobs on it
-silently fall back to track-only:
+An ATS the arm can drive at full reliability must be wired at EVERY layer;
+until then its jobs ride the generic best-effort path above:
 
 1. **Detection**: add the hostname to `detectAts` and (when the adapter
    ships) to `SUPPORTED_ATS` in [src/lib/ats.ts](src/lib/ats.ts), with tests

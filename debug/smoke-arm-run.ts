@@ -12,10 +12,9 @@
  *   npx tsx debug/smoke-arm-run.ts [job-url]
  */
 import { createClient } from "@supabase/supabase-js";
-import { ACCOUNT_REQUIRED_ATS, detectAts, SUPPORTED_ATS, tenantHostOf } from "../src/lib/ats";
+import { ACCOUNT_REQUIRED_ATS, detectAts, dispatchAtsOf, tenantHostOf } from "../src/lib/ats";
 import { ensureApplicantAlias } from "../src/lib/applicant-email";
 import { ensureSiteAccount } from "../src/lib/site-accounts";
-import type { SupportedAts } from "../src/lib/arm-dispatch";
 import { findAuthUserByEmail } from "./lib/auth-users";
 
 const SMOKE_EMAIL = "smoke@jobarms.com";
@@ -93,23 +92,16 @@ async function ensureSmokeUser(): Promise<string> {
  * This script used to carry its own host matcher, which drifted: it missed
  * `myworkdaysite.com` and fell back to Greenhouse for anything it did not
  * recognise, so a smoke run could drive the wrong adapter against a live
- * posting. Deferring to `detectAts` means the smoke test exercises the same
- * decision production makes, and an unsupported URL stops the run instead of
- * being silently mislabelled.
+ * posting. Deferring to `detectAts` + `dispatchAtsOf` means the smoke test
+ * exercises the same decision production makes, including the generic
+ * best-effort path for untuned boards (safe here: review_gate never submits).
  */
-function atsOf(url: string): SupportedAts {
-  const ats = detectAts(url);
-  if (!SUPPORTED_ATS.has(ats)) {
-    throw new Error(`unsupported ATS for ${url} (detected: ${ats})`);
-  }
-  return ats as SupportedAts;
-}
 
 async function pickJob(argUrl?: string) {
   if (argUrl) {
     const { data, error } = await supabase
       .from("jobs")
-      .upsert({ url: argUrl, ats: atsOf(argUrl), source: "manual" }, { onConflict: "url" })
+      .upsert({ url: argUrl, ats: detectAts(argUrl), source: "manual" }, { onConflict: "url" })
       .select("id, url, title, company, description")
       .single();
     if (error || !data) throw error ?? new Error("job upsert failed");
@@ -146,16 +138,20 @@ async function main() {
   // every non-Lever posting Greenhouse, so it never reached this path; now
   // that it detects Workday properly, a Workday smoke run without the account
   // would drive a sign-in the arm has no credentials for.
-  const ats = atsOf(job.url);
+  const detected = detectAts(job.url);
+  const ats = dispatchAtsOf(detected);
+  if (ats === "generic") {
+    console.log(`note: ${detected} has no tuned adapter; dispatching the generic best-effort arm`);
+  }
   const tenantHost = tenantHostOf(job.url);
   let account: { email: string; password: string } | null = null;
-  if (ACCOUNT_REQUIRED_ATS.has(ats) && tenantHost) {
+  if (ats !== "generic" && ACCOUNT_REQUIRED_ATS.has(detected) && tenantHost) {
     const alias = await ensureApplicantAlias(supabase, userId);
     const siteAccount = alias
-      ? await ensureSiteAccount(supabase, { userId, tenantHost, ats, email: alias })
+      ? await ensureSiteAccount(supabase, { userId, tenantHost, ats: detected, email: alias })
       : null;
     if (!siteAccount) {
-      throw new Error(`could not set up the ${ats} account for ${tenantHost}`);
+      throw new Error(`could not set up the ${detected} account for ${tenantHost}`);
     }
     account = { email: siteAccount.email, password: siteAccount.password };
     console.log(`site account: ${siteAccount.email} @ ${tenantHost}`);

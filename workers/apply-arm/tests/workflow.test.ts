@@ -148,6 +148,25 @@ describe("the happy paths", () => {
     expect(render.fillForm.mock.calls[0][1].submit).toBe(true);
   });
 
+  it("generic: full_auto is forced down to the review gate (defense in depth)", async () => {
+    render.fillForm
+      .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1, screenshotBase64: "AA==" }))
+      .mockResolvedValueOnce(ok({ outcome: "submitted", pages: 1, screenshotBase64: "AA==" }));
+
+    await run(
+      params({ ats: "generic", jobUrl: "https://careers.example.com/jobs/1", autonomy: "full_auto" })
+    );
+
+    // An untuned board never submits without a human look, whatever the app
+    // sent: the first fill is the review fill, not a direct submit.
+    expect(render.fillForm.mock.calls[0][1].submit).toBe(false);
+    expect(db.updateRun).toHaveBeenCalledWith(env, "r1", {
+      status: "needs_review",
+      error: null,
+      fill_mismatches: []
+    });
+  });
+
   it("review gate: fills without submitting, parks, then submits on approval", async () => {
     render.fillForm
       .mockResolvedValueOnce(ok({ outcome: "filled", pages: 1, screenshotBase64: "AA==" }))

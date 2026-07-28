@@ -91,7 +91,9 @@ export default async function DiscoverPage() {
                   href={`/dashboard/applications/new?url=${encodeURIComponent(job.url)}`}
                   className="rounded-lg bg-arm-600 px-4 py-2 text-sm font-semibold text-white hover:bg-arm-500"
                 >
-                  {SUPPORTED_ATS.has(job.ats) ? "Send an arm" : "Track"}
+                  {/* Untuned boards are still arm-able (best-effort); the apply
+                      page shows the terms before anything dispatches. */}
+                  {SUPPORTED_ATS.has(job.ats) ? "Send an arm" : "Send an arm (beta)"}
                 </Link>
               </div>
             </li>
