@@ -835,6 +835,10 @@ describe("handing the resume to a widget that owns its own input", () => {
     expect(inputs.nth).toHaveBeenCalledWith(1);
     expect(scopedControl.click).toHaveBeenCalled();
     expect(pageWideControl.click).not.toHaveBeenCalled();
+    // The ancestor scope must recognize every container shape the in-page
+    // pickers do, fieldset TAGS included, or a picked input inside one would
+    // fall back to the page-wide button and feed the wrong widget.
+    expect(fieldInput.locator).toHaveBeenCalledWith(expect.stringContaining("self::fieldset"));
     expect(setFiles).toHaveBeenCalledWith(
       expect.objectContaining({ name: "cv.pdf", mimeType: "application/pdf" })
     );

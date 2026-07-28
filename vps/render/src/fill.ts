@@ -630,9 +630,14 @@ const UPLOAD_BUTTON = /attach|upload|choose file|select file|browse/i;
  * the caller can fall back rather than skip the resume entirely.
  */
 async function attachThroughWidget(page: Page, input: Locator, file: ResumeFile): Promise<boolean> {
+  // The ancestor shapes here mirror the container list the in-page pickers
+  // use (class mentioning field/upload, role=group, or a fieldset TAG): the
+  // pickers decide which input is the resume's by its container, so a shape
+  // they recognize and this lookup does not would pick the right input and
+  // then click the wrong widget's button anyway.
   const scoped = input
     .locator(
-      'xpath=ancestor::*[contains(@class, "field") or contains(@class, "upload") or @role="group"][1]'
+      'xpath=ancestor::*[contains(@class, "field") or contains(@class, "upload") or @role="group" or self::fieldset][1]'
     )
     .getByRole("button", { name: UPLOAD_BUTTON })
     .first();
