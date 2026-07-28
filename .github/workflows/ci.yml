@@ -398,3 +398,90 @@ jobs:
             exit 0
           fi
           npm run deploy
+
+  # Deploy the render sidecar to the KVM1 box on pushes to main, but ONLY when
+  # something under vps/render/ actually changed: the sidecar lives on a shared
+  # box and each deploy rsyncs, rebuilds, and restarts it, so redeploying on
+  # every unrelated merge would needlessly bounce the browser. This replaces the
+  # "run deploy.sh by hand and hope you remember" step; the script stays the
+  # fallback and the way to bootstrap the box. Skips gracefully (does not fail
+  # the run) while KVM1_SSH_KEY is unset, so the box's key never has to live in
+  # CI until you choose to put it there. See README "Deploying and verifying the
+  # sidecar".
+  sidecar-deploy:
+    name: Sidecar Deploy
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [vercel-deploy]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the whole push range can be diffed below, however
+          # many commits it carried.
+          fetch-depth: 0
+
+      - name: Detect sidecar changes
+        id: changed
+        env:
+          # The full range this push added, not just the tip's parent: a single
+          # push can carry several commits (e.g. a bundled Dependabot squash plus
+          # a PR squash, per the workers-deploy note in this file), and vps/render
+          # may have changed in any of them.
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # New branch, force-push, or a base we no longer have: cannot compute
+            # the range, so deploy to be safe rather than silently skip.
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "No usable previous commit; deploying the sidecar to be safe."
+          elif git diff --name-only "$BEFORE" "$AFTER" | grep -q '^vps/render/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "vps/render changed in this push: deploying the sidecar."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No vps/render changes in this push; nothing to deploy."
+          fi
+
+      - name: Deploy sidecar to KVM1
+        if: steps.changed.outputs.changed == 'true'
+        env:
+          KVM1_SSH_KEY: ${{ secrets.KVM1_SSH_KEY }}
+          RENDER_TOKEN: ${{ secrets.RENDER_TOKEN }}
+          RENDER_SOLVER_URL: ${{ secrets.RENDER_SOLVER_URL }}
+          RENDER_SOLVER_TOKEN: ${{ secrets.RENDER_SOLVER_TOKEN }}
+          # user@host of the box; falls back to the current KVM1 address.
+          RENDER_DEPLOY_TARGET: ${{ secrets.RENDER_DEPLOY_TARGET }}
+        run: |
+          if [ -z "$KVM1_SSH_KEY" ]; then
+            echo "KVM1_SSH_KEY not set - skipping sidecar deploy."
+            echo "Set it (plus RENDER_TOKEN) to let CI ship the box; deploy.sh is the manual fallback."
+            exit 0
+          fi
+          if [ -z "$RENDER_TOKEN" ]; then
+            echo "::error::KVM1_SSH_KEY is set but RENDER_TOKEN is not - cannot deploy the sidecar."
+            exit 1
+          fi
+          TARGET="${RENDER_DEPLOY_TARGET:-root@177.7.46.142}"
+          HOST="${TARGET#*@}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          KEY_FILE="$(mktemp)"
+          printf '%s\n' "$KVM1_SSH_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          # Trust the box's host key on first contact so the non-interactive ssh
+          # does not stall on the prompt. accept-new (not "no") still refuses a
+          # CHANGED key, which would signal something is wrong.
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          set +e
+          SSH_KEY="$KEY_FILE" \
+            RENDER_TOKEN="$RENDER_TOKEN" \
+            RENDER_SOLVER_URL="$RENDER_SOLVER_URL" \
+            RENDER_SOLVER_TOKEN="$RENDER_SOLVER_TOKEN" \
+            RENDER_MAX_CONCURRENCY=1 \
+            bash vps/render/scripts/deploy.sh "$TARGET"
+          STATUS=$?
+          set -e
+          rm -f "$KEY_FILE"
+          exit $STATUS
