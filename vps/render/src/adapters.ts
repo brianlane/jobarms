@@ -308,15 +308,25 @@ async function dismissConsentOverlay(page: Page): Promise<void> {
  * than a claimed success.
  */
 const generic: AtsAdapter = {
-  formSelector: "form",
+  // `body` is a real scope, not a fallback of last resort: component-built
+  // career sites (Framer and friends) render every field WITHOUT a <form>
+  // element, so a `form`-only scope reports form_not_found while 40 fields
+  // sit on screen (bunq's careers page did exactly that). The sanity check
+  // on the extracted fields is what decides whether the page holds an
+  // application form, so the wide scope stays honest.
+  formSelector: "form, body",
   requiresAccount: false,
 
   async openApplication(page) {
     // If no fillable form is on screen, try the two universal moves: clear a
     // consent overlay, then click an Apply control and wait for something to
-    // mount.
+    // mount. An email input is the strongest formless-page signal that the
+    // application form is already up, in which case another Apply click could
+    // navigate away from it.
     for (let attempt = 0; attempt < 3; attempt++) {
-      if ((await page.locator("form input, form textarea, form select").count()) > 0) return;
+      const formish =
+        'form input, form textarea, form select, input[type="email"], input[name*="email" i]';
+      if ((await page.locator(formish).count()) > 0) return;
 
       await dismissConsentOverlay(page);
 
