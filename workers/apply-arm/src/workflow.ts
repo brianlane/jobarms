@@ -742,11 +742,18 @@ export async function applyToCard(
   if (!jobId) return "system_failed";
 
   const existing = await findApplication(env, batch.userId, jobId).catch(() => null);
-  // A live or submitted application means re-applying would spam the employer;
-  // skip it. "saved" and "failed" are re-appliable, the same rule the app's
-  // create route uses: a prior attempt that died must not permanently fence
-  // this user off the job.
-  if (existing && existing.status !== "saved" && existing.status !== "failed") return "skipped";
+  // A submitted or user-managed application (applied, interviewing, parked on
+  // review, ...) means re-applying would spam the employer; skip it. Three
+  // states are re-appliable:
+  //   - "saved"/"failed": same rule as the app's create route - a tracked job
+  //     or a dead prior attempt must not fence the user off it.
+  //   - "applying": this very card sets the row to applying BEFORE the fill,
+  //     so a workflow step retry mid-card must be able to resume its own
+  //     half-finished job instead of skipping it into a wedged state. A job
+  //     that actually submitted before the retry fails safely at extraction
+  //     (LinkedIn no longer shows the Easy Apply button), never twice.
+  const reappliable = new Set(["saved", "failed", "applying"]);
+  if (existing && !reappliable.has(existing.status)) return "skipped";
 
   const applicationId =
     existing?.id ?? (await createApplication(env, batch.userId, jobId).catch(() => null));

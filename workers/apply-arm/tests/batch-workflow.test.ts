@@ -201,6 +201,13 @@ describe("applyToCard", () => {
     expect(db.createApplication).not.toHaveBeenCalled();
   });
 
+  it("resumes its own half-finished card (status applying) on a step retry", async () => {
+    // The card itself flips the row to "applying" before filling, so a retried
+    // step must pick the job back up rather than skip it into a wedged state.
+    db.findApplication.mockResolvedValueOnce({ id: "app-9", status: "applying" });
+    expect(await applyToCard(env, batchParams(), card())).toBe("applied");
+  });
+
   it("survives a dedup-lookup failure and proceeds as a fresh application", async () => {
     db.findApplication.mockRejectedValueOnce(new Error("read failed"));
     expect(await applyToCard(env, batchParams(), card())).toBe("applied");
