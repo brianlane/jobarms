@@ -411,6 +411,133 @@ describe("fillCheckboxGroup", () => {
     await fillCheckboxGroup(asPage(page), "src", "LinkedIn");
     expect(box.uncheck).toHaveBeenCalled();
   });
+
+  it("resolves per-option siblings through the field container (Ashby)", async () => {
+    // Ashby names each option's input by the option text, so the name lookup
+    // finds ONE box; the question's other options live in the same container
+    // and must be driven to exactly the wanted set like any other group.
+    const optA = loc({ evaluate: vi.fn(async () => "Bisexual") });
+    const optB = loc({ evaluate: vi.fn(async () => "Queer") });
+    const optC = loc({ evaluate: vi.fn(async () => "I prefer not to answer") });
+    const siblings = loc({ count: vi.fn(async () => 3) });
+    siblings.nth = vi.fn((i: number) => [optA, optB, optC][i]);
+    const container = loc({ locator: vi.fn(() => siblings) });
+    const byName = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': byName } });
+
+    await fillCheckboxGroup(asPage(page), "Bisexual", "Bisexual; Queer");
+
+    expect(optA.check).toHaveBeenCalled();
+    expect(optB.check).toHaveBeenCalled();
+    expect(optC.uncheck).toHaveBeenCalled();
+  });
+
+  it("clicks the toggle button matching the answer instead of the checkbox", async () => {
+    // The hidden checkbox is only state storage for Ashby's Yes/No widget;
+    // clicking the button is what updates the widget's own rendering.
+    const yesButton = loc({ count: vi.fn(async () => 1) });
+    const container = loc({ getByRole: vi.fn(() => yesButton) });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "auth-uuid", "Yes");
+
+    expect(yesButton.click).toHaveBeenCalled();
+    expect(box.check).not.toHaveBeenCalled();
+    expect(container.getByRole).toHaveBeenCalledWith("button", { name: "Yes", exact: true });
+  });
+
+  it("falls back to the checkbox when the toggle button cannot be counted", async () => {
+    const badButton = loc({
+      count: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const container = loc({ getByRole: vi.fn(() => badButton) });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "agree", "true");
+    expect(box.check).toHaveBeenCalled();
+  });
+
+  it("treats an uncountable container as having no siblings", async () => {
+    const siblings = loc({
+      count: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const container = loc({ locator: vi.fn(() => siblings) });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "agree", "true");
+    expect(box.check).toHaveBeenCalled();
+  });
+
+  it("does nothing with an empty answer on a lone box", async () => {
+    const box = loc({ count: vi.fn(async () => 1) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+    await fillCheckboxGroup(asPage(page), "agree", "   ");
+    expect(box.check).not.toHaveBeenCalled();
+  });
+
+  it("leaves a toggle empty when no button matches, instead of faking the checkbox", async () => {
+    // Checking the hidden box behind the widget's back renders nothing, and the
+    // read-back reports the buttons, so the interlock would flag a mismatch on
+    // a field the fill claimed to have handled. Empty is honest and reviewable.
+    const noMatch = loc({ count: vi.fn(async () => 0) });
+    const container = loc({
+      getByRole: vi.fn(() => noMatch),
+      // The in-page counter runs against a real container node in production;
+      // here it sees two plausible option buttons plus noise it must ignore.
+      evaluate: vi.fn(async (fn: (node: unknown) => number) =>
+        fn({
+          querySelectorAll: () => [
+            { textContent: "Yes" },
+            { textContent: "No" },
+            { textContent: null },
+            { textContent: "x".repeat(31) }
+          ]
+        })
+      )
+    });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "auth", "Yes");
+    expect(box.check).not.toHaveBeenCalled();
+  });
+
+  it("keeps the consent fallback when the container cannot even be counted", async () => {
+    const noMatch = loc({ count: vi.fn(async () => 0) });
+    const container = loc({
+      getByRole: vi.fn(() => noMatch),
+      evaluate: vi.fn(async () => {
+        throw new Error("detached");
+      })
+    });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await fillCheckboxGroup(asPage(page), "agree", "true");
+    expect(box.check).toHaveBeenCalled();
+  });
+
+  it("swallows a toggle button whose click is refused", async () => {
+    const yesButton = loc({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        throw new Error("intercepted");
+      })
+    });
+    const container = loc({ getByRole: vi.fn(() => yesButton) });
+    const box = loc({ count: vi.fn(async () => 1), locator: vi.fn(() => container) });
+    const page = fakePage({ locators: { 'type="checkbox"': box } });
+
+    await expect(fillCheckboxGroup(asPage(page), "auth", "Yes")).resolves.toBeUndefined();
+    expect(box.check).not.toHaveBeenCalled();
+  });
 });
 
 describe("fillAnswers", () => {
