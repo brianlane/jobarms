@@ -810,6 +810,27 @@ describe("outcomes", () => {
       /render_failed during fill for review/
     );
     expect(db.releaseArmRunSlot).toHaveBeenCalledWith(env, "r1");
+    // The bookkeeping is a durable STEP: plain awaits in the catch share the
+    // failed invocation's subrequest budget, and when the failure IS budget
+    // exhaustion they die of it, leaving a zombie run and an unrefunded slot.
+    expect(lastStep.doNames).toContain("record terminal failure");
+  });
+
+  it("keeps the original failure when even the bookkeeping cannot be written", async () => {
+    // The Valon incident, reproduced: the fill step exhausted the invocation's
+    // subrequests, so the catch's own writes failed the same way. The instance
+    // must still error with the failure that BROKE the run, not the one that
+    // broke the paperwork about it.
+    render.fillForm.mockResolvedValue(fail("render_unreachable", { detail: "budget gone" }));
+    db.updateRun.mockImplementation(async (_env: unknown, _run: unknown, patch: unknown) => {
+      if ((patch as { status?: string }).status === "failed") {
+        throw new Error("Too many subrequests by single Worker invocation.");
+      }
+    });
+
+    await expect(run(params({ autonomy: "full_auto" }))).rejects.toThrow(
+      /render_unreachable during submit/
+    );
   });
 
   it("records a non-Error thrown value honestly", async () => {

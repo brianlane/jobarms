@@ -413,10 +413,29 @@ export class ApplyRunWorkflow extends WorkflowEntrypoint<Env, RunParams> {
       // Terminal SYSTEM failure (retries exhausted): record honestly and
       // refund the metered slot - the user only pays quota for runs that
       // actually submit. (Review-gate timeouts exit above WITHOUT a refund.)
+      //
+      // The bookkeeping is a STEP, not plain awaits, because these writes are
+      // fetches in the very invocation that just failed. When the failure that
+      // landed here IS subrequest exhaustion (a fill phase that retried until
+      // the invocation ran out), plain awaits die of the same exhaustion: the
+      // run then shows "running" forever with a dead workflow behind it and the
+      // slot is never refunded. A step retries in a fresh invocation with a
+      // fresh subrequest budget, and every write inside is idempotent.
       const message = err instanceof Error ? err.message : String(err);
-      await updateRun(env, params.runId, { status: "failed", error: message.slice(0, 500) });
-      await updateApplication(env, params.applicationId, { status: "failed" });
-      await releaseArmRunSlot(env, params.runId);
+      try {
+        await step.do(
+          "record terminal failure",
+          { retries: { limit: 4, delay: "10 seconds", backoff: "exponential" } },
+          async () => {
+            await updateRun(env, params.runId, { status: "failed", error: message.slice(0, 500) });
+            await updateApplication(env, params.applicationId, { status: "failed" });
+            await releaseArmRunSlot(env, params.runId);
+          }
+        );
+      } catch {
+        // The instance must still error with the ORIGINAL failure: replacing
+        // the real cause with a bookkeeping error would hide what broke.
+      }
       throw err;
     }
   }
