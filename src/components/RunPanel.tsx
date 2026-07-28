@@ -107,6 +107,53 @@ function runErrorCopy(error: string): string {
   return "The arm ran into a problem it couldn't recover from. Your tracker entry is saved.";
 }
 
+/** What the review controls need to know about one extracted form field. */
+interface ReviewField {
+  type: string;
+  required: boolean;
+  options: string[];
+}
+
+/**
+ * The run's extracted form structure, keyed by field name. Tolerant of junk:
+ * `form_fields` is stored as unknown and old runs may predate the shape.
+ */
+function fieldMap(raw: unknown): Map<string, ReviewField> {
+  const map = new Map<string, ReviewField>();
+  if (!Array.isArray(raw)) return map;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const { name, type, required, options } = entry as Record<string, unknown>;
+    if (typeof name !== "string") continue;
+    map.set(name, {
+      type: typeof type === "string" ? type : "text",
+      required: required === true,
+      options: Array.isArray(options)
+        ? options.filter((o): o is string => typeof o === "string")
+        : []
+    });
+  }
+  return map;
+}
+
+/** The options currently selected in a "; "-joined group answer. */
+function selectedOptions(value: string): Set<string> {
+  return new Set(
+    value
+      .split(";")
+      .map((v) => v.trim())
+      .filter(Boolean)
+  );
+}
+
+/** Toggle one option, keeping the group's own option order in the answer. */
+function toggleOption(value: string, options: string[], option: string): string {
+  const next = selectedOptions(value);
+  if (next.has(option)) next.delete(option);
+  else next.add(option);
+  return options.filter((o) => next.has(o)).join("; ");
+}
+
 /**
  * Latest arm run, presented for humans: a friendly status + progress story,
  * a clear review-and-approve flow when the arm is waiting, and the raw
@@ -165,6 +212,7 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
   }
 
   const status = RUN_STATUS_COPY[run.status] ?? { label: run.status, tone: "muted" as const };
+  const fields = fieldMap(run.form_fields);
   const reviewing = run.status === "needs_review";
   const working = ["queued", "running", "approved", "submitting"].includes(run.status);
   const ended = run.status === "failed" || run.status === "canceled";
@@ -344,14 +392,45 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
             </p>
           )}
           <div className="mt-4 space-y-3">
-            {answers.map((a, i) =>
-              (a.label || a.value || "").trim() === "" ? null : (
+            {answers.map((a, i) => {
+              if ((a.label || a.value || "").trim() === "") return null;
+              const field = fields.get(a.name);
+              // Old runs predate stored form structure; without it, every
+              // skipped field keeps the nag rather than losing it.
+              const required = field?.required ?? true;
+              const nag = a.skipped && required;
+              const single =
+                field && (field.type === "select" || field.type === "radio") && field.options.length > 0
+                  ? field.options
+                  : null;
+              const multi =
+                field && field.type === "checkbox" && field.options.length > 0
+                  ? field.options
+                  : null;
+              const update = (value: string) => {
+                const next = [...answers];
+                next[i] = { ...a, value, skipped: false };
+                setAnswers(next);
+              };
+              const controlCls = `w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
+                rejected.has(a.name)
+                  ? "border-red-400 bg-red-50/60"
+                  : nag
+                    ? "border-amber-400 bg-amber-50/50"
+                    : "border-slate-300 bg-white"
+              }`;
+              return (
                 <div key={a.name}>
                   <label className="mb-0.5 block text-xs font-medium text-slate-600">
                     {a.label || a.name}
-                    {a.skipped && (
+                    {nag && (
                       <span className="ml-2 font-semibold text-amber-700">
                         needs your answer
+                      </span>
+                    )}
+                    {a.skipped && !nag && (
+                      <span className="ml-2 font-normal text-slate-400">
+                        (left blank, optional)
                       </span>
                     )}
                     {rejected.has(a.name) && (
@@ -360,25 +439,45 @@ export function RunPanel({ run, applicationId }: { run: RunData; applicationId: 
                       </span>
                     )}
                   </label>
-                  <textarea
-                    rows={a.value.length > 120 ? 4 : 1}
-                    value={a.value}
-                    onChange={(e) => {
-                      const next = [...answers];
-                      next[i] = { ...a, value: e.target.value, skipped: false };
-                      setAnswers(next);
-                    }}
-                    className={`w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:border-arm-500 focus:outline-none ${
-                      rejected.has(a.name)
-                        ? "border-red-400 bg-red-50/60"
-                        : a.skipped
-                          ? "border-amber-400 bg-amber-50/50"
-                          : "border-slate-300 bg-white"
-                    }`}
-                  />
+                  {single ? (
+                    // The question is multiple choice, so the edit is too: a
+                    // dropdown of the form's actual options instead of a free
+                    // text box that invites answers the form will refuse.
+                    <select value={a.value} onChange={(e) => update(e.target.value)} className={controlCls}>
+                      <option value="">(leave blank)</option>
+                      {a.value !== "" && !single.includes(a.value) && (
+                        <option value={a.value}>{a.value}</option>
+                      )}
+                      {single.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  ) : multi ? (
+                    <div className={controlCls}>
+                      {multi.map((o) => (
+                        <label key={o} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={selectedOptions(a.value).has(o)}
+                            onChange={() => update(toggleOption(a.value, multi, o))}
+                          />
+                          {o}
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <textarea
+                      rows={a.value.length > 120 ? 4 : 1}
+                      value={a.value}
+                      onChange={(e) => update(e.target.value)}
+                      className={controlCls}
+                    />
+                  )}
                 </div>
-              )
-            )}
+              );
+            })}
           </div>
           <button
             onClick={() => act(`/api/runs/${run.id}/approve`, { answers })}

@@ -72,6 +72,156 @@ describe("RunPanel review gate", () => {
     expect(fetch).toHaveBeenCalledWith("/api/runs/run-1/approve", expect.objectContaining({ method: "POST" }));
   });
 
+  it("renders a dropdown for a choice question, with a leave-blank entry", async () => {
+    // Free text boxes on multiple-choice questions invite answers the form
+    // will refuse; the review edit offers the form's actual options instead.
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "gender", label: "What is your gender identity?", type: "radio", required: false, options: ["Man", "Woman", "Non-Binary"] }
+          ],
+          answers: [{ name: "gender", label: "What is your gender identity?", value: "" , skipped: true }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    const select = screen.getByRole("combobox");
+    expect(select).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "(leave blank)" })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "Woman" } });
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    const body = JSON.parse(
+      (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => c[0] === "/api/runs/run-1/approve"
+      )![1].body as string
+    );
+    expect(body.answers[0]).toMatchObject({ value: "Woman", skipped: false });
+  });
+
+  it("keeps an off-menu answer selectable rather than silently dropping it", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "years", label: "Years", type: "select", required: true, options: ["1-3", "4+"] }
+          ],
+          answers: [{ name: "years", label: "Years", value: "about five" }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    // The model's off-menu draft still shows as the current selection.
+    expect(screen.getByRole("option", { name: "about five" })).toBeInTheDocument();
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("about five");
+  });
+
+  it("renders a checkbox list for a multi-option group and joins with semicolons", async () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            {
+              name: "Bisexual",
+              label: "How do you identify your sexual orientation?",
+              type: "checkbox",
+              required: false,
+              options: ["Bisexual", "Queer", "I prefer not to answer"]
+            }
+          ],
+          answers: [
+            { name: "Bisexual", label: "How do you identify your sexual orientation?", value: "Queer" }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    const queer = screen.getByRole("checkbox", { name: "Queer" }) as HTMLInputElement;
+    expect(queer.checked).toBe(true);
+
+    // Tick one more, untick the original: the answer follows in option order.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Bisexual" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Queer" }));
+    fireEvent.click(screen.getByText("Approve and submit application"));
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    const body = JSON.parse(
+      (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => c[0] === "/api/runs/run-1/approve"
+      )![1].body as string
+    );
+    expect(body.answers[0].value).toBe("Bisexual");
+  });
+
+  it("nags only for skipped REQUIRED fields; optional blanks are just noted", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            { name: "must", label: "Must", type: "text", required: true, options: [] },
+            { name: "may", label: "May", type: "text", required: false, options: [] }
+          ],
+          answers: [
+            { name: "must", label: "Must", value: "", skipped: true },
+            { name: "may", label: "May", value: "", skipped: true }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getAllByText("needs your answer")).toHaveLength(1);
+    expect(screen.getByText("(left blank, optional)")).toBeInTheDocument();
+  });
+
+  it("tolerates junk form structure and falls back to text areas", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: [
+            null,
+            "junk",
+            { noName: true },
+            { name: "q", type: 7, required: "yes", options: "not-an-array" },
+            { name: "r", type: "radio", options: ["A", 3, "B"] }
+          ] as unknown,
+          answers: [
+            { name: "q", label: "Q", value: "v" },
+            { name: "r", label: "R", value: "A" }
+          ]
+        })}
+        applicationId="app-1"
+      />
+    );
+    // q: junk shape degrades to a plain text box; r: mixed options keep strings.
+    expect(screen.getByDisplayValue("v").tagName).toBe("TEXTAREA");
+    expect(screen.getByRole("option", { name: "B" })).toBeInTheDocument();
+  });
+
+  it("keeps the nag for skipped answers when the run stored no form structure", () => {
+    stubFetch();
+    render(
+      <RunPanel
+        run={run({
+          status: "needs_review",
+          form_fields: null as unknown,
+          answers: [{ name: "old", label: "Old run", value: "", skipped: true }]
+        })}
+        applicationId="app-1"
+      />
+    );
+    expect(screen.getByText("needs your answer")).toBeInTheDocument();
+  });
+
   it("shows the snag state when there is nothing reviewable", async () => {
     render(<RunPanel run={run({ status: "needs_review", answers: [{ name: "x", label: "", value: "" }] })} applicationId="app-1" />);
     expect(screen.getByText(/hit a snag/)).toBeInTheDocument();
