@@ -171,6 +171,152 @@ describe("readFilledStateInPage", () => {
     const area = node({ tagName: "TEXTAREA", attrs: { name: "why" }, value: "because" });
     expect(readFilledStateInPage([select, area]).map((e) => e.kind)).toEqual(["text", "text"]);
   });
+
+  it("reads container-grouped per-option checkboxes as ONE choice entry", () => {
+    // Mirrors the collector's Ashby grouping: options with their OWN names must
+    // read back under the first member's name, or the interlock compares the
+    // answer against a field that does not exist.
+    const container = {
+      querySelectorAll: (sel: string) => (sel.includes("checkbox") ? [a, b, c] : [])
+    };
+    const inContainer = (s: string) => (s.includes("fieldEntry") ? container : null);
+    const a = node({
+      attrs: { name: "Bisexual", type: "checkbox", id: "o1" },
+      checked: true,
+      closest: inContainer
+    });
+    const b = node({
+      attrs: { name: "Queer", type: "checkbox", id: "o2" },
+      checked: false,
+      closest: inContainer
+    });
+    const c = node({
+      attrs: { name: "I prefer not to answer", type: "checkbox", id: "o3" },
+      checked: true,
+      closest: inContainer
+    });
+    withDoc({}, { o1: "Bisexual", o2: "Queer", o3: "I prefer not to answer" });
+
+    const out = readFilledStateInPage([a, b, c]);
+    expect(out).toEqual([
+      {
+        name: "Bisexual",
+        kind: "choice",
+        checked: ["Bisexual", "I prefer not to answer"],
+        value: "",
+        count: 3
+      }
+    ]);
+  });
+
+  it("reads a button toggle's selection from the active button", () => {
+    // The hidden checkbox cannot tell "No" apart from "never touched"; the
+    // widget marks the chosen button with an active-style class instead.
+    const buttons = [
+      { textContent: null, className: "", getAttribute: () => null },
+      { textContent: "Yes", className: "_option_1 _active_57", getAttribute: () => null },
+      { textContent: "No", className: "_option_1", getAttribute: () => null }
+    ];
+    const container = {
+      querySelectorAll: (sel: string) =>
+        sel === "button" ? buttons : sel.includes("checkbox") ? [box] : []
+    };
+    const box = node({
+      attrs: { name: "auth-uuid", type: "checkbox" },
+      checked: true,
+      closest: (s: string) => (s.includes("fieldEntry") ? container : null)
+    });
+    withDoc();
+
+    expect(readFilledStateInPage([box])).toEqual([
+      { name: "auth-uuid", kind: "choice", checked: ["Yes"], value: "", count: 2 }
+    ]);
+  });
+
+  it("recognizes aria-pressed and aria-checked toggles, and an untouched one", () => {
+    const mk = (attrs: Record<string, string | null>, text = "No") => ({
+      textContent: text,
+      className: "",
+      getAttribute: (k: string) => attrs[k] ?? null
+    });
+    const cases: [unknown[], string[]][] = [
+      [[mk({}, "Yes"), mk({ "aria-pressed": "true" })], ["No"]],
+      [[mk({}, "Yes"), mk({ "aria-checked": "true" })], ["No"]],
+      [[mk({}, "Yes"), mk({})], []]
+    ];
+    for (const [buttons, expected] of cases) {
+      const container = {
+        querySelectorAll: (sel: string) =>
+          sel === "button" ? buttons : sel.includes("checkbox") ? [box] : []
+      };
+      const box = node({
+        attrs: { name: "toggle-uuid", type: "checkbox" },
+        closest: (s: string) => (s.includes("fieldEntry") ? container : null)
+      });
+      withDoc();
+      expect(readFilledStateInPage([box])[0].checked).toEqual(expected);
+    }
+  });
+
+  it("tolerates members with no name and buttons with no text or class", () => {
+    const container = {
+      querySelectorAll: (sel: string) => {
+        if (sel.includes("checkbox")) return [a, byIdOnly, anonymous];
+        if (sel === "button") return [{ textContent: null }];
+        return [];
+      }
+    };
+    const inContainer = (s: string) => (s.includes("fieldEntry") ? container : null);
+    const a = node({
+      attrs: { name: "OptA", type: "checkbox", id: "o1" },
+      checked: true,
+      closest: inContainer
+    });
+    const byIdOnly = node({ attrs: { type: "checkbox", id: "o2" }, closest: inContainer });
+    const anonymous = node({ attrs: { type: "checkbox" }, closest: inContainer });
+    withDoc({}, { o1: "OptA" });
+
+    const out = readFilledStateInPage([a, byIdOnly, anonymous]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ name: "OptA", checked: ["OptA"], count: 3 });
+  });
+
+  it("reads a toggle button with no className without crashing", () => {
+    const buttons = [
+      { textContent: "Yes", getAttribute: () => null },
+      { textContent: "No", getAttribute: (k: string) => (k === "aria-pressed" ? "true" : null) }
+    ];
+    const container = {
+      querySelectorAll: (sel: string) =>
+        sel === "button" ? buttons : sel.includes("checkbox") ? [box] : []
+    };
+    const box = node({
+      attrs: { name: "t2", type: "checkbox" },
+      closest: (s: string) => (s.includes("fieldEntry") ? container : null)
+    });
+    withDoc();
+    expect(readFilledStateInPage([box])[0].checked).toEqual(["No"]);
+  });
+
+  it("ignores long CTA buttons and falls through when only one option remains", () => {
+    const buttons = [
+      { textContent: "Yes", className: "", getAttribute: () => null },
+      { textContent: "x".repeat(31), className: "_active_1", getAttribute: () => null }
+    ];
+    const container = {
+      querySelectorAll: (sel: string) =>
+        sel === "button" ? buttons : sel.includes("checkbox") ? [box] : []
+    };
+    const box = node({
+      attrs: { name: "lonely", type: "checkbox", "aria-label": "Consent" },
+      checked: true,
+      closest: (s: string) => (s.includes("fieldEntry") ? container : null)
+    });
+    withDoc({ 'name="lonely"': [box] });
+
+    // One plausible button is not a toggle: this stays a lone consent box.
+    expect(readFilledStateInPage([box])[0]).toMatchObject({ checked: ["Consent"], count: 1 });
+  });
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

@@ -321,6 +321,249 @@ describe("collectFieldsInPage", () => {
   });
 });
 
+/** The exact selector collectFieldsInPage uses to find a question's container. */
+const CONTAINER_SEL =
+  '[class*="fieldEntry"], [class*="field-entry"], fieldset, [role="group"], [role="radiogroup"]';
+
+/** A fake Ashby-style field container: one question, member inputs, buttons. */
+function fieldEntry(cfg: {
+  checkboxes?: unknown[];
+  labels?: { text: string; forId?: string }[];
+  buttons?: string[];
+  legend?: string;
+}): unknown {
+  return {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("checkbox")) return cfg.checkboxes ?? [];
+      if (sel === "label")
+        return (cfg.labels ?? []).map((l) => ({
+          getAttribute: (k: string) => (k === "for" ? (l.forId ?? null) : null),
+          textContent: l.text
+        }));
+      if (sel === "button") return (cfg.buttons ?? []).map((text) => ({ textContent: text }));
+      return [];
+    },
+    querySelector: (sel: string) =>
+      sel === "legend" && cfg.legend ? { textContent: cfg.legend } : null
+  };
+}
+
+describe("collectFieldsInPage on container-delimited questions (Ashby)", () => {
+  it("groups per-option checkboxes into one field with the container's question", () => {
+    // The live failure: Ashby names every option's input by the option TEXT, so
+    // name-grouping saw a pile of lone consent boxes ("Male", "I prefer not to
+    // answer") and the review screen showed options as questions.
+    const a = el("INPUT", { type: "checkbox", name: "Bisexual", id: "o1" });
+    const b = el("INPUT", { type: "checkbox", name: "Queer", id: "o2", required: "" });
+    const c = el("INPUT", { type: "checkbox", name: "I prefer not to answer", id: "o3" });
+    const container = fieldEntry({
+      checkboxes: [a, b, c],
+      labels: [
+        { text: "How do you identify your sexual orientation? Please select all that apply." },
+        { text: "Bisexual", forId: "o1" },
+        { text: "Queer", forId: "o2" },
+        { text: "I prefer not to answer", forId: "o3" }
+      ]
+    });
+    for (const box of [a, b, c]) box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom(
+      { labels: { o1: "Bisexual", o2: "Queer", o3: "I prefer not to answer" } },
+      () => collectFieldsInPage([a, b, c])
+    ) as ReturnType<typeof collectFieldsInPage>;
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toEqual({
+      name: "Bisexual",
+      label: "How do you identify your sexual orientation? Please select all that apply.",
+      type: "checkbox",
+      required: true,
+      options: ["Bisexual", "Queer", "I prefer not to answer"]
+    });
+  });
+
+  it("skips option labels when reading the container's question", () => {
+    // Reading "the first label" without skipping member labels returned an
+    // OPTION as the question for a whole group.
+    const a = el("INPUT", { type: "checkbox", name: "OptA", id: "o1" });
+    const b = el("INPUT", { type: "checkbox", name: "OptB", id: "o2" });
+    const container = fieldEntry({
+      checkboxes: [a, b],
+      labels: [
+        { text: "OptA", forId: "o1" },
+        { text: "Which apply?" },
+        { text: "OptB", forId: "o2" }
+      ]
+    });
+    for (const box of [a, b]) box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({ labels: { o1: "OptA", o2: "OptB" } }, () =>
+      collectFieldsInPage([a, b])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields[0].label).toBe("Which apply?");
+  });
+
+  it("falls back to a legend, then the description attribute, for the question", () => {
+    const a = el("INPUT", { type: "checkbox", name: "OptA", id: "o1" });
+    const b = el("INPUT", { type: "checkbox", name: "OptB", id: "o2" });
+    const withLegend = fieldEntry({ checkboxes: [a, b], legend: " Legend  question " });
+    for (const box of [a, b]) box.closest = (sel: string) => (sel === CONTAINER_SEL ? withLegend : null);
+    let fields = withDom({ labels: { o1: "OptA", o2: "OptB" } }, () =>
+      collectFieldsInPage([a, b])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields[0].label).toBe("Legend question");
+
+    const c = el("INPUT", { type: "checkbox", name: "OptC", id: "o3", description: "From desc" });
+    const d = el("INPUT", { type: "checkbox", name: "OptD", id: "o4" });
+    const bare = fieldEntry({ checkboxes: [c, d] });
+    for (const box of [c, d]) box.closest = (sel: string) => (sel === CONTAINER_SEL ? bare : null);
+    fields = withDom({ labels: { o3: "OptC", o4: "OptD" } }, () =>
+      collectFieldsInPage([c, d])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields[0].label).toBe("From desc");
+  });
+
+  it("reads a Yes/No button toggle as a single-choice field", () => {
+    // Ashby's work-authorization control: a hidden unlabeled checkbox stores
+    // the state and two buttons are the real options. Extracted as radio so
+    // the model picks exactly one option verbatim.
+    const box = el("INPUT", { type: "checkbox", name: "cbbe330d-uuid" });
+    const container = fieldEntry({
+      checkboxes: [box],
+      labels: [{ text: "Are you authorized to work in the United States?" }],
+      // The textless button is an icon-only control; it must not become an option.
+      buttons: [null as unknown as string, "Yes", "No"]
+    });
+    box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({}, () => collectFieldsInPage([box])) as ReturnType<
+      typeof collectFieldsInPage
+    >;
+    expect(fields[0]).toEqual({
+      name: "cbbe330d-uuid",
+      label: "Are you authorized to work in the United States?",
+      type: "radio",
+      required: false,
+      options: ["Yes", "No"]
+    });
+  });
+
+  it("ignores long CTA buttons when deciding a toggle's options", () => {
+    const box = el("INPUT", { type: "checkbox", name: "b1", "aria-label": "Own label" });
+    const container = fieldEntry({
+      checkboxes: [box],
+      buttons: ["Yes", "x".repeat(31)]
+    });
+    box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+    // Only ONE plausible option button left, so this is not a toggle.
+    const fields = withDom({}, () => collectFieldsInPage([box])) as ReturnType<
+      typeof collectFieldsInPage
+    >;
+    expect(fields[0]).toMatchObject({ type: "checkbox", label: "Own label", options: [] });
+  });
+
+  it("labels an unlabeled lone checkbox with its container's question", () => {
+    // labelFor's last resort is the input's NAME, which turned Ashby's
+    // unlabeled controls into UUID "questions" on the review screen.
+    const box = el("INPUT", { type: "checkbox", name: "86645828-uuid" });
+    const container = fieldEntry({
+      checkboxes: [box],
+      labels: [{ text: "Will you require sponsorship?" }]
+    });
+    box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({}, () => collectFieldsInPage([box])) as ReturnType<
+      typeof collectFieldsInPage
+    >;
+    expect(fields[0]).toMatchObject({ label: "Will you require sponsorship?", type: "checkbox" });
+  });
+
+  it("keeps the name when a lone unlabeled checkbox has no container either", () => {
+    const box = el("INPUT", { type: "checkbox", name: "bare-box" });
+    const fields = withDom({}, () => collectFieldsInPage([box])) as ReturnType<
+      typeof collectFieldsInPage
+    >;
+    expect(fields[0].label).toBe("bare-box");
+  });
+
+  it("tolerates label nodes and buttons with no text, and members with no name", () => {
+    // Nulls everywhere a real DOM can produce them: a label node with no text,
+    // a button with no text, and a member input identified only by id (or by
+    // nothing at all).
+    const a = el("INPUT", { type: "checkbox", name: "OptA", id: "o1" });
+    const byIdOnly = el("INPUT", { type: "checkbox", id: "o2" });
+    const anonymous = el("INPUT", { type: "checkbox" });
+    const container = {
+      querySelectorAll: (sel: string) => {
+        if (sel.includes("checkbox")) return [a, byIdOnly, anonymous];
+        if (sel === "label")
+          return [
+            { getAttribute: () => null, textContent: null },
+            { getAttribute: () => null, textContent: "Real question" }
+          ];
+        if (sel === "button") return [{ textContent: null }];
+        return [];
+      },
+      querySelector: () => null
+    };
+    for (const box of [a, byIdOnly, anonymous])
+      box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({ labels: { o1: "OptA", o2: "OptB" } }, () =>
+      collectFieldsInPage([a, byIdOnly, anonymous])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields).toHaveLength(1);
+    expect(fields[0].label).toBe("Real question");
+  });
+
+  it("falls back to the first option's label when the container tells nothing", () => {
+    const a = el("INPUT", { type: "checkbox", name: "OptA", id: "o1" });
+    const b = el("INPUT", { type: "checkbox", name: "OptB", id: "o2" });
+    const container = fieldEntry({ checkboxes: [a, b] });
+    for (const box of [a, b]) box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({ labels: { o1: "OptA", o2: "OptB" } }, () =>
+      collectFieldsInPage([a, b])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields[0].label).toBe("OptA");
+  });
+
+  it("labels a toggle from its own attributes when the container tells nothing", () => {
+    const box = el("INPUT", { type: "checkbox", name: "t1", "aria-label": "Own toggle label" });
+    const container = fieldEntry({ checkboxes: [box], buttons: ["Yes", "No"] });
+    box.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom({}, () => collectFieldsInPage([box])) as ReturnType<
+      typeof collectFieldsInPage
+    >;
+    expect(fields[0]).toMatchObject({ label: "Own toggle label", type: "radio" });
+  });
+
+  it("uses the container question for a NAME-grouped radio with no other prompt", () => {
+    // Ashby radios group by name correctly but took the first OPTION's label
+    // ("Under 30") as the question; the container holds the real prompt.
+    const a = el("INPUT", { type: "radio", name: "age", id: "r1" });
+    const b = el("INPUT", { type: "radio", name: "age", id: "r2" });
+    const container = fieldEntry({
+      labels: [
+        { text: "What is your current age?" },
+        { text: "Under 30", forId: "r1" },
+        { text: "30-39", forId: "r2" }
+      ]
+    });
+    for (const r of [a, b]) r.closest = (sel: string) => (sel === CONTAINER_SEL ? container : null);
+
+    const fields = withDom(
+      { groups: { age: [a, b] }, labels: { r1: "Under 30", r2: "30-39" } },
+      () => collectFieldsInPage([a, b])
+    ) as ReturnType<typeof collectFieldsInPage>;
+    expect(fields[0]).toMatchObject({
+      label: "What is your current age?",
+      options: ["Under 30", "30-39"]
+    });
+  });
+});
+
 describe("collectFields", () => {
   it("scopes the selector to the form and returns the callback result", async () => {
     const page = fakePage({ eval$$: () => [{ name: "a" }] });

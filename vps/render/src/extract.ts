@@ -74,6 +74,47 @@ export const collectFieldsInPage = (elements: any[]): FormField[] => {
     return "";
   };
 
+  /**
+   * The element delimiting ONE question. Deliberately narrower than
+   * `[class*="field"]`: a section wrapper that happens to carry "field" in its
+   * class would merge separate questions into one.
+   */
+  const fieldContainer = (el: any): any =>
+    el.closest?.(
+      '[class*="fieldEntry"], [class*="field-entry"], fieldset, [role="group"], [role="radiogroup"]'
+    ) ?? null;
+
+  /**
+   * The question a field container asks, skipping the labels that belong to its
+   * member inputs. On Ashby the question is a plain `<label>` above the options,
+   * and each option has its own `label[for]`; reading "the first label" without
+   * the skip returned an OPTION ("Under 30") as the question for a whole radio
+   * group, which is exactly the junk the review screen showed.
+   */
+  const containerQuestion = (container: any, members: any[]): string => {
+    if (!container) return "";
+    const memberIds = new Set(
+      members.map((m: any) => m.getAttribute("id")).filter(Boolean)
+    );
+    for (const label of Array.from(container.querySelectorAll("label")) as any[]) {
+      const forId = label.getAttribute("for");
+      if (forId && memberIds.has(forId)) continue;
+      const txt = (label.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (txt) return txt;
+    }
+    const legend = container.querySelector("legend");
+    return ((legend?.textContent ?? "") as string).replace(/\s+/g, " ").trim();
+  };
+
+  /** Short, plausible option buttons inside a toggle-style widget. */
+  const optionButtons = (container: any): any[] =>
+    container
+      ? (Array.from(container.querySelectorAll("button")) as any[]).filter((b: any) => {
+          const t = ((b.textContent ?? "") as string).trim();
+          return t.length > 0 && t.length <= 30;
+        })
+      : [];
+
   const isRequired = (el: any): boolean =>
     el.hasAttribute("required") || el.getAttribute("aria-required") === "true";
 
@@ -107,12 +148,61 @@ export const collectFieldsInPage = (elements: any[]): FormField[] => {
       const group: any[] = Array.from(
         doc.querySelectorAll(`input[type="${type}"][name="${cssEscape(name)}"]`)
       );
-      // A lone checkbox is a boolean consent box, not a multi-option group.
       if (type === "checkbox" && group.length <= 1) {
+        const container = fieldContainer(el);
+        const siblings: any[] = container
+          ? Array.from(container.querySelectorAll('input[type="checkbox"]'))
+          : [];
+
+        // Ashby gives every option of a "select all that apply" its OWN input,
+        // named by the option's text, so name-grouping sees a pile of lone
+        // consent boxes ("Male", "I prefer not to answer", ...). The field
+        // container is what actually delimits the question there: one field,
+        // the container's question as the label, the members as options.
+        if (siblings.length > 1) {
+          for (const member of siblings) {
+            seen.add(member.getAttribute("name") ?? member.getAttribute("id") ?? "");
+          }
+          seen.add(name);
+          fields.push({
+            name,
+            label: (containerQuestion(container, siblings) || groupLabel(el) || labelFor(el))
+              .replace(/\s+/g, " ")
+              .slice(0, 300),
+            type: "checkbox",
+            required: siblings.some(isRequired),
+            options: siblings.map(optionLabel).filter(Boolean)
+          });
+          continue;
+        }
+
+        // A lone checkbox whose container offers option BUTTONS is a toggle
+        // widget (Ashby's Yes/No work-authorization control): the hidden
+        // checkbox stores the state, the buttons are the real options. Typed
+        // as radio so the model picks exactly one option verbatim.
+        const buttons = optionButtons(container);
+        if (buttons.length >= 2) {
+          seen.add(name);
+          fields.push({
+            name,
+            label: (containerQuestion(container, [el]) || labelFor(el))
+              .replace(/\s+/g, " ")
+              .slice(0, 300),
+            type: "radio",
+            required: isRequired(el),
+            options: buttons.map((b: any) => (b.textContent as string).trim())
+          });
+          continue;
+        }
+
+        // A genuinely lone checkbox is a boolean consent box. Its own label
+        // first; the container's question when it has none, because falling
+        // back to `name` turned Ashby's unlabeled controls into UUID "questions".
         seen.add(name);
+        const own = labelFor(el);
         fields.push({
           name,
-          label: labelFor(el),
+          label: own !== name ? own : containerQuestion(container, [el]) || own,
           type: "checkbox",
           required: isRequired(el),
           options: []
@@ -122,7 +212,9 @@ export const collectFieldsInPage = (elements: any[]): FormField[] => {
       seen.add(name);
       fields.push({
         name,
-        label: (groupLabel(el) || labelFor(el)).replace(/\s+/g, " ").slice(0, 300),
+        label: (groupLabel(el) || containerQuestion(fieldContainer(el), group) || labelFor(el))
+          .replace(/\s+/g, " ")
+          .slice(0, 300),
         type,
         required: group.some(isRequired),
         options: group.map(optionLabel).filter(Boolean)
@@ -211,6 +303,61 @@ export const readFilledStateInPage = (elements: any[]): FilledState[] => {
       const group: any[] = Array.from(
         doc.querySelectorAll(`input[type="${type}"][name="${cssEscape(name)}"]`)
       );
+
+      // The same container grouping the collector applies (see
+      // collectFieldsInPage): per-option inputs and button toggles must read
+      // back under the SAME name and shape they were extracted as, or the
+      // interlock compares an answer against a field that does not exist.
+      if (type === "checkbox" && group.length <= 1) {
+        const container =
+          el.closest?.(
+            '[class*="fieldEntry"], [class*="field-entry"], fieldset, [role="group"], [role="radiogroup"]'
+          ) ?? null;
+        const siblings: any[] = container
+          ? Array.from(container.querySelectorAll('input[type="checkbox"]'))
+          : [];
+
+        if (siblings.length > 1) {
+          for (const member of siblings) {
+            seen.add(member.getAttribute("name") ?? member.getAttribute("id") ?? "");
+          }
+          out.push({
+            name,
+            kind: "choice",
+            checked: siblings.filter((b: any) => b.checked).map(optionLabel).filter(Boolean),
+            value: "",
+            count: siblings.length
+          });
+          continue;
+        }
+
+        const buttons: any[] = container
+          ? (Array.from(container.querySelectorAll("button")) as any[]).filter((b: any) => {
+              const t = ((b.textContent ?? "") as string).trim();
+              return t.length > 0 && t.length <= 30;
+            })
+          : [];
+        if (buttons.length >= 2) {
+          // The selected option is the button the widget marks active; the
+          // hidden checkbox cannot tell "No" apart from "never touched".
+          const active = buttons.filter(
+            (b: any) =>
+              /(^|[\s_-])active|(^|[\s_-])selected/i.test(b.className ?? "") ||
+              b.getAttribute("aria-pressed") === "true" ||
+              b.getAttribute("aria-checked") === "true"
+          );
+          out.push({
+            name,
+            kind: "choice",
+            // The length filter above already guarantees every button has text.
+            checked: active.map((b: any) => (b.textContent as string).trim()),
+            value: "",
+            count: buttons.length
+          });
+          continue;
+        }
+      }
+
       const boxes = group.length > 0 ? group : [el];
       out.push({
         name,

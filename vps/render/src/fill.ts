@@ -283,9 +283,24 @@ export async function fillCombobox(page: Page, el: Locator, value: string): Prom
 }
 
 /**
+ * The element delimiting ONE question, mirroring `fieldContainer` in
+ * extract.ts: whatever grouping the collector announced, the filler must
+ * resolve the same way or it drives a different set of controls than the
+ * answer was generated for.
+ */
+const FIELD_CONTAINER_XPATH =
+  'xpath=ancestor::*[contains(@class, "fieldEntry") or contains(@class, "field-entry") or self::fieldset or @role="group" or @role="radiogroup"][1]';
+
+/**
  * Tick the checkbox(es) in a group whose label matches the answer. A single
  * boolean consent box is checked when the answer reads truthy. The answer for a
  * multi-option group is the option label(s), "; "-joined for several.
+ *
+ * Groups come in two shapes. Options sharing a `name` (Greenhouse, Lever) are
+ * the classic form. Ashby instead gives every option its OWN input named by the
+ * option's text, so a name lookup finds one box: the rest of the question lives
+ * in the surrounding field container, and a lone box whose container offers
+ * option BUTTONS is a toggle widget whose buttons are the real controls.
  */
 export async function fillCheckboxGroup(
   page: Page,
@@ -293,14 +308,33 @@ export async function fillCheckboxGroup(
   value: string,
   tactic: ChoiceTactic = "control"
 ): Promise<void> {
-  const boxes = page.locator(`input[type="checkbox"][name="${escapedName}"]`);
-  const n = await boxes.count();
+  let boxes = page.locator(`input[type="checkbox"][name="${escapedName}"]`);
+  let n = await boxes.count();
   if (n === 0) return;
   if (n === 1) {
-    if (/^(true|yes|checked|on|1)$/i.test(value.trim())) {
-      await setBox(page, boxes.first(), true, tactic);
+    const container = boxes.first().locator(FIELD_CONTAINER_XPATH);
+    const siblings = container.locator('input[type="checkbox"]');
+    const siblingCount = await siblings.count().catch(() => 0);
+    if (siblingCount > 1) {
+      boxes = siblings;
+      n = siblingCount;
+    } else {
+      // Toggle widget: click the container's button matching the answer. The
+      // hidden checkbox is only state storage; driving it directly leaves the
+      // widget's own rendering (and possibly its React state) behind.
+      const wanted = value.trim();
+      if (wanted) {
+        const button = container.getByRole("button", { name: wanted, exact: true }).first();
+        if ((await button.count().catch(() => 0)) > 0) {
+          await button.click().catch(() => {});
+          return;
+        }
+      }
+      if (/^(true|yes|checked|on|1)$/i.test(wanted)) {
+        await setBox(page, boxes.first(), true, tactic);
+      }
+      return;
     }
-    return;
   }
   const wanted = splitAnswerValues(value);
   if (wanted.length === 0) return;
