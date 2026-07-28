@@ -881,6 +881,9 @@ describe("handing the resume to a widget that owns its own input", () => {
     await expect(attachResume(asPage(page), ref())).resolves.toBe("attached");
     expect(remaining.setInputFiles).toHaveBeenCalled();
     expect(gone.setInputFiles).not.toHaveBeenCalled();
+    // The checks must follow the fallback: judging widget ownership or
+    // acceptance at the stale index would inspect a control nobody fed.
+    expect(page.evaluate).toHaveBeenCalledWith(fileInputIsWidgetOwnedInPage, 0);
   });
 
   it("treats a picker answer that is not a usable index as the first input", async () => {

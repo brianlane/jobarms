@@ -561,14 +561,20 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
   const name = resume.fileName || "resume.pdf";
   const file = { name, mimeType: resume.mimeType || "application/pdf", buffer };
 
+  // The verdict rides OUT of the loop with the attempt that earned it: asking
+  // the page again afterwards would re-pick the index, and a page that shifted
+  // in the meantime could fail an upload that just verified.
+  let attached = false;
   for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt++) {
     // Re-picked every attempt because widgets add and remove inputs as they work.
-    const index = await resumeInputIndex(page);
+    let index = await resumeInputIndex(page);
     let input = page.locator('input[type="file"]').nth(index);
     if ((await input.count()) === 0) {
       // The index can go stale INSIDE an attempt (a widget swapped its inputs
       // between the pick and this look), which means stale, not gone: fall back
-      // to the first input rather than abandoning the attach.
+      // to the first input, and keep index and input pointing at the SAME
+      // element or the checks below would judge a control nobody fed.
+      index = 0;
       input = page.locator('input[type="file"]').first();
       // No input left and not yet accepted means there is nowhere to put it.
       if ((await input.count()) === 0) break;
@@ -584,10 +590,13 @@ export async function attachResume(page: Page, resume: ResumeRef): Promise<Resum
     }
 
     await page.waitForTimeout(RESUME_SETTLE_MS);
-    if (await resumeAccepted(page, name, index)) break;
+    if (await resumeAccepted(page, name, index)) {
+      attached = true;
+      break;
+    }
   }
 
-  if (!(await resumeAccepted(page, name, await resumeInputIndex(page)))) return "failed";
+  if (!attached) return "failed";
   // Give ATS-side resume parsing a moment before typed answers land, so their
   // autofill cannot overwrite what the arm is about to type.
   await page.waitForTimeout(3000);
